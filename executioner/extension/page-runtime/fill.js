@@ -1,7 +1,5 @@
-import { observeFormDocument, currentPageInterruption } from '../../../extension/form-page.js';
 import { createUploadReader } from './upload-reader.js';
 import { createLegacyAnswerReader } from './legacy-page-answers.js';
-import { createFabricControl } from './fabric-control.js';
 import { createCompositeControlActions } from './composite-control-actions.js';
 import { readNavigationDiagnostics } from './navigation-diagnostics.js';
 import { createRequiredFieldReader } from './required-field.js';
@@ -12,64 +10,17 @@ import { createUploadVerification } from './upload-verification.js';
 import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
-// The builder embeds these factories in the function serialized into each page.
-export const pageRuntimeComponents = [
-  observeFormDocument,
-  currentPageInterruption,
-  createUploadReader,
-  createLegacyAnswerReader,
-  createFabricControl,
-  createCompositeControlActions,
-  readNavigationDiagnostics,
-  createRequiredFieldReader,
-  createFieldObserver,
-  createDomReader,
-  createFieldRecognition,
-  createUploadVerification,
-  createControlInteraction,
-  createPhoneReader,
-];
-
-/** Read-only candidate discovery shared by service and extension chooser interception. */
-export function bambooResumeControl() {
-  const state=globalThis.__huntC3PartialFill;
-  if (state?.resumeAttempt || state?.busy) return null;
-  const forms=[...document.querySelectorAll('form')].filter(form=>form.querySelector('input[type=email],input[type=text][name=email]') &&
-    ![...form.querySelectorAll('input[type=password]')].some(e=>e.getClientRects().length));
-  const norm=text=>String(text??'').replace(/[✱*]/g,'').trim().toLowerCase();
-  const candidates=[];
-  for (const form of forms) for (const input of form.querySelectorAll('input[type=file]')) {
-    if (input.disabled || input.multiple || input.matches(':disabled') || input.closest('[inert],[aria-hidden=true]') || state?.nativeFileBindings?.has(input)) continue;
-    const style=getComputedStyle(input);
-    if (input.getClientRects().length && style.visibility!=='hidden' && Number(style.opacity)>0) continue;
-    for (let group=input.parentElement,depth=0;group && group!==form && depth<5;group=group.parentElement,depth++) {
-      if (group.querySelectorAll('input[type=file]').length!==1 || [...group.querySelectorAll('input,textarea,select')].some(e=>e!==input && !e.matches('input[type=hidden][name=resumeFileId]'))) break;
-      const lines=(group.innerText??'').split('\n').map(norm).filter(Boolean);
-      if (lines[0]!=='resume' && lines[0]!=='résumé') continue;
-      if (/uploaded successfully|remove file/i.test(group.innerText)) break;
-      const buttons=[...group.querySelectorAll('button[type=button]')].filter(button=>
-        norm(button.textContent)==='choose file' && button.getClientRects().length>0 && getComputedStyle(button).visibility!=='hidden' &&
-        !button.disabled && !button.closest('[inert],[aria-hidden=true]'));
-      if (buttons.length===1) candidates.push({input,button:buttons[0],group,form});
-      break;
-    }
-  }
-  return candidates.length===1 ? candidates[0] : null;
-}
-
-/** Runs in the extension's isolated world. Keep self-contained for executeScript. */
-export async function fillVisibleFields({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId } = {}) {
+/** Runs in the exact document selected by the injection boundary. */
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId } = {}, adapters) {
+  const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   const checkDeadline = () => { if (expiresAt !== undefined && Date.now() >= expiresAt) throw new Error('Field changes expired. Check the page and reopen C3 before retrying.'); };
   checkDeadline();
   if (expectedUrl !== undefined && location.href !== expectedUrl) throw new Error('The page changed. Reopen C3 on the application.');
-  let separateAccountForm = false;
-  if (!/\.(myworkdayjobs|myworkdaysite)\.com$/.test(location.hostname)) {
-    const observed = observeFormDocument();
-    const interrupted = currentPageInterruption(observed, action);
-    separateAccountForm = observed.signals.includes('separate_account_form');
-    if (separateAccountForm) scope = 'application';
-    if (interrupted) return interrupted;
-  }
+  const observed = observeCurrentDocument();
+  const interrupted = currentPageInterruption(observed, action);
+  if (interrupted) return interrupted;
+  const separateAccountForm = observed.signals.includes('separate_account_form');
+  if (separateAccountForm) scope = 'application';
   const norm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
   const state = globalThis.__huntC3PartialFill ??= { undo: [], redo: [], busy: false };
   if (state.busy) throw new Error('A field fill is already running.');
@@ -85,53 +36,18 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
   const changes = [];
   const touchedChoices = new Set();
   const { deepQuery, composedClosest, composedParent, composedContains, visible, editable } = createDomReader();
-  const jobviteProof = e => {
+  const verifiedDialogUpload = e => {
     const proof=state.nativeFileBindings?.get(e);
-    if (proof?.kind!=='jobvite' || typeof proof.valid!=='function') return null;
+    if (!isPortalResumeBinding(proof) || typeof proof.valid !== 'function') return null;
     try {return proof.valid()?proof:null;} catch {return null;}
   };
-  const regionFor = e => jobviteProof(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || e.getRootNode();
-  const bambooValue = e => e.getAttribute('aria-label') ?? '';
-  const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric } = createFabricControl({
-    regionFor, norm, state, deepQuery, visible, editable, checkDeadline, bambooValue
+  const regionFor = e => verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || e.getRootNode();
+  const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
+    regionFor, norm, state, deepQuery, visible, editable, checkDeadline
   });
-  const bambooProvinceContext = e => {
-    const region=regionFor(e),container=e.parentElement;
-    if (!location.hostname.endsWith('.bamboohr.com') || !region.matches?.('form#job-application-form') ||
-        !e.matches('button.fab-SelectToggle[type=button][data-menu-id][aria-label^="Province "]') ||
-        !container?.matches('.fab-SelectToggle__container') ||
-        container.querySelectorAll('button.fab-SelectToggle[aria-label^="Province "]').length!==1) return null;
-    const countries=[...region.querySelectorAll('button.fab-SelectToggle[aria-label="Country Canada"]')].filter(visible);
-    if (countries.length!==1) return null;
-    const contents=[...e.querySelectorAll('.fab-SelectToggle__content')];
-    if (bambooValue(e)!=='Province –Select–' && (contents.length!==1 || norm(contents[0].textContent)!==norm(bambooValue(e).slice(9)))) return null;
-    return {region,container,country:countries[0]};
-  };
-  const sameBambooContext = (e,expected) => {
-    const current=bambooProvinceContext(e);
-    return !!current && current.region===expected?.region && current.container===expected?.container && current.country===expected?.country;
-  };
-  const bambooClear = e => {
-    if (!bambooProvinceContext(e)) return null;
-    const matches = [...e.parentElement.querySelectorAll('button.fab-SelectToggle__clearButton[type=button][aria-label="Clear Selection"]')];
-    return matches.length === 1 && editable(matches[0]) ? matches[0] : null;
-  };
-  const { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment } = createFieldRecognition({ composedClosest, deepQuery, fabricWidget, norm });
-  const sharedChoice = e => {
-    const recognized=e.matches?.('input[data-uxi-widget-type="selectinput"]');
-    try {
-      const result=globalThis.__huntC3ChoiceWidget?.(e);
-      if(result)return result;
-    }catch {}
-    return recognized?{kind:'owned_search_choice',valid:false,reason:'choice_inspector_unavailable',input:e,query:e.value,labels:[],pills:[],options:[],popupStatus:'ambiguous',empty:false}:null;
-  };
-  const boundChoice = change => {
-    const original=change.choiceWidget;
-    if(!original?.widget?.isConnected || !original.owner?.isConnected)return null;
-    const inputs=[...original.widget.querySelectorAll('input[data-uxi-widget-type="selectinput"]')].filter(input=>input.getAttribute('data-uxi-multiselect-id')===original.widgetId);
-    const current=inputs.length===1?sharedChoice(inputs[0]):null;
-    return current?.valid && current.widget===original.widget && current.owner===original.owner && current.widgetId===original.widgetId && regionFor(current.input)===change.region?current:null;
-  };
+  const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
+  const { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
+  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = createSearchChoiceReader(regionFor);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
   const pendingChoice = widget => {
     if(!widget?.widget)return null;
@@ -143,10 +59,11 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
     if(pending && choiceState(widget)===pending.before) {state.unconfirmedChoices.delete(widget.widget);return null;}
     return pending;
   };
-  const { fileBinding, uploadOwner } = createUploadReader({
-    state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, jobviteProof, resumeLabel, otherAttachment
+  const { fileBinding, uploadOwner } = createUploadReader({ isPortalResumeBinding, uploadHeading:adapters.uploadHeading,
+    state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
   });
-  const { attachmentIds, uploadSuccess, uploadRemoveControls, ownedUploadCompleted } = createUploadVerification({ deepQuery, composedContains, state, regionFor, norm, resumeLabel });
+  const {parserComplete, parserBusy, uploadSuccess, hasPdfUploadNotice} = adapters.createUploadStatusReader(norm, deepQuery);
+  const { attachmentIds, uploadRemoveControls, ownedUploadCompleted } = createUploadVerification({ deepQuery, composedContains, uploadSuccess, verifiedClientAttachment:adapters.verifiedClientAttachment, state, regionFor, norm, resumeLabel });
   const ownedAttachmentPresent = e => {
     const proof=state.nativeFileBindings?.get(e),owner=uploadOwner(e)??proof?.group;
     const region=state.resumeAttempt?.element===e ? state.resumeAttempt.region : proof?.region??regionFor(e);
@@ -154,18 +71,18 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       (!e.isConnected || composedContains(owner, e) && regionFor(e)===region) && attachmentIds(owner).some(input=>input.value);
   };
   const externalAttachment = e => {
-      if (state.nativeFileBindings?.get(e)?.kind==='jobvite' && !jobviteProof(e)) return true;
+      if (isPortalResumeBinding(state.nativeFileBindings?.get(e)) && !verifiedDialogUpload(e)) return true;
       if (ownedAttachmentPresent(e)) return true;
       for (let group=composedParent(e), depth=0; group && depth<6 && group!==regionFor(e) && group!==document.body; group=composedParent(group),depth++) {
         if (deepQuery(group,'input[type=file]').length>1) break;
         const text=group.innerText ?? '';
-        if (/file .+\.pdf uploaded successfully/i.test(text)) return true;
+        if (hasPdfUploadNotice(text)) return true;
       }
       return false;
     };
   const changeEditable = (e,change) => change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
     ? editable(e) && e===change.phoneCountry.input && regionFor(e)===change.region && phoneState(change.phoneCountry)!==null
-    : change.bambooProvince ? editable(e) && sameBambooContext(e,change.bambooProvince)
+    : provinceMenu.savedContext(change) ? editable(e) && provinceMenu.same(e,provinceMenu.savedContext(change))
       : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region : editable(e);
   const identity = e => JSON.stringify([e.tagName,e.type,e.id,e.name,norm(labelFor(e))]);
   const controlIdentity = e => {
@@ -199,7 +116,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
     const matches=deepQuery(document, 'input,textarea,select').filter(e=>identity(e)===change.identity && (!change.region || regionFor(e)===change.region));
     return matches.length===1 ? matches[0] : null;
   };
-  const read = e => e.matches('button.fab-SelectToggle[data-menu-id]') ? bambooValue(e) :
+  const read = e => isMenuToggle(e) ? e.getAttribute('aria-label') ?? '' :
     e.type === 'file' ? e.files?.[0] ?? null : e.type === 'radio' || e.type === 'checkbox' ? e.checked : e.value;
   const pendingControlChange = e => {
     const pending=state.unconfirmedControls?.find(change=>regionFor(e)===change.region && currentElement(change)===e);
@@ -229,8 +146,8 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
   const readChange = (e,change) => change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
   const unchangedChange = (e,change,value) => change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
-  const { selectPhone, selectBamboo } = createCompositeControlActions({
-    phoneState, phoneOptions, changeEditable, checkDeadline, visible, editable, write, bambooValue, bambooClear, sameBambooContext, norm
+  const { selectPhone } = createCompositeControlActions({
+    phoneState, phoneOptions, changeEditable, checkDeadline, visible, editable, write
   });
   const preserveRemoteUpload = change => {
     if(!change.uploadReceipt || !ownedUploadCompleted(change.uploadReceipt))return false;
@@ -273,7 +190,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
           if (c.choiceWidget) await restoreChoice(c,c[next]);
           else if (c.fabric) await selectFabric(c,c[next]);
           else if (c.phoneCountry) await selectPhone(c,c[next]);
-          else if (c.bambooProvince) await selectBamboo(c,c[next]);
+          else if (provinceMenu.savedContext(c)) await provinceMenu.select(c,c[next]);
           else write(e,c[next]);
           written++;
         }
@@ -398,9 +315,9 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       }
       return proof;
     };
-    const collectFields = () => deepQuery(document, 'input,textarea,select,button.fab-SelectToggle[data-menu-id],button[aria-haspopup="listbox"],button[role="combobox"]').filter(e => editable(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
-      (fabricWidget(e) || bambooProvinceContext(e) || semanticChoiceButton(e) || !['hidden', 'password', 'file', 'submit', 'button', 'reset'].includes(e.type))).map(element => {
-      const label = bambooProvinceContext(element) ? 'Province' : dialComposite(element)?'Phone country code':labelFor(element);
+    const collectFields = () => deepQuery(document, 'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
+      (fabricWidget(e) || provinceMenu.context(e) || semanticChoiceButton(e) || !['hidden', 'password', 'file', 'submit', 'button', 'reset'].includes(e.type))).map(element => {
+      const label = provinceMenu.context(element) ? 'Province' : dialComposite(element)?'Phone country code':labelFor(element);
       return { element, identity:identity(element), controlIdentity:controlIdentity(element), boundLabels:[...element.labels??[]], region:regionFor(element), label,
         expected:['desired salary','what would be your salary expectations for the position?'].includes(norm(label)) && element.type!=='text' ? undefined : answer(label), initialValue:element.value };
     });
@@ -420,11 +337,11 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
     });
     };
     let applicationRegions = identifyApplicationRegions(fields);
-    const { isRequired } = createRequiredFieldReader({
-      jobviteProof, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
+    const { isRequired } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
+      verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
     });
     const { observe } = createFieldObserver({
-      deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, bambooProvinceContext, bambooValue
+      deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
     const observations = () => {
       const rows=new Map();
@@ -436,7 +353,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       return [...rows.values()];
     };
     if (action==='status') {
-      result.navigationDiagnostics = readNavigationDiagnostics({deepQuery, composedClosest, composedParent, visible, norm});
+      result.navigationDiagnostics = readNavigationDiagnostics({noticeMarkers:adapters.noticeMarkers, deepQuery, composedClosest, composedParent, visible, norm});
       state.fabricOptions??=new WeakMap();state.committedChoices??=new WeakMap();
       for(const field of fields) {
         if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
@@ -455,8 +372,6 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
     const reportMatch = (row, plan, outcome, reason, observedAnswer) => result.matching.push({...row,
       chosenAnswer:plan?.answer??null,provisional:plan?.provisional??true,outcome,reason,observedAnswer});
 
-    const parserComplete = () => /résumé parsing was successful\./i.test(document.body?.innerText ?? '');
-    const parserBusy = () => /(?:parsing (?:your )?(?:résumé|resume)|(?:résumé|resume) (?:is being parsed|parsing (?:in progress|has started)))/i.test(document.body?.innerText ?? '');
     let uploadReceipt = state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
     let parserPending = false;
     if (resume && typeof resume.base64 === 'string' && resume.base64.length <= 14_000_000 &&
@@ -493,7 +408,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
           parserPending=parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
         } else if ((e.files?.length ?? 0) > 1 && replaceExistingResume) {
           addSkip(label, 'ambiguous_resume_attachment', 'uploads', 'verify_attachment');
-        } else if (e.files?.length && (!replaceExistingResume || state.nativeFileBindings?.get(e)?.kind==='jobvite')) {
+        } else if (e.files?.length && (!replaceExistingResume || isPortalResumeBinding(state.nativeFileBindings?.get(e)))) {
           result.skipped.push({label, reason:'existing_attachment_preserved'});
         } else {
           checkDeadline();
@@ -506,10 +421,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
             if(!fileBinding(e) || regionFor(e)!==fileRegion || read(e)!==before || owner && (!owner.isConnected || !composedContains(owner, e))) {
               addSkip(label, 'resume_control_changed', 'uploads', 'verify_attachment');return result;
             }
-            const clientOnly=owner?.matches('[role=group][aria-labelledby][data-allow-s3=false]') && fileBinding(e)?.widget===owner;
-            const clientIds=clientOnly?(owner.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean):[];
-            const clientHeadings=clientIds.length===1?[...owner.getRootNode().querySelectorAll(`[id="${CSS.escape(clientIds[0])}"]`)]:[];
-            uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,clientOnly:!!clientOnly,clientHeading:clientHeadings.length===1?clientHeadings[0]:null,
+            uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,...adapters.clientAttachmentState(owner,fileBinding(e)),
               externalized:false,parserCompleted:false,owner,fileSha256,hadAttachmentId:!!owner && attachmentIds(owner).some(input=>input.value),hadUploadSuccess:!!owner && (uploadSuccess(owner,file.name).length>0 || uploadRemoveControls(owner,file.name).length>0),selectedFileAccepted:false};
             state.resumeAttempt=uploadReceipt;
             const observeParser=()=>{if (!hadParserComplete && parserComplete()) uploadReceipt.parserCompleted=true;};
@@ -582,7 +494,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       const skip = (reason, component, operation) => addSkip(f.label, reason, component, operation);
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}
       if(!editable(e)){skip('field_no_longer_editable', 'field_recognition', 'identify_field');continue;}
-      if (!fabricWidget(e) && bambooProvinceContext(e)) continue; // Process the unique province menu with its country below.
+      if (!fabricWidget(e) && provinceMenu.context(e)) continue; // Process the unique province menu with its country below.
       if(!isRequired(e)){skip('optional_field');continue;}
       if (scope !== 'page' && !applicationRegions.includes(f.region)) { skip('application_form_not_identified', 'page_state', 'identify_application'); continue; }
       if(semanticChoiceButton(e)) {
@@ -673,7 +585,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
             state.unconfirmedFabric.set(e,{backing:fabric.backing,before,after:remaining});
           }
           skip('custom_choice_commit_or_reset_unconfirmed', 'browser_interaction', 'verify_selection');reportMatch(row,plan,'unconfirmed','custom_choice_commit_or_reset_unconfirmed',{
-            before:JSON.parse(before),after:remaining?JSON.parse(remaining):{label:e.querySelector('.fab-SelectToggle__content')?.textContent??'',value:fabric.backing.value},resetAvailable:!!fabricClear(fabric)});
+            before:JSON.parse(before),after:remaining?JSON.parse(remaining):{label:fabricDisplayedLabel(e),value:fabric.backing.value},resetAvailable:!!fabricClear(fabric)});
         }
         continue;
       }
@@ -871,56 +783,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       }
       changes.push({ ...change, element:e, after:e.value }); result.filled.push(f.label);
     }
-    const savedProvince = fact('region');
-    if (matchingPlans !== undefined || typeof savedProvince === 'string' && norm(fact('country')) === 'canada') {
-      const province = deepQuery(document,'button.fab-SelectToggle[data-menu-id][aria-label^="Province "]')
-        .filter(e => !fabricWidget(e) && editable(e) && bambooProvinceContext(e) &&
-          (scope === 'page' || applicationRegions.includes(regionFor(e))) && !deepQuery(regionFor(e),'input[type=password]').some(visible));
-      if (province.length === 1) {
-        const e = province[0], before = bambooValue(e), context = bambooProvinceContext(e);
-        const row = observe(e, 'Province');
-        const plan = matchingPlans?.find(candidate => candidate.fieldId === row.fieldId);
-        const answer = matchingPlans === undefined ? savedProvince : plan?.answer;
-        const after = `Province ${answer}`;
-        const record = (outcome, reason) => {
-          if (plan) reportMatch(row, plan, outcome, reason, bambooValue(e));
-        };
-        if (!isRequired(e)) result.skipped.push({label:'Province',reason:'optional_field'});
-        else if (matchingPlans !== undefined && (!plan || plan.signature !== row.signature)) {
-          if (plan) addSkip(row.question, 'field_changed_before_fill', 'field_recognition', 'rebind_field', row.fieldId);
-          reportMatch(row, plan, 'observed', 'field_changed_or_new');
-        }
-        else if (!context || typeof answer !== 'string' || !answer.trim()) {
-          addSkip('Province', 'choice_requires_mapping', 'answer_matching', 'match_province');
-          record('unconfirmed', 'choice_requires_mapping');
-        }
-        else if (before === 'Province –Select–') {
-          const change={element:e,region:context.region,before,after,label:'Province',bambooProvince:context};
-          checkDeadline();
-          try {
-            await selectBamboo(change, after);
-            changes.push(change);
-            result.filled.push('Province');
-            record('verified', 'product_readback_confirmed');
-          } catch (error) {
-            if (sameBambooContext(e,context) && bambooValue(e) === after && bambooClear(e)) await selectBamboo(change, before).catch(()=>{});
-            const reason=error instanceof Error ? ({
-              'The province control changed. Check the form.':'province_control_changed',
-              'The province menu binding changed.':'province_menu_binding_changed',
-              'The province changed while its menu opened. Your edits were preserved.':'province_menu_open_changed',
-              'The saved province is not uniquely available.':'province_option_not_unique',
-              'The website did not verify the province choice and reset.':'province_selection_not_verified',
-            })[error.message] : undefined;
-            const failure = bambooValue(e) === before ? reason ?? 'value_not_accepted' : 'province_change_requires_review';
-            addSkip('Province', failure, 'browser_interaction', 'verify_selection');
-            record('unconfirmed', failure);
-          }
-        } else if (norm(before) !== norm(after)) {
-          result.skipped.push({label:'Province',reason:'saved_value_conflict'});
-          record('unconfirmed', 'saved_value_conflict');
-        } else record('verified', 'existing_value_confirmed');
-      }
-    }
+    await provinceMenu.reconcile({fact, matchingPlans, scope, applicationRegions, fabricWidget, observe, reportMatch, isRequired, result, addSkip, changes});
     // A later field can remount or invalidate an earlier search selection.
     // Keep that mutation visible even when query and selection shared an older batch.
     for(const change of touchedChoices) {
@@ -961,6 +824,6 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
     if (failed) result.componentFailure = failed.componentFailure;
     state.busy = false; result.canUndo = state.undo.length > 0; result.canRedo = state.redo.length > 0;
     if(state.unconfirmedControls?.some(change=>change.region?.isConnected))result.incomplete=true;
-    if(state.unconfirmedChoiceHistory?.some(change=>change.region?.isConnected && [...change.region.querySelectorAll('input[data-uxi-widget-type=selectinput]')].some(input=>pendingChoice(sharedChoice(input))===change)))result.incomplete=true;
+    if(state.unconfirmedChoiceHistory?.some(change=>change.region?.isConnected && searchChoiceCandidates(change.region).some(input=>pendingChoice(sharedChoice(input))===change)))result.incomplete=true;
   }
 }

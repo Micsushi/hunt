@@ -8,6 +8,7 @@ import { equivalentAnswer } from '../deterministic/answer-equivalence.ts';
 import { mapVisibleOption } from '../form/options/mapper.ts';
 import { writePrivateFileAtomic } from '../composition/private/s2-application-source-preparation.ts';
 import type { ApplicationProfileQuery } from '../form/answers/application-types.ts';
+import { matchingContext } from './target.ts';
 import { boundedText, optionId, type FieldIntent } from '../contracts/index.ts';
 
 export interface MatchingObservation {
@@ -24,17 +25,6 @@ export function intentAnswer(intent: FieldIntent): string | boolean | null {
   return intent.kind==='choice'?intent.expectedOption:intent.kind==='text'?intent.value:
     intent.kind==='toggle'?intent.checked:intent.kind==='date'?intent.isoDate:null;
 }
-export function matchingContext(url?:string) {
-  if (!url) return {url:null,company:null};
-  const parsed=new URL(url);
-  if (!['http:','https:'].includes(parsed.protocol)) throw new Error('Invalid application address');
-  parsed.username='';parsed.password='';parsed.hash='';
-  for (const key of [...parsed.searchParams.keys()]) if (!/^(?:jobid|job_id|requisitionid|requisition_id|gh_jid)$/iu.test(key)) parsed.searchParams.delete(key);
-  const company=/\.(?:myworkdayjobs|myworkdaysite)\.com$/iu.test(parsed.hostname)
-    ? parsed.hostname.split('.')[0]! : parsed.pathname.split('/').filter(Boolean)[0]??parsed.hostname;
-  return {url:parsed.href,company};
-}
-
 /** Private observations only. No method can promote a candidate into the matching dictionary. */
 export function createMatchingBacklog(root:string|undefined, url?:string, facts:readonly {factId:string;value:unknown}[] = [], workflow:'C3.1'|'C3.2'='C3.1', ownerDefaults?:ApplicationProfileQuery['ownerDefaults']) {
   const context=matchingContext(url);
@@ -47,6 +37,7 @@ export function createMatchingBacklog(root:string|undefined, url?:string, facts:
   }
   let needsReview=[...records.values()].some(row=>row.provisional);
   return {
+    company: context.company,
     get needsReview(){return needsReview;},
     record(value:MatchingObservation) {
       // Transport bindings include the raw URL and never belong in durable evidence.

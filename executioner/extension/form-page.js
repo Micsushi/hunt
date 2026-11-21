@@ -1,5 +1,5 @@
 // Structural evidence shared by hosted preparation and current-page inspection.
-export function observeFormDocument() {
+export function observeFormDocument(attachmentControls = 'input[type=file]') {
   const visible = e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden],[inert],[aria-hidden="true"]');
   const all = selector => [...document.querySelectorAll(selector)].filter(visible);
   const email = all('input[type=email],input[name=email],input[id=email]');
@@ -14,7 +14,7 @@ export function observeFormDocument() {
   const sameForm = !!submitOwner && email.length > 0 && submit.length === 1 && owners.size === 1 && owners.has(submitOwner);
   const applicationSubmit=submit.length===1 && /application|candidature/i.test(submit[0].getAttribute('aria-label') || submit[0].textContent || submit[0].value || '');
   const identity = !!submitOwner && all('input:not([type=hidden]):not([type=email]):not([type=password])').some(e => ownerOf(e) === submitOwner && /name|firstname|lastname/i.test([e.getAttribute('name'),e.id,...(e instanceof HTMLInputElement ? [...e.labels??[]].map(label=>label.textContent) : [])].join(' ')));
-  const attachment = !!submitOwner && [...document.querySelectorAll('input[type=file],[role=group][aria-labelledby=upload-label-resume]')].some(e => ownerOf(e) === submitOwner);
+  const attachment = !!submitOwner && [...document.querySelectorAll(attachmentControls)].some(e => ownerOf(e) === submitOwner);
   const application = sameForm && (applicationSubmit || identity || attachment);
   const accountOwners = new Set(passwords.map(ownerOf));
   const separateAccountForm = !!submitOwner && submitOwner !== document.body && (applicationSubmit || identity || attachment) &&
@@ -31,7 +31,8 @@ export function observeFormDocument() {
 
 // Unknown standalone forms remain eligible for current-page filling.
 export function currentPageInterruption(observation, action = 'fill') {
-  if (observation.version === 'workday-page-v1') {
+  // Only the generic form observer admits unknown, non-account documents.
+  if (observation.version !== 'hosted-page-v1') {
     if (observation.kind === 'application' || observation.kind === 'review') return;
   } else {
     if (action === 'undo' || action === 'redo') return;

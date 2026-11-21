@@ -1,5 +1,5 @@
-export function createUploadReader({
-  state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, jobviteProof, resumeLabel, otherAttachment
+export function createUploadReader({ isPortalResumeBinding, uploadHeading,
+  state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
 }) {
   const fileBinding = e => {
     if (!e.isConnected || e.type !== 'file' || e.disabled || e.readOnly || e.matches(':disabled') || composedClosest(e,'[inert]')) return null;
@@ -9,8 +9,8 @@ export function createUploadReader({
     const widgetVisible = node => visible(node) && Number(getComputedStyle(node).opacity) > 0;
     const nativeVisible = editable(e) && widgetVisible(e);
     const proven=state.nativeFileBindings?.get(e);
-    if (proven?.kind==='jobvite') {
-      const proof=jobviteProof(e);
+    if (isPortalResumeBinding(proven)) {
+      const proof=verifiedDialogUpload(e);
       return proof && !e.multiple ? {label:'Resume',widget:proof.label} : null;
     }
     if (proven && regionFor(e)===proven.region &&
@@ -65,7 +65,7 @@ export function createUploadReader({
       if (!widgetVisible(group) || composedClosest(group,'[aria-hidden="true"],[inert]')) continue;
       const lines=(group.innerText ?? '').split(/\n/).map(line=>line.trim()).filter(Boolean);
       if (lines.some(otherAttachment)) return null;
-      const headings=[...group.children].filter(child=>child.matches('h1,h2,h3,h4,h5,h6,[role=heading],spl-typography-title[data-test="section-title"]'));
+      const headings=[...group.children].filter(child=>child.matches('h1,h2,h3,h4,h5,h6,[role=heading],' + uploadHeading));
       if (!resumeLabel(lines[0] ?? '') && !(headings.length===1 && resumeLabel(headings[0].textContent))) continue;
       const visibleWidget=nativeVisible || boundLabels.some(label=>composedContains(group,label));
       if (visibleWidget) return {label:'Resume',widget:group};

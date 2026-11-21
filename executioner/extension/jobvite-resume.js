@@ -53,3 +53,8 @@ export async function proveJobviteResumeInput({expectedUrl,expiresAt}={}) {
     return true;
   } finally {state.busy=false;}
 }
+
+// The binding persists in the selected document across extension reloads.
+export function isPortalResumeBinding(proof) {
+  return proof?.kind === 'jobvite';
+}

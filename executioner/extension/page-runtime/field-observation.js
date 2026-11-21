@@ -1,5 +1,5 @@
 export function createFieldObserver({
-  deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, bambooProvinceContext, bambooValue
+  deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext, provinceValue
 }) {
   const buttonChoiceObservation = e => {
     const id=e.getAttribute('aria-controls'),root=e.getRootNode();
@@ -17,7 +17,7 @@ export function createFieldObserver({
   };
   const observe = (e, label) => {
     const fabric=fabricWidget(e),fabricRead=fabric && fabricState(fabric),committed=state.committedChoices?.get(e),searchChoice=sharedChoice(e),buttonChoice=semanticChoiceButton(e)?buttonChoiceObservation(e):null;
-    const province = !fabric && bambooProvinceContext(e);
+    const province = !fabric && provinceContext(e);
     const queryDraft=searchChoice?.widget && state.choiceDrafts?.get(searchChoice.widget);
     const cachedOptions=queryDraft && boundChoice(queryDraft.change) && choiceState(searchChoice)===queryDraft.change.after?queryDraft.options:[];
     const choice=committed?.value===e.value?committed:null;
@@ -33,14 +33,16 @@ export function createFieldObserver({
     const menus=menuId?deepQuery(e.getRootNode(),`[id="${CSS.escape(menuId)}"]`):[];
     const options=buttonChoice?buttonChoice.options:searchChoice?[...new Set([...searchChoice.labels,...(searchChoice.popupStatus==='ready'?searchChoice.options.filter(option=>!option.disabled).map(option=>option.label):cachedOptions)])]:fabric ? state.fabricOptions?.get(e)??[] : choice?choice.options:control==='select'?[...e.options].filter(o=>!o.disabled && o.value).map(o=>o.textContent.trim()):
       group?radios.map(labelFor):control==='listbox' && menus.length===1?[...menus[0].querySelectorAll('[role=option]')].filter(o=>o.getAttribute('aria-disabled')!=='true').map(o=>o.textContent.trim()):[];
-    const selected=province ? (bambooValue(e) === 'Province –Select–' ? '' : bambooValue(e).slice(9)) : buttonChoice?buttonChoice.selected:searchChoice?searchChoice.labels.join('; '):fabric ? fabricRead?JSON.parse(fabricRead).label:'' : control==='select'?[...e.selectedOptions].filter(o=>!o.disabled && o.value).map(o=>o.textContent.trim()).join('; '):
+    const selected=province ? (provinceValue(e) === 'Province –Select–' ? '' : provinceValue(e).slice(9)) : buttonChoice?buttonChoice.selected:searchChoice?searchChoice.labels.join('; '):fabric ? fabricRead?JSON.parse(fabricRead).label:'' : control==='select'?[...e.selectedOptions].filter(o=>!o.disabled && o.value).map(o=>o.textContent.trim()).join('; '):
       group?radios.filter(o=>o.checked).map(labelFor).join('; '):control==='checkbox'?e.checked:
       control==='listbox'?choice?.selected??e.closest('.select__control')?.querySelector('[class*=single-value]')?.textContent?.trim()??'':e.value;
     const number = name => e.getAttribute(name) && Number.isFinite(Number(e.getAttribute(name))) ? Number(e.getAttribute(name)) : null;
     const phone = phoneWidget(e);
-    const widgetType = province ? {widget:'province-menu', backing:bambooValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
+    const widgetType = province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
       ? {widget:'international-phone', backing:phone ? phoneState(phone) : null} : {};
-    const observation={...widgetType,pageId:location.href,fieldId:state.matchingIds.get(node),question:label,control,options,
+    const form = e.hasAttribute('form') ? e.form : e.form ?? composedClosest(e,'form,[role=form]');
+    if (form && !state.matchingIds.has(form)) state.matchingIds.set(form,crypto.randomUUID());
+    const observation={...(form ? {formId:state.matchingIds.get(form)} : {}),...widgetType,pageId:location.href,fieldId:state.matchingIds.get(node),question:label,control,options,
       required:isRequired(e),
       constraints:['text','textarea'].includes(control)?{inputType:['number','email','url'].includes(e.type)?e.type:'text',
         min:number('min'),max:number('max'),step:number('step'),minLength:number('minlength'),maxLength:number('maxlength'),pattern:e.pattern||null,readOnly:!!e.readOnly}:undefined,

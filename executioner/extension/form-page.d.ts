@@ -5,7 +5,7 @@ export interface FormPageObservation {
   signals: string[];
   conflicts: string[];
 }
-export function observeFormDocument(): FormPageObservation;
+export function observeFormDocument(attachmentControls?: string): FormPageObservation;
 export function currentPageInterruption(
   observation: FormPageObservation | import('./workday-page.js').WorkdayPageObservation,
   action?: string,

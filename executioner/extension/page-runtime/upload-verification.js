@@ -1,8 +1,6 @@
-export function createUploadVerification({ deepQuery, composedContains, state, regionFor, norm, resumeLabel }) {
+export function createUploadVerification({ deepQuery, composedContains, uploadSuccess, verifiedClientAttachment, state, regionFor, norm, resumeLabel }) {
   const attachmentIds = group => deepQuery(group,'input[type=hidden]').filter(input=>
     /^(?:(?:resume|cv|attachment|upload|file)[_.-]?)*(?:file[_.-]?)?id$/i.test(input.name) && input.name.toLowerCase()!=='id');
-  const uploadSuccess = (owner,fileName) => deepQuery(owner,'[role=status],[aria-live]').filter(node=>
-    norm(node.textContent)===norm(`File ${fileName} uploaded successfully`));
   const uploadRemoveControls = (owner,fileName) => deepQuery(owner,'button,[role=button]').filter(button=> {
     if(button.disabled || button.getAttribute('aria-disabled')==='true')return false;
     const refs=(button.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean);
@@ -26,23 +24,10 @@ export function createUploadVerification({ deepQuery, composedContains, state, r
       receipt.attachmentId=id;return true;
     }
     if(ids.length || receipt.attachmentId)return false;
-    if(receipt.clientOnly) {
-      const heading=receipt.clientHeading,ids=(group.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean);
-      const headings=ids.length===1?[...group.getRootNode().querySelectorAll(`[id="${CSS.escape(ids[0])}"]`)]:[];
-      const filenames=deepQuery(group,'p').filter(node=>node.textContent.trim()===receipt.file.name);
-      if(group.getAttribute('data-allow-s3')!=='false' || group.getAttribute('role')!=='group' || headings.length!==1 || headings[0]!==heading ||
-         !resumeLabel(heading.textContent) || deepQuery(group,'input[type=file]').length || filenames.length!==1 ||
-         receipt.clientFilename && receipt.clientFilename!==filenames[0] || receipt.clientRemove && receipt.clientRemove!==uploadRemoveControls(group,receipt.file.name)[0])return false;
-      receipt.clientFilename=filenames[0];
-      if(!receipt.clientRemove) {
-        receipt.clientRemove=uploadRemoveControls(group,receipt.file.name)[0];
-        receipt.clientRemove.addEventListener('click',()=>{receipt.clientInvalidated=true;},{capture:true,once:true});
-      }
-      return true;
-    }
+    if (receipt.clientOnly) return verifiedClientAttachment(receipt, group, resumeLabel, uploadRemoveControls, deepQuery);
     const success=uploadSuccess(group,receipt.file.name);
     if(success.length!==1 || receipt.successStatus && receipt.successStatus!==success[0])return false;
     receipt.successStatus=success[0];return true;
   };
-  return { attachmentIds, uploadSuccess, uploadRemoveControls, ownedUploadCompleted };
+  return { attachmentIds, uploadRemoveControls, ownedUploadCompleted };
 }

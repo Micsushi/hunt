@@ -1,3 +1,4 @@
+import { applicationAttachmentControls } from '../../extension/page-adapters/document.js';
 import { observeFormDocument } from '../../extension/form-page.js';
 import { createHash } from 'node:crypto';
 import { annotateQuestionContext } from '../../extension/question-context.js';
@@ -6,7 +7,7 @@ import { join } from 'node:path';
 import type { Page } from 'playwright';
 import { disposeResumeArtifact } from '../contracts/index.ts';
 import { createPageAnswerPlanner, matchLocationOption, type PageQuestion } from './page-answer-planner.ts';
-import { isRecruitmentTermsConsent } from '../ats/workday/application/questions/protected.ts';
+import { isRecruitmentTermsConsent } from '../form/questions/protected.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
 import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
@@ -19,7 +20,7 @@ const controls = 'input:not([type=hidden]):not([type=submit]):not([type=button])
 const submitName = /^(submit application|submit|send application|envoyer la candidature)$/i;
 /** Hosted routes require a current application form, not merely an email input at an /apply URL. */
 export async function observeHostedPage(page: Page) {
-  return page.evaluate(observeFormDocument);
+  return page.evaluate(observeFormDocument, applicationAttachmentControls);
 }
 
 function requireHostedApplication(observation: Awaited<ReturnType<typeof observeHostedPage>>) {
@@ -53,6 +54,7 @@ export async function inspectHostedFields(page: Page) {
       const label=selected.length===1?selected[0]!.textContent?.trim():undefined;
       return e.getAttribute('aria-expanded')!=='true' && label && label===e.value.trim()?label:'';
     };
+    const forms = [...document.querySelectorAll('form,[role=form]')];
     const out = [];
     const radioVisible=(e:Element)=>visible(e)||!!e.closest('[role=radio]')&&visible(e.closest('[role=radio]')!);
     const selected=(e:HTMLInputElement)=>{const aria=e.closest('[role=radio],[role=checkbox]')?.getAttribute('aria-checked');return aria!==undefined&&aria!==null?aria==='true':e.checked;};
@@ -152,7 +154,9 @@ export async function inspectHostedFields(page: Page) {
       e.setAttribute('data-c3-hosted', key);
       const options = kind==='multicheck'?multiChecks.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind==='radio'?radios.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind === 'select' ? [...(raw as HTMLSelectElement).options].filter(o => !o.disabled && o.value).map(o => o.textContent?.trim() ?? '') : kind === 'buttons' ? [...e.querySelectorAll('button[data-option]')].map(o => o.textContent?.trim() ?? '') : [];
       const value = kind==='select'?[...(raw as HTMLSelectElement).selectedOptions].filter(o=>!o.disabled&&o.value).map(o=>o.textContent?.trim()??'').join('; '):kind==='multicheck'?multiChecks.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join('; '):kind==='radio'?radios.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join(''):kind === 'buttons' ? e.querySelector('[aria-pressed=true]')?.textContent?.trim() ?? '' : kind === 'combobox' ? committedChoice(e) : e.value ?? '';
-      out.push({ key, label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
+      const owner = e.form ?? (e.hasAttribute('form') ? null : e.closest('form,[role=form]'));
+      const formId = owner ? forms.indexOf(owner) : -1;
+      out.push({ key, ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
         valid: e.getAttribute('aria-invalid') !== 'true' && (!e.validity || e.validity.valid), name: e.name ?? '',
         inputType: e.type, min: e.min === '' ? null : Number(e.min), max: e.max === '' ? null : Number(e.max), step: e.step === 'any' ? null : Number(e.step || '1'), minLength: e.minLength, maxLength: e.maxLength, pattern: e.pattern ?? '', readOnly: e.readOnly ?? false });
     }
@@ -200,14 +204,14 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
   }
   requireHostedApplication(observation);
   const sources = productSources(input.profile, input.resume);
-  const matching=createMatchingBacklog(input.learningRoot,input.url,effectiveProfileFacts(input.profile),'C3.1',sources.profileQuery.ownerDefaults);
+  const facts = effectiveProfileFacts(input.profile);
+  const matching=createMatchingBacklog(input.learningRoot,input.url,facts,'C3.1',sources.profileQuery.ownerDefaults);
   let pendingMatch:MatchingObservation|undefined;
   const resumeSha256 = createHash('sha256').update(input.resume).digest('hex');
   let resumeExpected = input.resumeExpected;
   let resumeUpload=input.resumeUpload;
   const history: {label:string;kind:string;required:boolean;options:string[];result:string;question:ReturnType<typeof resolveQuestion>;answerKind?:string;lane?:string}[] = [];
-  const facts = effectiveProfileFacts(input.profile);
-  const planAnswer = createPageAnswerPlanner(sources, facts, input.url);
+  const planAnswer = createPageAnswerPlanner(sources, facts, matching.company);
   const fact = (id: string) => facts.find(f => f.factId === id)?.value;
   const known = new Map<string,string>();
   const cookieDialog=page.getByRole('dialog',{name:'Cookie Consent',exact:true});
@@ -239,7 +243,8 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           known.delete(identity);
         }
         const loc = page.locator(`[data-c3-hosted="${f.key}"]`);
-        const current = (await inspectHostedFields(page)).find(x => x.key === f.key);
+        const currentFields = await inspectHostedFields(page);
+        const current = currentFields.find(x => x.key === f.key);
         if (!current || current.label !== f.label || current.kind !== f.kind) { changed = true; break; }
         f = current;
         const matchObservation:MatchingObservation={pageId:page.url(),fieldId:f.key,question:f.label,control:f.kind,
@@ -345,13 +350,14 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         const behavior = f.kind==='date'?'date':f.kind==='radio'?'radio':f.kind === 'buttons' || f.kind === 'combobox' || f.kind==='multicheck' ? 'listbox' : f.kind === 'checkbox' ? 'checkbox' : f.kind === 'textarea' ? 'textarea' : f.kind === 'select' ? 'select' : 'text';
         const constraints: ApplicationFieldObservation['constraints'] = behavior==='text'||behavior==='textarea'?{inputType:/\b(?:url|website|linkedin(?: profile)?)\b/i.test(f.label)&&f.inputType==='text'?'url':['email','url','number'].includes(f.inputType)?f.inputType as 'email'|'url'|'number':'text',min:Number.isFinite(f.min)?f.min:null,max:Number.isFinite(f.max)?f.max:null,step:Number.isFinite(f.step)?f.step:null,minLength:f.minLength>=0?f.minLength:null,maxLength:f.maxLength>=0?f.maxLength:null,pattern:f.pattern||null,readOnly:f.readOnly}:undefined;
         const observation: PageQuestion = {
-          ...matchObservation, options, control: behavior, constraints,
+          ...matchObservation, formId: f.formId, options, control: behavior, constraints,
           ...(f.kind === 'multicheck' ? {widget: 'multi-checkbox'} : {}),
           state: (f.kind === 'checkbox' ? f.checked : Boolean(f.value)) ? 'populated' : 'empty',
           signature: identity, selected: f.kind === 'checkbox' ? f.checked : f.value, valid: f.valid,
         };
         matching.record(observation);
-        const plan = await planAnswer(observation, [], signal);
+        const peers = currentFields.map(field => ({question: field.label, selected: field.value, formId: field.formId}));
+        const plan = await planAnswer(observation, peers, signal);
         const expected = plan.answer ?? (f.kind === 'combobox' ? plan.query : undefined) ?? null;
         history.push({label:f.label,kind:f.kind,required:f.required,options,question:resolveQuestion(f.label),
           answerKind:plan.answerKind,lane:plan.lane,result:expected === null ? plan.reason : 'resolved'});

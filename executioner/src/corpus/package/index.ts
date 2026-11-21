@@ -1,3 +1,5 @@
+import { productBoundary } from '../../contracts/ownership.ts';
+
 export interface PackageLock {
   readonly name: string;
   readonly version: string;
@@ -52,6 +54,10 @@ export interface PackageSbom {
   }[];
 }
 
+// Package the owned extension modules and the assets Chrome reads from its manifest.
+const extensionModules = new Set<string>(Object.values(productBoundary.sourceOwners).flat().filter(path => path.startsWith('extension/')));
+const extensionAssets = new Set(['extension/manifest.json', 'extension/popup.html', 'extension/popup.css']);
+
 export function verifyPackageFileList(files: readonly string[]): readonly string[] {
   return files
     .filter((path) => {
@@ -60,18 +66,10 @@ export function verifyPackageFileList(files: readonly string[]): readonly string
         normalized.split("/").includes("..") ||
         (normalized !== "package.json" &&
         normalized !== "README.md" &&
-        normalized !== "extension/workday-account.js" &&
-        normalized !== "extension/workday-page.js" &&
-        normalized !== "extension/form-page.js" &&
-        normalized !== "extension/form-page.d.ts" &&
-        normalized !== "extension/workday-page.d.ts" &&
-        normalized !== "extension/workday-account.d.ts" &&
+        !extensionAssets.has(normalized) &&
+        !extensionModules.has(normalized.replace(/\.d\.ts$/, ".js")) &&
         normalized !== "docs/corpus-release.md" &&
         normalized !== "docs/corpus-acceptance-summary.md" &&
-        normalized !== "extension/question-context.js" &&
-        normalized !== "extension/question-context.d.ts" &&
-        normalized !== "extension/shared-choice-widget.js" &&
-        normalized !== "extension/shared-choice-widget.d.ts" &&
         !/^dist\/.+\.(?:js|d\.ts)$/u.test(normalized));
     })
     .sort();

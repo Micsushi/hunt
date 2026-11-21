@@ -7,7 +7,7 @@ import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equi
 import { canonicalCanadianRegion } from '../composition/private/s2-derived-profile-country.ts';
 import { recordComponentFailure } from './component-diagnostics.ts';
 import { profileFieldValue } from './profile-field.ts';
-import { intentAnswer, matchingContext, type MatchingObservation } from './matching-backlog.ts';
+import { intentAnswer, type MatchingObservation } from './matching-backlog.ts';
 import type { productSources, effectiveProfileFacts } from './sources.ts';
 
 const handsOnCloudQuestion = normalizeCatalogText('Do you have any hands-on experience with Kubernetes, Docker, or cloud platforms (e.g., AWS, Azure, GCP)?');
@@ -15,8 +15,9 @@ const northAmericanLocationQuestion = normalizeCatalogText('This role requires e
 const averageGpaQuestion = normalizeCatalogText('What is your average GPA?');
 
 export interface PageQuestion extends MatchingObservation {
-  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu'; signature:string; selected: string | boolean; valid: boolean; frameId?: string;
+  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
+type PeerQuestion = Pick<PageQuestion, 'question' | 'selected' | 'frameId' | 'formId'>;
 export interface PageAnswerPlan {
   fieldId:string; frameId?:string; signature:string; answer:string|boolean|null; query?:string; phoneCountry?:string; phoneDial?:string; provisional:boolean; reason:string; answerKind?:string; lane?:string;
 }
@@ -41,11 +42,10 @@ export function matchLocationOption(labels: readonly string[], city: string, reg
 export function createPageAnswerPlanner(
   sources: ReturnType<typeof productSources>,
   facts: ReturnType<typeof effectiveProfileFacts>,
-  url: string,
+  company: string | null,
 ) {
   const narrative = facts.find(fact => fact.factId === 'configured_narrative')?.value;
   const resolver = createApplicationAnswerResolver(sources.profileQuery, typeof narrative === 'string' ? narrative : undefined);
-  const {company} = matchingContext(url);
   const ownerFact = (id: string) => facts.find(f=>f.factId===id&&f.provenance==='owner_provided'&&f.lane==='live_owner_fact')?.value;
   const [gpa, scale] = [ownerFact('education_gpa'),ownerFact('education_gpa_scale')];
   const scaledGpa = typeof gpa==='string' && typeof scale==='string' &&
@@ -61,7 +61,7 @@ export function createPageAnswerPlanner(
 
 
   async function planAnswer(
-    row: PageQuestion, observations: readonly PageQuestion[], signal: AbortSignal,
+    row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal,
   ): Promise<PageAnswerPlan> {
     const binding = {fieldId: row.fieldId, frameId: row.frameId, signature: row.signature};
     if (!row.required) {
@@ -101,12 +101,13 @@ export function createPageAnswerPlanner(
     }
     const questionFact=inspectQuestionMatch(row.question).factId;
     let addressCountryConflict=false;
-    if (questionFact==='postal_code') {
+    if (questionFact==='postal_code' && row.formId) {
       const savedCountry=facts.find(fact=>fact.factId==='country')?.value;
-      const countries=observations.filter(other=>other.frameId===row.frameId &&
-        inspectQuestionMatch(other.question).factId==='country' && typeof other.selected==='string' && other.selected.trim());
-      if (typeof savedCountry==='string' && countries.length===1 &&
-          normalizeCatalogText(String(countries[0]!.selected))!==normalizeCatalogText(savedCountry)) {
+      const countries=observations.filter(other=>other.frameId===row.frameId && other.formId===row.formId &&
+        inspectQuestionMatch(other.question).factId==='country');
+      const selected = countries.length === 1 ? countries[0]!.selected : undefined;
+      if (typeof savedCountry==='string' && typeof selected==='string' && selected.trim() &&
+          normalizeCatalogText(selected)!==normalizeCatalogText(savedCountry)) {
         addressCountryConflict=true;
       }
     }
@@ -120,7 +121,7 @@ export function createPageAnswerPlanner(
     const resolution=await resolver.resolve({field,mode:sources.profilePlan.mode,
       answerFallbackPolicy:sources.executionPolicy.answerFallbackPolicy,profileId:sources.profileId,profileRevision:sources.profileRevision,
       resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,
-      employerNames:[company??'']},signal);
+      employerNames:company ? [company] : []},signal);
     const resolved=resolution.ok&&resolution.value.kind==='resolved'?resolution.value:undefined;
     if (unbounded) {
       const intent = resolved?.intent;
@@ -167,7 +168,7 @@ export function createPageAnswerPlanner(
       answerKind: resolved?.intent.kind, lane: direct !== undefined ? 'profile_fact' : resolved?.lane};
   }
 
-  return async (row: PageQuestion, observations: readonly PageQuestion[], signal: AbortSignal) => {
+  return async (row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal) => {
     try {
       return await planAnswer(row, observations, signal);
     } catch (error) {

@@ -1,8 +1,10 @@
-import { observeFormDocument, currentPageInterruption } from '../../extension/form-page.js';
+import type { currentPageInterruption } from '../../extension/form-page.js';
+import { observePageSource, checkPageSource } from '../../extension/page-runtime/serialize.js';
 import { inspectChoiceWidget } from '../../extension/shared-choice-widget.js';
 import type { Page, Frame, FileChooser, JSHandle } from 'playwright';
 import { parseApplicationProfile } from '../profile/application-profile.ts';
-import { fillVisibleFields, bambooResumeControl } from '../../extension/generic-fill.js';
+import { fillVisibleFields } from '../../extension/generic-fill.js';
+import { bambooResumeControl } from '../../extension/page-adapters/bamboo-resume.js';
 import { annotateQuestionContext } from '../../extension/question-context.js';
 import { proveJobviteResumeInput } from '../../extension/jobvite-resume.js';
 import { genericApplicationTarget } from './target.ts';
@@ -18,7 +20,7 @@ interface ChooserProbes {
 // Keep the helpers private to this document. A navigation invalidates the handle.
 function chooserProbes(page: Page): Promise<JSHandle<ChooserProbes>> {
   return page.evaluateHandle<ChooserProbes>(`({
-    blocked: () => (${currentPageInterruption.toString()})((${observeFormDocument.toString()})()),
+    blocked: () => (${checkPageSource})((${observePageSource})()),
     bamboo: (${bambooResumeControl.toString()}),
     jobvite: (${proveJobviteResumeInput.toString()})
   })`);
@@ -89,7 +91,7 @@ async function proveBambooInDocument(page:Page, expectedUrl:string, signal:Abort
 // Inspect before annotating fields. The bundled filler checks again at the actual fill.
 function prepareGenericDocument(page: Page | Frame) {
   return page.evaluate<ReturnType<typeof currentPageInterruption>>(`(() => {
-    const blocked = (${currentPageInterruption.toString()})((${observeFormDocument.toString()})());
+    const blocked = (${checkPageSource})((${observePageSource})());
     if (blocked) return blocked;
     globalThis.__huntC3ChoiceWidget = (${inspectChoiceWidget.toString()});
     (${annotateQuestionContext.toString()})();

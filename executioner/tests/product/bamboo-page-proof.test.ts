@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {copyFileSync,mkdtempSync,writeFileSync} from 'node:fs';
+import {cpSync,mkdtempSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {chromium} from 'playwright';
 
 test('manual Bamboo chooser proof binds the exact native input, preserves undo, and rejects a different chooser', {timeout:60000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-bamboo-proof-'));
-  for(const file of ['page-actions.js','generic-fill.js','jobvite-resume.js','page-viewport.js','workday-account.js','workday-page.js','form-page.js','question-context.js','shared-choice-widget.js'])copyFileSync(resolve('extension',file),join(root,file));
+  cpSync(resolve('extension'),root,{recursive:true});
   writeFileSync(join(root,'manifest.json'),JSON.stringify({manifest_version:3,name:'Isolated chooser proof',version:'1.0',permissions:['debugger','tabs','storage'],background:{service_worker:'background.js',type:'module'}}));
   writeFileSync(join(root,'background.js'),"import {pageAction} from './page-actions.js'; globalThis.runAction = params => pageAction(params,new Set());");
   const context=await chromium.launchPersistentContext(join(root,'browser'),{headless:true,channel:'chromium',...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{}),args:[`--disable-extensions-except=${root}`,`--load-extension=${root}`]});

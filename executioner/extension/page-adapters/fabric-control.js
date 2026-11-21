@@ -1,6 +1,9 @@
 export function createFabricControl({
-  regionFor, norm, state, deepQuery, visible, editable, checkDeadline, bambooValue
+  regionFor, norm, state, deepQuery, visible, editable, checkDeadline
 }) {
+  const menuToggleSelector = 'button.fab-SelectToggle[data-menu-id]';
+  const isMenuToggle = e => e.matches(menuToggleSelector);
+  const fabricDisplayedLabel = e => e.querySelector('.fab-SelectToggle__content')?.textContent ?? '';
   const fabricWidget = e => {
     if(!e.matches('button.fab-SelectToggle[type=button][data-menu-id]'))return null;
     const region=regionFor(e),container=e.closest('.fab-Select[data-fabric-component=Select]');
@@ -10,7 +13,7 @@ export function createFabricControl({
     const backing=inputs[0],labels=[...backing.labels??[]].filter(label=>label.control===backing);
     if(labels.length!==1)return null;
     const label=labels[0].textContent.replace(/[✱*]/g,'').trim();
-    if(!['country','province','state'].includes(norm(label)) || !bambooValue(e).startsWith(label+' '))return null;
+    if(!['country','province','state'].includes(norm(label)) || !(e.getAttribute('aria-label') ?? '').startsWith(label+' '))return null;
     const countries=[...region.querySelectorAll('select')].filter(select=>
       [...select.labels??[]].some(label=>label.control===select && norm(label.textContent)==='country'));
     if(countries.length!==1)return null;
@@ -19,7 +22,7 @@ export function createFabricControl({
   const fabricState = widget => {
     const selected=widget.input.querySelector('.fab-SelectToggle__content')?.textContent?.trim()??'';
     const blank=!!widget.input.querySelector('.fab-SelectToggle__placeholder');
-    if(blank ? selected!=='' || widget.backing.value!=='' : !selected || !widget.backing.value || bambooValue(widget.input)!==widget.label+' '+selected)return null;
+    if(blank ? selected!=='' || widget.backing.value!=='' : !selected || !widget.backing.value || (widget.input.getAttribute('aria-label') ?? '')!==widget.label+' '+selected)return null;
     return JSON.stringify({label:selected,value:widget.backing.value});
   };
   const pendingFabricChange = widget => {
@@ -82,5 +85,5 @@ export function createFabricControl({
       target.label!=='' && (!widget.backing.validity.valid || !fabricClear(widget)))throw new Error('The dropdown selection, backing value or reset could not be verified.');
     return after;
   };
-  return { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric };
+  return { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel };
 }

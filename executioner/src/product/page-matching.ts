@@ -35,7 +35,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
   }
   let result:MatchedPageResult={filled:[],skipped:[],canUndo:false,canRedo:false};
   try {
-    const planAnswer = createPageAnswerPlanner(sources, facts, input.url);
+    const planAnswer = createPageAnswerPlanner(sources, facts, backlog.company);
     for(let round=0;round<5;round++) {
       input.signal.throwIfAborted();
       const observed=await input.call('status',undefined,runId);

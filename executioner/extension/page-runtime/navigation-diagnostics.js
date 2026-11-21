@@ -1,4 +1,4 @@
-export function readNavigationDiagnostics({deepQuery, composedClosest, composedParent, visible, norm}) {
+export function readNavigationDiagnostics({noticeMarkers,deepQuery, composedClosest, composedParent, visible, norm}) {
   // Diagnostic only: reading validity does not dispatch invalid events or
   // override committed attachment/choice evidence and matching decisions.
   const nativeControls=deepQuery(document,'input,textarea,select,button').filter(e=>e.validity);
@@ -14,7 +14,7 @@ export function readNavigationDiagnostics({deepQuery, composedClosest, composedP
     for(let owner=e;owner;owner=composedParent(owner))if(getComputedStyle(owner).opacity==='0')return false;
     return true;
   };
-  const noticeNodes=deepQuery(document,'[role="alert"],[role="status"],[aria-live="polite"],[aria-live="assertive"],[role="alertdialog"],[role="dialog"],dialog[open],[class*="error-summary" i],[id*="error-summary" i],[class*="errorsummary" i],[id*="errorsummary" i],[data-automation-id="inputAlert"],[data-automation-id*="error" i]')
+  const noticeNodes=deepQuery(document,'[role="alert"],[role="status"],[aria-live="polite"],[aria-live="assertive"],[role="alertdialog"],[role="dialog"],dialog[open],[class*="error-summary" i],[id*="error-summary" i],[class*="errorsummary" i],[id*="errorsummary" i],' + noticeMarkers)
     .filter(e=>e!==document.body && e!==document.documentElement && noticeVisible(e));
   const notices=[],seenNotices=new Set();let noticeCharacters=0,omittedNoticeCount=0;
   for(const node of noticeNodes) {

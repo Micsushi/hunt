@@ -10,7 +10,6 @@ export interface PartialFillResult {
   canRedo: boolean;
   resume?: 'verified' | 'missing' | 'unverified' | 'optional';
 }
-export function bambooResumeControl(): {input:HTMLInputElement;button:HTMLButtonElement;group:HTMLElement;form:HTMLFormElement}|null;
 export function fillVisibleFields(input?: {
   matchingPlans?: PageAnswerPlan[];
   matchingRunId?: string;

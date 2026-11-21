@@ -1,15 +1,13 @@
-import { observeFormDocument, currentPageInterruption } from './form-page.js';
+import {pageFillSource, observePageSource, checkPageSource} from './page-runtime/serialize.js';
 import { inspectChoiceWidget } from './shared-choice-widget.js';
-import { observeWorkdayDocument } from './workday-page.js';
-import { fillVisibleFields, bambooResumeControl } from './generic-fill.js';
+import { bambooResumeControl } from './page-adapters/bamboo-resume.js';
 import { annotateQuestionContext } from './question-context.js';
 import { proveJobviteResumeInput } from './jobvite-resume.js';
 import { preparePageViewport, viewportOwnership, viewportUnavailable, viewportCleanupPending } from './page-viewport.js';
 
 // These declarations are injected into the exact isolated execution context bound below.
-const observeCurrentDocument = `(/\\.(myworkdayjobs|myworkdaysite)\\.com$/.test(location.hostname)
-  ? (${observeWorkdayDocument.toString()})() : (${observeFormDocument.toString()})())`;
-const interruption = `(${currentPageInterruption.toString()})`;
+const observeCurrentDocument = `(${observePageSource})()`;
+const interruption = checkPageSource;
 
 export const pageActionTabs = new Set();
 const worldName = 'Hunt C3 page fill v1';
@@ -173,7 +171,7 @@ export async function pageAction(params, attached) {
         }
         const response = await send('Runtime.callFunctionOn', {
           executionContextId,
-          functionDeclaration: `async function(input) { const observation=${observeCurrentDocument}; const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input); return {observation,...await (${fillVisibleFields.toString()})(input)}; }`,
+          functionDeclaration: `async function(input) { const observation=${observeCurrentDocument}; const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input); return {observation,...await (${pageFillSource})(input)}; }`,
           arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',expectedUrl:frame.url,expiresAt}}],
           awaitPromise:true,returnByValue:true,
         });

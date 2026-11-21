@@ -35,11 +35,10 @@ import { normalizeCatalogText } from "../questions/normalize.ts";
 import { employmentQuestion, referralQuestion, sameEmployer } from '../questions/matching.ts';
 import {
   contractApprovedPrivacyChoices,
+  isRecruitmentTermsConsent,
   protectedQuestionCategory,
-} from
-  "../../ats/workday/application/questions/protected.ts";
+} from "../questions/protected.ts";
 import { semanticSyntheticTestDefault, syntheticTestDate } from "./testing-policy.ts";
-import { isRecruitmentTermsConsent } from "../../ats/workday/application/questions/protected.ts";
 
 const cancelled = Object.freeze({
   ok: false as const,

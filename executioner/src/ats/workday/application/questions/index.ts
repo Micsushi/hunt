@@ -58,7 +58,6 @@ import { employmentQuestion, referralQuestion } from "../../../../form/questions
 import type { ActiveListboxEvidence } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
 import {
-  isContractApprovedPrivacyChoice,
   isRecruitmentTermsConsent,
   protectedAnswerProvenanceAllowed,
   protectedQuestionCategory,
@@ -398,12 +397,7 @@ export function createQuestionnairePageHandler(
         if (
           category !== null &&
           !syntheticLearningDefault &&
-          !protectedAnswerProvenanceAllowed(
-            answer.value.intent.provenance,
-            definition?.source.kind === "neutral_disclosure" &&
-              answer.value.intent.kind === "choice" &&
-              isContractApprovedPrivacyChoice(answer.value.intent.expectedOption),
-          )
+          !protectedAnswerProvenanceAllowed(answer.value.intent.provenance)
         ) {
           recordUnset();
           return blocked("protected_answer_denied", field.fieldId, category);

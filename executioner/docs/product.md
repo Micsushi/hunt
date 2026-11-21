@@ -13,6 +13,8 @@ A paused job can show the component and operation that observed the failure. For
 
 The service decides which answer to use. Browser readers describe the question, options and current selection. Browser interactions apply the answer and read the resulting control state. The full workflow also handles accounts, navigation and final Review. The current-page action stays on the selected document.
 
+Both workflows use the same rules for question wording, saved answers and consent. Site adapters handle the browser details that differ, including the Workday account page, BambooHR province menus and the Jobvite résumé dialog. The extension ships those adapters with its shared field reader and filler. Keep the complete `extension` folder, including its subfolders, together when updating an unpacked installation.
+
 ## Question matching and review backlog
 
 Both workflows use the service’s shared resolver for approved question wording, employer-name patterns and question keywords
