@@ -168,7 +168,9 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
         try:
             target = urlsplit(job.get("apply_url") or "")
         except ValueError:
-            raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.") from None
+            raise HTTPException(
+                409, f"Job {job_id} needs a verified supported posting link."
+            ) from None
         host, route = target.hostname or "", target.path
         family = job.get("ats_type")
         supported = (

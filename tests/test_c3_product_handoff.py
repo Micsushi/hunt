@@ -21,11 +21,26 @@ def client(authenticated=True):
     return TestClient(app)
 
 
-@pytest.mark.parametrize("ats", [
-    "workday", "greenhouse", "lever", "ashby", "workable", "bamboohr", "rippling",
-    "jobvite", "recruitee", "canonical", "canada", "amazon", "applytojob", "greenhouse_anz",
-    "smartrecruiters",
-])
+@pytest.mark.parametrize(
+    "ats",
+    [
+        "workday",
+        "greenhouse",
+        "lever",
+        "ashby",
+        "workable",
+        "bamboohr",
+        "rippling",
+        "jobvite",
+        "recruitee",
+        "canonical",
+        "canada",
+        "amazon",
+        "applytojob",
+        "greenhouse_anz",
+        "smartrecruiters",
+    ],
+)
 def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
     tmp_path, monkeypatch, ats
 ):
