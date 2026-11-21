@@ -4,6 +4,9 @@ import { ApplicationPause, AttachmentPreviewUnavailable, type ResumeUploadReceip
 import { recordComponentFailure } from './component-diagnostics.ts';
 import { applicationTarget } from './target.ts';
 
+type PreviewRead = { digest: string } | { failure: `http_${number}` | 'unsupported_path' | 'unsupported_type' |
+  'missing_body' | 'empty_body' | 'html' | 'transport_rejected' | 'size_mismatch' };
+
 /** Workable replaces the file input after upload. Its owned preview is the receipt. */
 export async function uploadWorkableResume(page:Page, input:Locator, file:{name:string;mimeType:string;buffer:Buffer}):Promise<ResumeUploadReceipt> {
   const group=await input.locator('xpath=ancestor::div[@data-role="dropzone"][1]').elementHandle();
@@ -13,7 +16,7 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
   const receipt={token:randomUUID(),selectedSha256:createHash('sha256').update(file.buffer).digest('hex'),filename:file.name,applicationKey:applicationTarget(page.url()).key};
   let operation = 'inspect_existing_attachment';
   try {
-    const existing=await group.evaluate((element,{receipt,selectedInput})=>{
+    const attachment=await group.evaluate((element,{receipt,selectedInput})=>{
       const host=window as any;
       const preview=element.querySelector('a[data-action=view]');
       const previous=host.__huntWorkableResumeAttempt?.applicationKey===receipt.applicationKey ? host.__huntWorkableResumeAttempt : undefined;
@@ -25,15 +28,17 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
       if(!element.isConnected || !currentInput || previous && !preview && !removedConfirmed)throw new Error('An upload is already pending review. Inspect the resume before retrying.');
       host.__huntWorkableResumeAttempt?.dispose?.();
       host.__huntWorkableResumeAttempt={...receipt,group:element,href:null};
-      return !!preview;
+      // Workable can retain the selected file while its preview is still mounting.
+      // Wait for that preview without replacing the applicant's pending upload.
+      return preview ? 'existing' : file.files?.length ? 'pending' : 'fresh';
     },{receipt,selectedInput});
     // A saved draft may already contain exactly the selected document. Verify
     // its bytes without replacing it or relying on its displayed filename.
-    if (!existing) {
+    if (attachment === 'fresh') {
       operation = 'select_resume_file';
       await selectedInput.setInputFiles(file);
     }
-    operation = 'observe_preview';
+    operation = `observe_${attachment}_preview`;
     const preview=await page.waitForFunction(({group,token})=>{
       const attempt=(window as any).__huntWorkableResumeAttempt;
       if(!group.isConnected || attempt?.group!==group || attempt.token!==token)return null;
@@ -45,14 +50,16 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
     const href=preview?await preview.jsonValue():null;
     await preview?.dispose();
     if(typeof href!=='string' || !/^https:\/\//.test(href))throw new ApplicationPause('The employer has not confirmed the selected resume upload. Check its resume preview before retrying.');
-    operation = 'verify_preview_bytes';
+    operation = `verify_${attachment}_preview_address`;
     const url = new URL(href);
     if (url.username || url.password) throw new ApplicationPause('The resume preview address is not supported.');
-    let digest: string | null = null;
-    if (url.origin === new URL(page.url()).origin) {
+    const sameOrigin = url.origin === new URL(page.url()).origin;
+    operation = `verify_${attachment}_${sameOrigin ? 'same_origin' : 'external'}_preview`;
+    let read: PreviewRead = {failure:'unsupported_path'};
+    if (sameOrigin) {
       // Read a direct PDF from the selected document. Never follow it to a login or another origin.
       if (/\.pdf$/i.test(url.pathname)) {
-        digest = await group.evaluate(async (element, {href, token, size}) => {
+        read = await group.evaluate(async (element, {href, token, size}): Promise<PreviewRead> => {
           const attempt = (window as any).__huntWorkableResumeAttempt;
           const links = element.querySelectorAll<HTMLAnchorElement>('a[data-action=view]');
           if (!element.isConnected || attempt?.token !== token || attempt.group !== element ||
@@ -60,20 +67,25 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
               new URL(href).origin !== location.origin) throw new Error('The resume changed during verification.');
           try {
             const response = await fetch(href, {mode:'same-origin', credentials:'same-origin', redirect:'error', signal:AbortSignal.timeout(15000)});
-            if (!response.ok || !response.body || !/^(application\/pdf|application\/octet-stream)(?:;|$)/i.test(response.headers.get('content-type') ?? '')) return null;
+            if (!response.ok) return {failure:`http_${response.status}`};
+            if (!response.body) return {failure:'missing_body'};
+            const type = response.headers.get('content-type') ?? '';
+            if (!/^(application\/pdf|application\/octet-stream)(?:;|$)/i.test(type)) {
+              return {failure:/text\/html/i.test(type) ? 'html' : 'unsupported_type'};
+            }
             const reader = response.body.getReader();
             const bytes = new Uint8Array(size);
             let offset = 0;
             for (;;) {
               const {value, done} = await reader.read();
               if (done) break;
-              if (offset + value.length > size) { await reader.cancel(); return 'size_mismatch'; }
+              if (offset + value.length > size) { await reader.cancel().catch(()=>{}); return {failure:'size_mismatch'}; }
               bytes.set(value, offset);
               offset += value.length;
             }
-            if (offset !== size) return 'size_mismatch';
-            return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2,'0')).join('');
-          } catch { return null; }
+            if (offset !== size) return {failure:offset ? 'size_mismatch' : 'empty_body'};
+            return {digest:[...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2,'0')).join('')};
+          } catch { return {failure:'transport_rejected'}; }
         }, {href, token:receipt.token, size:file.buffer.length});
       }
     } else {
@@ -86,22 +98,32 @@ export async function uploadWorkableResume(page:Page, input:Locator, file:{name:
           let size = 0;
           for (;;) {
             const {done, value} = await reader.read();
-            if (done) { digest = hash.digest('hex'); break; }
+            if (done) {
+              read = size === file.buffer.length ? {digest:hash.digest('hex')} : {failure:size ? 'size_mismatch' : 'empty_body'};
+              break;
+            }
             size += value.byteLength;
             if (size > file.buffer.length) {
-              digest = 'size_mismatch';
-              await reader.cancel();
+              read = {failure:'size_mismatch'};
+              await reader.cancel().catch(()=>{});
               break;
             }
             hash.update(value);
           }
         } else {
-          await response.body?.cancel();
+          read = {failure:!response.ok ? `http_${response.status}` : !response.body ? 'missing_body' : 'html'};
+          await response.body?.cancel().catch(()=>{});
         }
-      } catch { /* Leave the original upload pending. */ }
+      } catch { read = {failure:'transport_rejected'}; }
     }
-    if (digest === null) throw new AttachmentPreviewUnavailable('The resume preview could not be verified. Inspect the uploaded file before retrying.');
-    if (digest !== receipt.selectedSha256) throw new ApplicationPause('The resume preview does not confirm the PDF selected for this job.');
+    if ('failure' in read || read.digest !== receipt.selectedSha256) {
+      const reason = 'failure' in read ? read.failure : 'hash_mismatch';
+      operation += `_${reason}`;
+      if (['size_mismatch','hash_mismatch','empty_body'].includes(reason)) {
+        throw new ApplicationPause('The resume preview does not confirm the PDF selected for this job.');
+      }
+      throw new AttachmentPreviewUnavailable('The resume preview could not be verified. Inspect the uploaded file before retrying.');
+    }
     operation = 'bind_verified_preview';
     await group.evaluate((element,{receipt,href})=>{
       const attempt=(window as any).__huntWorkableResumeAttempt;

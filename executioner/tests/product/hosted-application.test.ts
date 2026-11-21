@@ -13,6 +13,7 @@ import {inspectHostedFields} from '../../src/product/hosted-application.ts';
 import {hostedReviewSnapshot} from '../../src/product/hosted-application.ts';
 import {uploadGreenhouseResume,verifiedGreenhouseResume} from '../../src/product/greenhouse-resume.ts';
 import {ApplicationQueue} from '../../src/product/queue.ts';
+import {componentFailure} from '../../src/product/component-diagnostics.ts';
 
 const id='11111111-1111-4111-8111-111111111111';
 test('Ashby location retries once when a delayed country focus closes its uncommitted menu',async()=>{
@@ -249,11 +250,34 @@ test('restored Workable optional attachments are preserved and required uploads 
     assert.equal(anonymous.mock.callCount(),0);
     redirect=false; replaceLink=true;
     await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/resume changed during verification/);
-    await p.locator('[data-action=view]').evaluate((a:HTMLAnchorElement)=>a.href='https://fixture-cdn.invalid/selected.pdf');
-    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview could not be verified/);
+    await p.locator('[data-action=view]').evaluate((a:HTMLAnchorElement)=>a.href='https://fixture-cdn.invalid/private-fixture.pdf?signature=test-value');
+    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}), error=>{
+      assert.deepEqual(componentFailure(error),{component:'uploads',operation:'verify_existing_external_preview_http_403'});
+      assert.equal((error as Error).message,'The resume preview could not be verified. Inspect the uploaded file before retrying.');
+      return true;
+    });
     assert.equal(anonymous.mock.callCount(),1);
     assert.equal(uploadChanges,1);
     assert.equal(await p.evaluate('submits'),0);
+
+    await p.reload();
+    const pending = p.locator('[name=attachment]');
+    await pending.evaluate((e:HTMLInputElement)=>{
+      e.required=true;
+      e.parentElement!.querySelector('[data-action=view]')!.remove();
+    });
+    const priorPdf = Buffer.from('%PDF-pending-draft');
+    await pending.setInputFiles({name:'Resume.pdf',mimeType:'application/pdf',buffer:priorPdf});
+    await pending.evaluate(e=>e.addEventListener('change',()=>(window as any).recordUpload()));
+    await p.route('**/pending.pdf',route=>route.fulfill({contentType:'application/pdf',body:priorPdf}));
+    const mismatch = assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview does not confirm/i);
+    await p.waitForFunction(()=>Boolean((window as any).__huntWorkableResumeAttempt));
+    await pending.evaluate(e=>{
+      const view=document.createElement('a');view.dataset.action='view';view.href='/pending.pdf';view.textContent='View';e.after(view);
+    });
+    await mismatch;
+    assert.equal(uploadChanges,1);
+    assert.equal(await pending.evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),priorPdf.toString());
   } finally {await b.close();}
 });
 
