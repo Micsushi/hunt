@@ -130,7 +130,9 @@ test('Location selection clears a fixed header and reports a persistent obstruct
         input.oninput=async()=>{
           menu.hidden=true;
           if(input.value==='Edmonton'){
-            await fetch('/searchLocations?text=Edmonton');
+            // The extension can see fresh employer DOM independently of a network event.
+            await new Promise(resolve=>setTimeout(resolve,100));
+            menu.replaceChildren(...Array.from(menu.children,option=>option.cloneNode(true)));
             menu.hidden=false;
           }
         };
@@ -142,7 +144,6 @@ test('Location selection clears a fixed header and reports a persistent obstruct
           menu.hidden=true;
         };
       </script>`}));
-    await page.route('**/searchLocations?text=Edmonton',route=>route.fulfill({json:[]}));
     await page.goto(lever);
     await fillApplication(page,{url:lever,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
     assert.equal(await page.locator('#location-input').inputValue(),'Edmonton, AB, CAN');

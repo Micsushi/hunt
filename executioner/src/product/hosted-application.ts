@@ -174,19 +174,24 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           if (typeof city !== 'string') throw new ApplicationPause('Add your location to the profile.');
           let searchText = city;
           const leverSearch = target.host === 'jobs.lever.co' && await loc.evaluate(e => e.matches('#location-input.location-input[name=location]'));
-          if (leverSearch) await searchLeverLocation(loc, city);
-          else { await loc.fill(''); if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city); }
+          const leverReady = !leverSearch || await searchLeverLocation(loc, city);
+          if (!leverSearch) { await loc.fill(''); if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city); }
           const choiceOwner = await loc.getAttribute('aria-controls');
           const choices = leverSearch ? loc.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " application-field ")][1]').locator('.dropdown-results > div.dropdown-location:visible:not(:has(button,a[href],input,select,textarea))')
             : f.kind === 'location' ? page.locator('.dropdown-results .dropdown-location:visible')
             : choiceOwner ? page.locator(`[id=${JSON.stringify(choiceOwner)}] [role=option]:visible`)
             : page.locator('[role=listbox]:visible [role=option]:visible');
-          try { await choices.first().waitFor({state:'visible',timeout:10000}); }
+          try {
+            if (!leverReady) throw new ApplicationPause('The employer did not return fresh location suggestions.');
+            await choices.first().waitFor({state:'visible',timeout:10000});
+          }
           catch {
             const qualified=[city,fact('region'),fact('country')].filter(value=>typeof value==='string'&&value.trim()).join(', ');
             if(qualified===city)throw new ApplicationPause('The employer did not return location suggestions. Choose your location on the employer page, then retry.');
             searchText = qualified;
-            if (leverSearch) await searchLeverLocation(loc, qualified);
+            if (leverSearch) {
+              if (!await searchLeverLocation(loc, qualified)) throw new ApplicationPause('The employer did not return fresh location suggestions.');
+            }
             else { await loc.fill('');await loc.pressSequentially(qualified,{delay:30}); }
             try { await choices.first().waitFor({state:'visible',timeout:10000}); }
             catch { throw new ApplicationPause('The employer did not return location suggestions. Choose your location on the employer page, then retry.'); }

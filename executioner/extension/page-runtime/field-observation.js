@@ -31,7 +31,10 @@ export function createFieldObserver({
       e.type==='checkbox'?'checkbox':e.tagName==='SELECT'?'select':e.tagName==='TEXTAREA'?'textarea':e.type==='date'?'date':'text';
     const menuId=e.getAttribute('aria-controls');
     const menus=menuId?deepQuery(e.getRootNode(),`[id="${CSS.escape(menuId)}"]`):[];
-    const availableOption=o=>o.value && (e.multiple ? !o.matches(':disabled') && !o.closest('[hidden]') : !o.disabled);
+    // Some forms give their first placeholder a nonempty machine value.
+    const noSelection=o=>!e.multiple && o.index===0 && /(?:^|[_-])no[_-]selection$/i.test(o.value) &&
+      /^-+\s*no answer\s*-+$/i.test(o.label.trim());
+    const availableOption=o=>o.value && !noSelection(o) && (e.multiple ? !o.matches(':disabled') && !o.closest('[hidden]') : !o.disabled);
     const optionLabel=o=>(e.multiple ? o.label : o.textContent).trim();
     const options=buttonChoice?buttonChoice.options:searchChoice?[...new Set([...searchChoice.labels,...(searchChoice.popupStatus==='ready'?searchChoice.options.filter(option=>!option.disabled).map(option=>option.label):cachedOptions)])]:fabric ? state.fabricOptions?.get(e)??[] : choice?choice.options:control==='select'?[...e.options].filter(availableOption).map(optionLabel):
       group?radios.map(labelFor):control==='listbox' && menus.length===1?[...menus[0].querySelectorAll('[role=option]')].filter(o=>o.getAttribute('aria-disabled')!=='true').map(o=>o.textContent.trim()):[];

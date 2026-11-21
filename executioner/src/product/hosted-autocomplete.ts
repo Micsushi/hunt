@@ -1,18 +1,40 @@
 import type { ElementHandle, Locator, Page } from 'playwright';
 import { ApplicationPause } from './application-contract.ts';
 
-// Wait for Lever's debounced employer search to finish. A previous query's menu
-// can remain visible until its replacement request starts.
+// Lever replaces its option nodes after a debounced search. Its UI can finish
+// even when the paired browser does not deliver the request completion event.
 export async function searchLeverLocation(input: Locator, query: string) {
-  const url = new URL(input.page().url());
-  const settled = input.page().waitForResponse(response => {
-    const result = new URL(response.url());
-    return result.origin === url.origin && result.pathname === '/searchLocations' &&
-      result.searchParams.get('text') === query && response.request().frame() === input.page().mainFrame();
-  }, {timeout:10000}).then(async response => response.ok() && !await response.finished()).catch(() => false);
-  await input.fill('');
-  await input.pressSequentially(query, {delay:30});
-  if (!await settled) throw new ApplicationPause('The employer location search did not finish.');
+  const search = await input.evaluateHandle(element => {
+    const editor = element as HTMLInputElement;
+    const field = editor.closest('.application-field');
+    const menus = field?.querySelectorAll('.dropdown-results');
+    const menu = menus?.length === 1 ? menus[0] : null;
+    return {editor, menu, previous: [...menu?.children ?? []], seen: [] as Element[]};
+  });
+  try {
+    await input.fill('');
+    await input.pressSequentially(query, {delay:30});
+    const result = await input.page().waitForFunction(({search, query}) => {
+      const {editor, menu} = search;
+      if (!menu?.isConnected || !editor.isConnected || editor.value !== query ||
+          editor.closest('.application-field') !== menu.closest('.application-field')) return false;
+      const visible = (node: Element) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
+      const busy = menu.closest('.dropdown-container')?.querySelector('.dropdown-loading-results');
+      const options = [...menu.querySelectorAll(':scope > div.dropdown-location')].filter(visible);
+      if (!options.length || busy && visible(busy) || options.some(o => search.previous.includes(o))) {
+        search.seen = [];
+        return false;
+      }
+      const stable = options.length === search.seen.length && options.every((o,i) => search.seen[i] === o);
+      search.seen = options;
+      return stable;
+    }, {search, query}, {polling:100, timeout:10000});
+    await result.dispose();
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') return false;
+    throw error;
+  } finally { await search.dispose(); }
 }
 
 type AshbyInput = HTMLInputElement & { huntRestoredChoice?: string };
