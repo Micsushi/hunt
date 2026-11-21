@@ -170,14 +170,14 @@ def test_settings_exposes_resume_done_windows_notification_toggle():
     notifications = read("frontend/src/utils/notifications.ts")
 
     assert "AppNotificationSettings" in settings
-    assert "Windows notification when Fletcher finishes a resume" in settings
+    assert "Notify me when Fletcher finishes a resume" in settings
     assert "resume_done_windows_notification_enabled" in notifications
 
 
 def test_settings_exposes_c2_job_metadata_values():
     settings = read("frontend/src/pages/Settings/index.tsx")
 
-    assert "C2 job metadata" in settings
+    assert "Advanced tailoring rules" in settings
     assert "job_metadata_role_families" in settings
     assert "job_metadata_job_levels" in settings
     assert "target_lane_policy" in settings
@@ -187,8 +187,8 @@ def test_settings_exposes_c2_job_metadata_values():
     assert "keyword_ignore_policy" in settings
     assert "summary_keyword_policy" in settings
     assert "skill_addition_policy" in settings
-    assert "summary_good_example" in settings
-    assert "summary_banned_phrases" in settings
+    assert "summary_good_example" not in settings
+    assert "summary_banned_phrases" not in settings
     assert "rewrite_strategy" in settings
     assert "rewrite_keyword_fit_policy" in settings
     assert "rewrite_bullet_policy" in settings
@@ -340,6 +340,33 @@ def test_job_detail_resume_actions_use_queue_and_resume_workspace_label():
     assert "Fletcher review" not in review_page
 
 
+def test_job_detail_resume_run_matches_only_active_saved_job():
+    script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const ts = require('typescript');
+const vm = require('node:vm');
+const source = fs.readFileSync('src/pages/Jobs/JobDetail.tsx', 'utf8');
+const file = ts.createSourceFile('detail.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const fn = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'activeResumeRun');
+assert.ok(fn);
+const compiled = ts.transpileModule(fn.getText(file) + '\nexport { activeResumeRun };', { compilerOptions: { module: ts.ModuleKind.CommonJS } });
+const moduleObj = { exports: {} };
+vm.runInNewContext(compiled.outputText, { exports: moduleObj.exports });
+const { activeResumeRun } = moduleObj.exports;
+const run = (jobId, status) => ({ input: { job_id: jobId }, status });
+const queued = run(42, 'queued');
+const running = run(42, 'running');
+const cancelling = run(42, 'cancel_requested');
+const inactive = [run(42, 'succeeded'), run(42, 'failed'), run(42, 'cancelled'), run(77, 'running'), run(null, 'running')];
+assert.equal(activeResumeRun(inactive, 42), undefined);
+assert.equal(activeResumeRun([...inactive, queued], 42), queued);
+assert.equal(activeResumeRun([queued, running], 42), running);
+assert.equal(activeResumeRun([queued, cancelling], 42), cancelling);
+"""
+    subprocess.run(["node", "-e", script], cwd=ROOT / "frontend", check=True)
+
+
 def test_fletcher_option_b_history_actions_are_visible():
     fletcher = read("frontend/src/pages/Fletcher/index.tsx")
     styles = read("frontend/src/pages/Fletcher/Fletcher.module.css")
@@ -367,7 +394,7 @@ def test_fletcher_option_b_history_actions_are_visible():
     assert "detailBody" in fletcher
     assert "detailMetaPanel" in fletcher
     assert "detailContentPanel" in fletcher
-    assert "fletcherSourceLabel" in fletcher
+    assert "Saved job" in fletcher
     assert "Job description" in fletcher
     assert "Job details" in fletcher
     assert "queueTitleButton" in styles
@@ -519,7 +546,7 @@ def test_fletcher_review_workspace_has_keyword_panel_and_block_selection():
 
     assert "KeywordPanel" in workspace
     assert "normalizeKeywordScores" in workspace
-    assert "Best resume bullet" in workspace
+    assert "Bullet {supportIdx + 1}" in workspace
     assert "contextLabel" in workspace
     assert "onClick={() => onSelect({ block })}" in workspace
     assert "selectedBlock" in workspace

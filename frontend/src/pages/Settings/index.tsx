@@ -750,11 +750,11 @@ function AppNotificationSettings() {
           disabled={!supported || mutation.isPending}
           onChange={(e) => toggle(e.target.checked)}
         />
-        Windows notification when Fletcher finishes a resume
+        Notify me when Fletcher finishes a resume
       </label>
       <p className={styles.fieldHint}>
         {supported
-          ? `Browser permission: ${permission}. Notifications fire when this Hunt tab receives the completed generation response.`
+          ? `Browser permission: ${permission}. Keep this Hunt tab open to receive notifications.`
           : 'This browser does not support desktop notifications.'}
       </p>
     </div>
@@ -920,19 +920,17 @@ function C2ProviderRuntimeSettings() {
       <div className={styles.notice}>
         {runtime.data ? (
           <>
-            Effective provider: {runtime.data.values.llm_provider}. Cloud access:{' '}
+            Active provider: {runtime.data.values.llm_provider}. Cloud access:{' '}
             {runtime.data.values.cloud_llm_confirm === 'true' ? 'allowed' : 'blocked'}.
-            {Object.entries(runtime.data.environment_overrides).map(([key, env]) => (
-              <p key={key}>
-                {key.replace(/_/g, ' ')} is controlled by {env}.
-              </p>
-            ))}
+            {Object.keys(runtime.data.environment_overrides).length > 0 && (
+              <p>Disabled fields are managed by the service.</p>
+            )}
           </>
         ) : (
           <span>
             {runtime.isError
-              ? 'Could not read the active C2 runtime.'
-              : 'Checking the active C2 runtime…'}
+              ? 'Could not read Fletcher’s active settings.'
+              : 'Checking Fletcher’s active settings…'}
           </span>
         )}
         {runtime.isError && (
@@ -940,7 +938,7 @@ function C2ProviderRuntimeSettings() {
             Retry runtime status
           </button>
         )}
-        <p>Blank overrides inherit the service configuration. Only edited fields are saved.</p>
+        <p>Blank overrides use service defaults.</p>
       </div>
       <fieldset disabled={!settings} style={{ border: 0, padding: 0, minWidth: 0 }}>
         <div className={styles.gridTwo}>
@@ -956,7 +954,7 @@ function C2ProviderRuntimeSettings() {
               disabled={Boolean(runtime.data?.environment_overrides.llm_provider)}
               onChange={(e) => setProvider(e.target.value)}
             >
-              <option value="">Use service environment/default</option>
+              <option value="">Use service default</option>
               <option value="heuristic">heuristic</option>
               <option value="ollama">ollama</option>
               <option value="codex">codex oauth</option>
@@ -992,16 +990,13 @@ function C2ProviderRuntimeSettings() {
               disabled={Boolean(runtime.data?.environment_overrides.cloud_llm_confirm)}
               onChange={(e) => setCloudConfirm(e.target.value)}
             >
-              <option value="">Use service environment/default</option>
-              <option value="true">Allow resume and job text to cloud providers</option>
+              <option value="">Use service default</option>
+              <option value="true">Allow sending resume and job text to cloud providers</option>
               <option value="false">Block cloud providers</option>
             </select>
           </label>
         </div>
-        <div className={styles.notice}>
-          Cloud permission can be set by the service environment. API keys are write-only: saved
-          keys show as present, never as readable text.
-        </div>
+        <div className={styles.notice}>Saved API keys are hidden.</div>
         <div className={styles.gridTwo}>
           <label className={styles.field}>
             OpenAI API key {openaiStored ? '(saved)' : ''}
@@ -1157,8 +1152,6 @@ const C2_KEYWORD_KEEP_POLICY_KEY = 'keyword_keep_policy'
 const C2_KEYWORD_IGNORE_POLICY_KEY = 'keyword_ignore_policy'
 const C2_SUMMARY_KEYWORD_POLICY_KEY = 'summary_keyword_policy'
 const C2_SKILL_ADDITION_POLICY_KEY = 'skill_addition_policy'
-const C2_SUMMARY_GOOD_EXAMPLE_KEY = 'summary_good_example'
-const C2_SUMMARY_BANNED_PHRASES_KEY = 'summary_banned_phrases'
 const C2_REWRITE_STRATEGY_KEY = 'rewrite_strategy'
 const C2_REWRITE_KEYWORD_FIT_POLICY_KEY = 'rewrite_keyword_fit_policy'
 const C2_REWRITE_BULLET_POLICY_KEY = 'rewrite_bullet_policy'
@@ -1233,18 +1226,6 @@ const C2_SUMMARY_KEYWORD_POLICY =
   'Pick only exact candidate keywords that improve resume-level positioning for this job. Skip job titles, degrees, majors, role labels, awkward domain claims, and pure stuffing.'
 const C2_SKILL_ADDITION_POLICY =
   'Good additions are concrete skills that fit one existing resume skill category, such as tools, methods, platforms, libraries, databases, operating systems, protocols, or short capability phrases. Ignore job titles, qualities, responsibilities, degrees, majors, disciplines, logistics, business-domain phrases, vague concepts, and blocked keywords.'
-const C2_SUMMARY_GOOD_EXAMPLE =
-  'Candidate with delivery experience across production systems, automation, and cross-functional feedback loops.'
-const C2_SUMMARY_BANNED_PHRASES = [
-  'motivated',
-  'eager',
-  'passionate',
-  'aspiring',
-  'seeking to apply',
-  'excited to',
-  'looking to',
-  'hoping to',
-]
 const C2_REWRITE_STRATEGY =
   'Try these strategies in order. Stop after the first strategy that produces a coherent, natural rewrite:\nFirst strategy: REPLACE. If a keyword names the same type of technology, method, or concept as something already in the bullet, replace or substitute naturally.\nSecond strategy: REWORD. If replacement does not work, reword or restructure the bullet so the original work and the keyword appear together naturally. The keyword must fit the actual work described by the original bullet.\nThird strategy: ADD SENTENCE. If one or more keywords still fit but cannot be included by replacement or rewording, add at most one new sentence anywhere in the bullet. The new sentence must be directly about the original work. Pack multiple remaining keywords into that one sentence only if they fit naturally.\nFinal strategy: STOP. Any remaining keywords that do not fit cleanly go in keywords_skipped. Do not force them.'
 const C2_REWRITE_KEYWORD_FIT_POLICY =
@@ -1323,13 +1304,6 @@ function JobMetadataSettings() {
     C2_SUMMARY_KEYWORD_POLICY
   const skillAdditionPolicyText =
     getSettingValue(settings ?? undefined, C2_SKILL_ADDITION_POLICY_KEY) ?? C2_SKILL_ADDITION_POLICY
-  const summaryGoodExampleText =
-    getSettingValue(settings ?? undefined, C2_SUMMARY_GOOD_EXAMPLE_KEY) ?? C2_SUMMARY_GOOD_EXAMPLE
-  const summaryBannedPhraseText = settingListValue(
-    settings ?? undefined,
-    C2_SUMMARY_BANNED_PHRASES_KEY,
-    C2_SUMMARY_BANNED_PHRASES,
-  )
   const rewriteStrategyText =
     getSettingValue(settings ?? undefined, C2_REWRITE_STRATEGY_KEY) ?? C2_REWRITE_STRATEGY
   const rewriteKeywordFitPolicyText =
@@ -1406,11 +1380,6 @@ function JobMetadataSettings() {
   )
   const [skillAdditionPolicy, setSkillAdditionPolicy] = useDraftValue(
     skillAdditionPolicyText,
-    reset,
-  )
-  const [summaryGoodExample, setSummaryGoodExample] = useDraftValue(summaryGoodExampleText, reset)
-  const [summaryBannedPhrases, setSummaryBannedPhrases] = useDraftValue(
-    summaryBannedPhraseText,
     reset,
   )
   const [rewriteStrategy, setRewriteStrategy] = useDraftValue(rewriteStrategyText, reset)
@@ -1494,7 +1463,6 @@ function JobMetadataSettings() {
       [C2_KEYWORD_IGNORE_POLICY_KEY, keywordIgnorePolicy, 'text'],
       [C2_SUMMARY_KEYWORD_POLICY_KEY, summaryKeywordPolicy, 'text'],
       [C2_SKILL_ADDITION_POLICY_KEY, skillAdditionPolicy, 'text'],
-      [C2_SUMMARY_GOOD_EXAMPLE_KEY, summaryGoodExample, 'text'],
       [C2_REWRITE_STRATEGY_KEY, rewriteStrategy, 'text'],
       [C2_REWRITE_KEYWORD_FIT_POLICY_KEY, rewriteKeywordFitPolicy, 'text'],
       [C2_REWRITE_BULLET_POLICY_KEY, rewriteBulletPolicy, 'text'],
@@ -1518,7 +1486,6 @@ function JobMetadataSettings() {
       [C2_OPTION_A_BULLET_POSITION_BONUS_KEY, optionABulletPositionBonus, 'text'],
       [C2_UNSUPPORTED_TARGET_EXAMPLES_KEY, JSON.stringify(textToList(unsupportedExamples)), 'json'],
       [C2_BLOCKED_KEYWORDS_KEY, JSON.stringify(textToList(blockedKeywords)), 'json'],
-      [C2_SUMMARY_BANNED_PHRASES_KEY, JSON.stringify(textToList(summaryBannedPhrases)), 'json'],
     ],
     {
       [JOB_METADATA_ROLE_FAMILIES_KEY]: JSON.stringify(textToList(roleFamilyText)),
@@ -1528,7 +1495,6 @@ function JobMetadataSettings() {
       [C2_KEYWORD_IGNORE_POLICY_KEY]: keywordIgnorePolicyText,
       [C2_SUMMARY_KEYWORD_POLICY_KEY]: summaryKeywordPolicyText,
       [C2_SKILL_ADDITION_POLICY_KEY]: skillAdditionPolicyText,
-      [C2_SUMMARY_GOOD_EXAMPLE_KEY]: summaryGoodExampleText,
       [C2_REWRITE_STRATEGY_KEY]: rewriteStrategyText,
       [C2_REWRITE_KEYWORD_FIT_POLICY_KEY]: rewriteKeywordFitPolicyText,
       [C2_REWRITE_BULLET_POLICY_KEY]: rewriteBulletPolicyText,
@@ -1552,7 +1518,6 @@ function JobMetadataSettings() {
       [C2_OPTION_A_BULLET_POSITION_BONUS_KEY]: optionABulletPositionBonusText,
       [C2_UNSUPPORTED_TARGET_EXAMPLES_KEY]: JSON.stringify(textToList(unsupportedExamplesText)),
       [C2_BLOCKED_KEYWORDS_KEY]: JSON.stringify(textToList(blockedKeywordText)),
-      [C2_SUMMARY_BANNED_PHRASES_KEY]: JSON.stringify(textToList(summaryBannedPhraseText)),
     },
   )
   async function reload() {
@@ -1565,9 +1530,6 @@ function JobMetadataSettings() {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>C2 job metadata</h2>
-      </div>
       {!settings && (
         <p role={query.isError ? 'alert' : 'status'}>
           {query.isError
@@ -1584,9 +1546,7 @@ function JobMetadataSettings() {
         <div className={styles.gridTwo}>
           <label className={styles.field}>
             Role family values
-            <span className={styles.fieldHint}>
-              Allowed JSON labels for Fletcher metadata prompts and resume routing.
-            </span>
+            <span className={styles.fieldHint}>One per line.</span>
             <textarea
               className={styles.textarea}
               value={roleFamilies}
@@ -1596,9 +1556,7 @@ function JobMetadataSettings() {
           </label>
           <label className={styles.field}>
             Job level values
-            <span className={styles.fieldHint}>
-              Allowed level labels shared by metadata prompts and downstream C2 records.
-            </span>
+            <span className={styles.fieldHint}>One per line.</span>
             <textarea
               className={styles.textarea}
               value={jobLevels}
@@ -1611,7 +1569,7 @@ function JobMetadataSettings() {
           <label className={styles.field}>
             Default target title
             <span className={styles.fieldHint}>
-              Used when Option B has no usable title. Avoid role-specific hardcoded fallbacks.
+              Used when the supplied job description has no usable title.
             </span>
             <input
               className={styles.input}
@@ -1621,9 +1579,7 @@ function JobMetadataSettings() {
           </label>
           <label className={styles.field}>
             Unsupported target examples
-            <span className={styles.fieldHint}>
-              One per line. Used with the target-lane policy for queued jobs.
-            </span>
+            <span className={styles.fieldHint}>One per line.</span>
             <textarea
               className={styles.textarea}
               value={unsupportedExamples}
@@ -1635,7 +1591,6 @@ function JobMetadataSettings() {
         <div className={styles.gridTwo}>
           <label className={styles.field}>
             Keyword max count
-            <span className={styles.fieldHint}>Maximum keywords returned by extraction.</span>
             <input
               type="number"
               className={styles.input}
@@ -1646,7 +1601,6 @@ function JobMetadataSettings() {
           </label>
           <label className={styles.field}>
             Keyword min words
-            <span className={styles.fieldHint}>Minimum words per extracted keyword.</span>
             <input
               type="number"
               className={styles.input}
@@ -1657,7 +1611,6 @@ function JobMetadataSettings() {
           </label>
           <label className={styles.field}>
             Keyword max words
-            <span className={styles.fieldHint}>Maximum words per extracted keyword.</span>
             <input
               type="number"
               className={styles.input}
@@ -1667,10 +1620,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Metadata prompt max chars
-            <span className={styles.fieldHint}>
-              First job-description characters used for metadata fill.
-            </span>
+            Job description character limit for classification
             <input
               type="number"
               className={styles.input}
@@ -1680,10 +1630,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Minimum confidence
-            <span className={styles.fieldHint}>
-              Confidence threshold used in metadata and prompt policy.
-            </span>
+            Minimum classification confidence
             <input
               type="number"
               className={styles.input}
@@ -1695,8 +1642,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Skill addition limit
-            <span className={styles.fieldHint}>Maximum Technical Skills additions per resume.</span>
+            Maximum technical skills added
             <input
               type="number"
               className={styles.input}
@@ -1708,8 +1654,7 @@ function JobMetadataSettings() {
         </div>
         <div className={styles.gridTwo}>
           <label className={styles.field}>
-            Option A min jobs
-            <span className={styles.fieldHint}>Lower bound for master resume job buckets.</span>
+            Minimum experience entries (saved job)
             <input
               type="number"
               className={styles.input}
@@ -1720,8 +1665,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Option A max jobs
-            <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
+            Maximum experience entries before fitting (saved job)
             <input
               type="number"
               className={styles.input}
@@ -1732,8 +1676,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Option A min projects
-            <span className={styles.fieldHint}>Lower bound for master resume project buckets.</span>
+            Minimum projects (saved job)
             <input
               type="number"
               className={styles.input}
@@ -1744,8 +1687,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Option A max projects
-            <span className={styles.fieldHint}>Upper bound before compile fitting.</span>
+            Maximum projects before fitting (saved job)
             <input
               type="number"
               className={styles.input}
@@ -1756,8 +1698,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Job bullet cap
-            <span className={styles.fieldHint}>Max selected bullets per experience bucket.</span>
+            Maximum bullets per experience entry
             <input
               type="number"
               className={styles.input}
@@ -1767,8 +1708,7 @@ function JobMetadataSettings() {
             />
           </label>
           <label className={styles.field}>
-            Project bullet cap
-            <span className={styles.fieldHint}>Max selected bullets per project bucket.</span>
+            Maximum bullets per project
             <input
               type="number"
               className={styles.input}
@@ -1818,9 +1758,7 @@ function JobMetadataSettings() {
         </div>
         <label className={styles.field}>
           Target-lane policy
-          <span className={styles.fieldHint}>
-            Queue-only policy for deciding whether weak-RAG jobs are outside the configured lane.
-          </span>
+          <span className={styles.fieldHint}>Applies to queued jobs with weak resume matches.</span>
           <textarea
             className={styles.textarea}
             value={targetLanePolicy}
@@ -1864,25 +1802,7 @@ function JobMetadataSettings() {
             rows={4}
           />
         </label>
-        <label className={styles.field}>
-          Summary good example
-          <textarea
-            className={styles.textarea}
-            value={summaryGoodExample}
-            onChange={(e) => setSummaryGoodExample(e.target.value)}
-            rows={3}
-          />
-        </label>
         <div className={styles.gridTwo}>
-          <label className={styles.field}>
-            Summary banned phrases
-            <textarea
-              className={styles.textarea}
-              value={summaryBannedPhrases}
-              onChange={(e) => setSummaryBannedPhrases(e.target.value)}
-              rows={6}
-            />
-          </label>
           <label className={styles.field}>
             Blocked keywords
             <textarea
@@ -1895,9 +1815,7 @@ function JobMetadataSettings() {
         </div>
         <label className={styles.field}>
           Rewrite strategy
-          <span className={styles.fieldHint}>
-            Ordered tactics for bullet generation. Keep accept/reject rules in rewrite policy.
-          </span>
+          <span className={styles.fieldHint}>List rewrite tactics in priority order.</span>
           <textarea
             className={styles.textarea}
             value={rewriteStrategy}
@@ -1970,7 +1888,7 @@ function JobMetadataSettings() {
             disabled={mutation.isPending || !settings || !updates.length}
             onClick={() => void save(updates)}
           >
-            {mutation.isPending ? 'Saving...' : 'Save metadata values'}
+            {mutation.isPending ? 'Saving...' : 'Save tailoring rules'}
           </button>
           <button
             className={styles.btn}
@@ -2013,7 +1931,7 @@ export function SettingsPage() {
     setDiscordResult(null)
     try {
       await testC1Discord()
-      setDiscordResult('Webhook OK: test message sent.')
+      setDiscordResult('Test message sent.')
       showToast('Discord test sent')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Test failed'
@@ -2156,11 +2074,8 @@ export function SettingsPage() {
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Integrations</h2>
       </div>
-      <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-        Sends a test message to the configured Discord channel.
-      </p>
       <button className={styles.btn} disabled={testingDiscord} onClick={handleTestDiscord}>
-        {testingDiscord ? 'Sending...' : 'Test Discord webhook'}
+        {testingDiscord ? 'Sending...' : 'Send Discord test message'}
       </button>
       {discordResult && <p style={{ marginTop: 8, fontSize: '0.88rem' }}>{discordResult}</p>}
     </div>

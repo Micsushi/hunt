@@ -76,8 +76,6 @@ These settings control Fletcher prompts and runtime guards:
 - `keyword_ignore_policy`
 - `summary_keyword_policy`
 - `skill_addition_policy`
-- `summary_good_example`
-- `summary_banned_phrases`
 - `rewrite_strategy`
 - `rewrite_keyword_fit_policy`
 - `rewrite_bullet_policy`
@@ -106,3 +104,9 @@ Option B run history and queue state do not live in Settings. They live in
 
 Review packages also do not live in Settings. They are attempt artifacts under
 the C2 runtime root and are resolved through opaque `review_id` values.
+
+### Automatic summary behavior
+
+Queue and CLI summaries use original resume wording rather than freeform model generation. An existing user summary is retained verbatim; otherwise up to two complete retained source bullets are copied with attribution. No summary-generation, model-validation or length-retry calls run. A four-to-five-line target does not apply to source wording.
+
+`summary_good_example`, `summary_banned_phrases`, and `summary_keyword_policy` remain stored for legacy helpers and do not control automatic source summaries. Rewrite and skill policies remain active; skill candidates are filtered by relevance and explicit rewrite rejections without an extra summary-filter model call. A failed optional summary compile leaves the no-summary result intact and reports its omission.

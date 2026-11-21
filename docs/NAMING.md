@@ -9,10 +9,13 @@ Single source for resolving naming: **C1–C4**, **Hunter / Fletcher / Execution
 | **C0** | **Frontend** | Operator dashboard and control plane - SPA UI plus FastAPI backend. Backend is the API gateway: all component API calls route through it. | **`frontend/`** + **`backend/`** | `hunt-frontend` (nginx + SPA) + `hunt-backend` (FastAPI) |
 | **C1** | **Hunter** | Job discovery and multi-source enrichment. Exposes service API for backend to trigger scrapes and enrichment from the UI. | Python package **`hunter/`** (see below) | `hunt-hunter` |
 | **C2** | **Fletcher** | Resume tailoring (LaTeX pipeline, PDF, DB attempts). Exposes service API for one-off generation triggered from the UI file drop. | **`fletcher/`** | `hunt-fletcher` |
-| **C3** | **Executioner** | Retained v3 Workday application journey. Prepares and verifies fields through Review; final Submit is forbidden. | **`executioner/`** | none |
+| **C3** | **Executioner** | Local v3 application preparation for Workday, Greenhouse, Lever, Ashby and Workable. Filling stops at Review; Workday has a separate confirmed Submit action, disabled for hosted ATS families. | **`executioner/`** | none |
 | **C4** | **Coordinator** | Paused orchestration experiment retained for reference. | **`coordinator/`** | none |
 
 **C1 (Hunter)**: formerly “the scraper”. `scraper/` directory gone - code in `hunter` package.
+
+**C3.1** names the full application preparation flow. **C3.2** names the extension's
+current-page fill. These are two workflows within C3, not separate component versions.
 
 ## C1 (Hunter): `hunter` package vs `hunter/scraper.py`
 

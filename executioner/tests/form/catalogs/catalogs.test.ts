@@ -56,6 +56,8 @@ test("exact and reviewed keyword variants resolve deterministically", () => {
     ["What's your gender?", "workday-question-gender-disclosure"],
     ["Select your gender", "workday-question-gender-disclosure"],
     ["Please agree to these terms", "workday-placeholder-terms-consent"],
+    ["Email address", "owner-question-email-address"],
+    ["State/Province", "owner-question-residence-region"],
   ] as const;
   for (const [label, id] of semanticCases) {
     assert.deepEqual(resolveQuestion(label), {
@@ -66,8 +68,6 @@ test("exact and reviewed keyword variants resolve deterministically", () => {
     });
   }
   for (const outOfScope of [
-    "Email address",
-    "State/Province",
     "ZIP/Postal Code",
     "Current Employer",
     "Current Job Title",

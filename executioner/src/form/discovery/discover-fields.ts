@@ -144,6 +144,8 @@ function dynamicFieldFromTarget(target: BrowserTargetObservation): FieldObservat
     fieldId: fieldId(`field-${fieldSuffix}`),
     target: target.token,
     label: boundedText(target.name),
+    ...(target.rawQuestion === undefined ? {} : {rawQuestion: target.rawQuestion}),
+    ...(target.rawOptions === undefined ? {} : {rawOptions: target.rawOptions}),
     required: target.required,
     behavior,
     options: Object.freeze(labels.map((label, index) => Object.freeze({

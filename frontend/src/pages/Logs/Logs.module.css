@@ -14,11 +14,6 @@
   font-size: 1.5rem;
   font-weight: 700;
 }
-.heroMeta {
-  font-size: 0.82rem;
-  color: var(--muted);
-  margin-top: 3px;
-}
 
 .refreshBtn {
   height: 44px;
@@ -82,38 +77,6 @@
   font-size: 0.82rem;
   color: var(--danger);
   margin-top: 3px;
-}
-
-.statRow {
-  display: flex;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-.statCell {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 12px 8px;
-  border-right: 1px solid var(--line);
-  gap: 3px;
-}
-.statCell:last-child {
-  border-right: none;
-}
-.statVal {
-  font-size: 1.1rem;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: var(--ink);
-}
-.statLabel {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
 }
 
 .controls {
@@ -230,12 +193,6 @@
   background: var(--panel-hover);
 }
 
-.monoSm {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--muted);
-  word-break: break-all;
-}
 .ts {
   font-family: var(--font-mono);
   font-size: 0.78rem;
@@ -313,11 +270,13 @@
 }
 
 .expandBtn {
-  background: none;
-  border: none;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  color: var(--muted);
-  padding: 0 4px 0 0;
+  color: var(--ink);
+  padding: 6px 8px;
+  min-height: 32px;
   font-size: 0.85rem;
 }
 .jsonPre {
@@ -334,27 +293,6 @@
   overflow-y: auto;
 }
 
-.endpointRow {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.endLink {
-  font-size: 0.82rem;
-  font-family: var(--font-mono);
-  color: var(--accent);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 5px 10px;
-  text-decoration: none;
-  background: var(--panel-strong);
-  transition: background var(--ease);
-}
-.endLink:hover {
-  background: var(--accent-soft);
-  text-decoration: none;
-}
-
 .loading {
   padding: 40px;
   text-align: center;
@@ -368,12 +306,37 @@
   background: var(--danger-soft);
 }
 
-@media (max-width: 760px) {
-  .statRow {
-    flex-wrap: wrap;
+@media (max-width: 640px) {
+  .table,
+  .table tbody {
+    display: block;
+    width: 100%;
   }
-  .statCell {
-    flex: 1 0 25%;
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .table td {
     min-width: 0;
+    padding: 6px 4px;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+  .table td:nth-child(4),
+  .table td:nth-child(5),
+  .table td[colspan] {
+    grid-column: 1 / -1;
+  }
+  .expandBtn {
+    min-height: 44px;
   }
 }

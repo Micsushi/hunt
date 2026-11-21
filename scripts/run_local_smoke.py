@@ -21,6 +21,7 @@ SMOKE_TARGETS = {
     "c0": ("scripts/smoke_c0_pipeline_container.sh",),
     "c1": ("scripts/smoke_hunter_container.sh",),
     "c2": ("scripts/smoke_fletcher_container.sh",),
+    "c1-c3": ("scripts/smoke_c1_c3.py",),
     "review": ("scripts/smoke_review_container.sh",),
     "server2": (
         "scripts/smoke_server2.sh",
@@ -62,7 +63,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "target",
         nargs="?",
         default="all",
-        help="Smoke target: all, c0, c1, c2, review, server2, server2-c0, server2-c1. C4 is paused.",
+        help="Smoke target: all, c0, c1, c2, c1-c3, review, server2, server2-c0, server2-c1. C4 is paused.",
     )
     parser.add_argument(
         "--dry-run",
@@ -121,8 +122,8 @@ def main() -> int:
     args = _parse_args(sys.argv[1:])
 
     try:
-        runner = _resolve_runner()
         target, scripts = _resolve_target(args.target)
+        runner = [sys.executable] if target == "c1-c3" else _resolve_runner()
     except RuntimeError as exc:
         print(f"[local-smoke] {exc}", file=sys.stderr)
         return 1
@@ -141,11 +142,12 @@ def main() -> int:
         extra_args = ["--existing"] if args.existing else []
         completed = subprocess.run([*runner, script, *extra_args], cwd=ROOT, check=False)
         if completed.returncode != 0:
-            _notify_smoke_failure(
-                target=target,
-                script=script,
-                exit_code=completed.returncode,
-            )
+            if target != "c1-c3":
+                _notify_smoke_failure(
+                    target=target,
+                    script=script,
+                    exit_code=completed.returncode,
+                )
             print(
                 f"[local-smoke] FAILED at {script} with exit code {completed.returncode}",
                 file=sys.stderr,

@@ -272,8 +272,8 @@ function profileHandler(
         answerFallbackPolicy: dependencies.sources.questionnaireRequest().answerFallbackPolicy,
         pageType: result.pageType,
         verifiedFields: result.verifiedFields,
-        ...(result.committedFields.length === 0 ? {} : {
-          syntheticFields: result.committedFields.map((field) =>
+        ...(!result.committedFields.some(({ synthetic }) => synthetic) ? {} : {
+          syntheticFields: result.committedFields.filter(({ synthetic }) => synthetic).map((field) =>
             profileSyntheticFieldEvidence(request.pageId, field)
           ),
         }),

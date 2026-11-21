@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import {
@@ -13,6 +13,14 @@ import {
 } from "../src/corpus/package/index.ts";
 
 const executioner = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Extension entrypoints run directly in Chrome and are outside the TypeScript build.
+for (const file of await readdir(resolve(executioner, "extension"))) {
+  if (!file.endsWith(".js")) continue;
+  const syntax = spawnSync(process.execPath, ["--check", resolve(executioner, "extension", file)], {
+    encoding: "utf8", shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (syntax.error !== undefined || syntax.status !== 0) throw new Error(`extension syntax invalid: ${file}`);
+}
 const npmCli = process.env.npm_execpath;
 if (npmCli === undefined) throw new Error("npm CLI path unavailable");
 const scratch = await mkdtemp(resolve(tmpdir(), "hunt-executioner-package-"));

@@ -513,9 +513,11 @@ export const productBoundary = {
       "src/form/questions/catalog.ts",
       "src/composition/private/s2-derived-profile-country.ts",
     ],
+    "src/product/page-matching.ts": ["src/form/answers/resolver.ts"],
     "src/product/profile-field.ts": [],
     "src/product/queue.ts": ["src/composition/private/s2-application-source-preparation.ts"],
     "src/product/server.ts": [
+      "src/form/questions/catalog.ts",
       "src/mailbox/providers/gmail/private/imap-client.ts",
       "src/composition/private/s2-application-source-preparation.ts",
     ],
@@ -529,6 +531,12 @@ export const productBoundary = {
       "src/form/answers/testing-policy.ts",
     ],
     "src/product/target.ts": [],
+    "src/product/matching-backlog.ts": [
+      "src/form/questions/catalog.ts",
+      "src/form/questions/matching.ts",
+      "src/form/options/mapper.ts",
+      "src/composition/private/s2-application-source-preparation.ts",
+    ],
     "extension/generic-fill.js": [],
   },
   // Stage 1 still needs only Playwright; only this transport may import ws.

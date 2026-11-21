@@ -28,11 +28,6 @@
   margin-bottom: 6px;
 }
 
-.sub {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
 .form {
   display: flex;
   flex-direction: column;

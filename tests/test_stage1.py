@@ -12,10 +12,6 @@ from unittest.mock import patch
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-jobspy_stub = types.ModuleType("jobspy")
-jobspy_stub.scrape_jobs = lambda **kwargs: None
-sys.modules.setdefault("jobspy", jobspy_stub)
-
 from hunter import config as config_module  # noqa: E402
 from hunter import db, discovery_policy  # noqa: E402
 from hunter import scraper as discovery  # noqa: E402  # C1 (Hunter) discovery module

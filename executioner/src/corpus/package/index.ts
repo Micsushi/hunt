@@ -60,8 +60,14 @@ export function verifyPackageFileList(files: readonly string[]): readonly string
         normalized.split("/").includes("..") ||
         (normalized !== "package.json" &&
         normalized !== "README.md" &&
+        normalized !== "extension/workday-account.js" &&
+        normalized !== "extension/workday-account.d.ts" &&
         normalized !== "docs/corpus-release.md" &&
         normalized !== "docs/corpus-acceptance-summary.md" &&
+        normalized !== "extension/question-context.js" &&
+        normalized !== "extension/question-context.d.ts" &&
+        normalized !== "extension/shared-choice-widget.js" &&
+        normalized !== "extension/shared-choice-widget.d.ts" &&
         !/^dist\/.+\.(?:js|d\.ts)$/u.test(normalized));
     })
     .sort();

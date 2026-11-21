@@ -60,7 +60,7 @@ test("disappearing prior popups do not block education discovery or selection", 
     for (const discover of [true, false]) {
       await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
         <div data-automation-id="formField-fieldOfStudy"><label>Field of Study</label>
-          <input id="education-1--fieldOfStudy"><div id="selected"></div>
+          <input aria-required="true" id="education-1--fieldOfStudy"><div id="selected"></div>
         </div></main><div id="previous" role="listbox"><div role="option">Old popup</div></div>
         <script>
           document.querySelector('input').onclick = () => {
@@ -134,12 +134,12 @@ test("scalar readback avoids repeated empty catalog discovery in either field or
     for (const mode of ["live", "synthetic_test_non_submittable"] as const) {
       await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
         <div data-automation-id="formField-prefix"><label for="name--legalName--title">Prefix</label>
-          <button type="button" id="name--legalName--title" aria-controls="titles" aria-haspopup="listbox" aria-expanded="false">Select One</button>
+          <button aria-required="true" type="button" id="name--legalName--title" aria-controls="titles" aria-haspopup="listbox" aria-expanded="false">Select One</button>
           <div id="titles" role="listbox" hidden><div role="option">Mr.</div><div role="option">Ms.</div></div>
         </div>
-        <div data-automation-id="formField-firstName"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName"></div>
-        <div data-automation-id="formField-middleName"><label for="name--legalName--middleName">Middle Name</label><input id="name--legalName--middleName"></div>
-        <div data-automation-id="formField-lastName"><label for="name--legalName--lastName">Last Name</label><input id="name--legalName--lastName"></div>
+        <div data-automation-id="formField-firstName"><label for="name--legalName--firstName">First Name</label><input required id="name--legalName--firstName"></div>
+        <div data-automation-id="formField-middleName"><label for="name--legalName--middleName">Middle Name</label><input required id="name--legalName--middleName"></div>
+        <div data-automation-id="formField-lastName"><label for="name--legalName--lastName">Last Name</label><input required id="name--legalName--lastName"></div>
       </main><script>(() => {
         globalThis.emptyOpens = 0;
         const button = document.querySelector('button'), popup = document.querySelector('#titles');
@@ -2270,7 +2270,7 @@ for (const known of [false, true]) test(`button listbox discovery excludes its e
       <body data-hunt-profile-page-type="profile"><main data-automation-id="applyFlowMyInfoPage">
         <div data-automation-id="formField-legalName--social">
           <label for="${id}">Suffix</label>
-          <button id="${id}" aria-haspopup="listbox" aria-controls="choices" type="button">Select One</button>
+          <button aria-required="true" id="${id}" aria-haspopup="listbox" aria-controls="choices" type="button">Select One</button>
           <ul id="choices" role="listbox" hidden>
             <li role="option" data-value="" aria-selected="true">Select One</li>
             <li role="option" data-value="senior">Sr.</li>
@@ -2294,7 +2294,7 @@ for (const known of [false, true]) test(`button listbox discovery excludes its e
     const adapter = new PlaywrightWorkdayProfilePage(page, {pageType: "profile", inspectMissingOptions: true});
     const snapshot = await adapter.inspect(AbortSignal.any([]));
     assert.equal(snapshot.controls.length, 1);
-    assert.equal(snapshot.controls[0]!.fieldId, known ? "identity.suffix" : "unknown.optional.1");
+    assert.equal(snapshot.controls[0]!.fieldId, known ? "identity.suffix" : "unknown.required.1");
     assert.deepEqual(snapshot.controls[0]!.allowedOptions, ["Sr."]);
     assert.equal(await page.locator('button').innerText(), "Select One");
     const result = await completeWorkdayProfilePage({
@@ -2355,7 +2355,7 @@ test("learns and fills a generic Workday Website repeatable row", async () => {
           <section data-automation-id="websitesSection">
             <div data-automation-id="website-1">
               <label>Website
-                <input data-automation-id="website-1--website">
+                <input required data-automation-id="website-1--website">
               </label>
             </div>
             <button type="button" data-automation-id="addWebsite">Add</button>
@@ -2480,7 +2480,7 @@ test("unfamiliar radio questions remain one group with observed options and veri
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
       <div data-automation-id="formField-previousWorker"><span data-automation-id="required">*</span>
-        <fieldset role="radiogroup"><legend>Unfamiliar compound employment question?</legend>
+        <fieldset role="radiogroup"><legend>Have you previously worked for our organization or any subsidiary?</legend>
           <input id="previous-yes" type="radio" name="candidateIsPreviousWorker" value="true">
           <label for="previous-yes">Yes</label>
           <input id="previous-no" type="radio" name="candidateIsPreviousWorker" value="false">
@@ -2532,10 +2532,10 @@ for (const [linkedInLabel, native] of [
     await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
       ${native ? '<div data-automation-id="formField-linkedInAccount">' : ""}
       <label for="socialNetworkAccounts--linkedInAccount">${linkedInLabel}</label>
-      <input id="socialNetworkAccounts--linkedInAccount" ${native ? 'name="linkedInAccount"' : ""}>
+      <input required id="socialNetworkAccounts--linkedInAccount" ${native ? 'name="linkedInAccount"' : ""}>
       ${native ? "</div>" : ""}
       <label for="socialNetworkAccounts--twitterAccount">X:</label>
-      <input id="socialNetworkAccounts--twitterAccount">
+      <input required id="socialNetworkAccounts--twitterAccount">
     </main>`);
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const signal = new AbortController().signal;
@@ -2662,7 +2662,7 @@ test("unfamiliar scalar labels use observed UI and editable defaults without cla
       <label for="name--legalName--firstName">First Name</label>
       <input id="name--legalName--firstName" required>
       <label for="socialNetworkAccounts--linkedInAccount">Public profile link for review</label>
-      <input id="socialNetworkAccounts--linkedInAccount" type="url">
+      <input required id="socialNetworkAccounts--linkedInAccount" type="url">
       <label for="socialNetworkAccounts--twitterAccount">Describe your preferred contact channel</label>
       <textarea id="socialNetworkAccounts--twitterAccount" required minlength="4" maxlength="20"></textarea>
     </main>`);
@@ -2685,7 +2685,7 @@ test("unfamiliar scalar labels use observed UI and editable defaults without cla
     });
     const snapshot = await capture.page.inspect(signal);
     assert.deepEqual(snapshot.controls.map(({ fieldId, uiBehavior }) => [fieldId, uiBehavior]), [
-      ["identity.given_name", "text"], ["unknown.optional.1", "url"], ["unknown.required.2", "textarea"],
+      ["identity.given_name", "text"], ["unknown.required.1", "url"], ["unknown.required.2", "textarea"],
     ]);
     assert.equal(capture.page.metadataReconciliationFailure?.(), undefined);
     const result = await completeWorkdayProfilePage(plan, capture.page, signal);
@@ -2719,9 +2719,9 @@ test("unrelated text fields do not increase phone type popup discovery", async (
     const popupCounts: number[] = [];
     for (const includeText of [false, true]) {
       await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
-        ${includeText ? `<label>First Name<input id="name--legalName--firstName"></label>
-          <label>Last Name<input id="name--legalName--lastName"></label>
-          <label>City<input id="address--city"></label>` : ""}
+        ${includeText ? `<label>First Name<input required id="name--legalName--firstName"></label>
+          <label>Last Name<input required id="name--legalName--lastName"></label>
+          <label>City<input required id="address--city"></label>` : ""}
         <label for="phoneNumber--phoneType">Phone Device Type</label>
         <button id="phoneNumber--phoneType" role="combobox" aria-haspopup="listbox"
           aria-controls="phone-options" aria-expanded="false" aria-required="true">Select One</button>
@@ -2832,7 +2832,7 @@ test("Workday structural prompts discover choices without ARIA while ordinary in
       </div>
       <input id="ordinary" required>
       <div id="other-widget" data-automation-id="multiSelectContainer" data-uxi-widget-type="multiselect">
-        <input id="mismatched" required data-uxi-widget-type="selectinput" data-uxi-multiselect-id="owned-widget">
+        <input id="mismatched" aria-label="Malformed choice" required data-uxi-widget-type="selectinput" data-uxi-multiselect-id="owned-widget">
       </div>
       </main>
 
@@ -2850,9 +2850,19 @@ test("Workday structural prompts discover choices without ARIA while ordinary in
     assert.equal(choice.uiBehavior, "search_select");
     assert.deepEqual(choice.allowedOptions, ["Example certificate"]);
     assert.equal((await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification")?.fieldId, choice.fieldId);
-    assert.equal(snapshot.controls.filter(control => control.uiBehavior === "text").length, 2);
+    assert.equal(snapshot.controls.filter(control => control.uiBehavior === "text").length, 1);
     await page.locator('#ordinary').fill('ordinary');
+    const malformed = snapshot.controls.find(control => control.label === 'Malformed choice')!;
+    assert.equal(malformed.uiBehavior, 'search_select');
     await page.locator('#mismatched').fill('ordinary');
+    const typed = (await adapter.inspect(signal, false)).controls.find(control => control.label === 'Malformed choice');
+    assert.equal(typed?.readback, null);
+    const blocked = await completeWorkdayProfilePage({ mode: 'synthetic_test_non_submittable', pageType: 'profile', fields: [], repeatables: [] }, adapter, signal);
+    assert.equal(blocked.kind, 'blocked', JSON.stringify(blocked));
+    assert.equal(await page.locator('#ordinary').inputValue(), 'ordinary');
+    assert.equal(await page.locator('#mismatched').inputValue(), 'ordinary');
+    // Continue the valid-widget checks independently of the malformed required control.
+    await page.locator('#other-widget').evaluate(element => element.remove());
     const result = await completeWorkdayProfilePage({ mode: "synthetic_test_non_submittable", pageType: "profile", fields: [], repeatables: [] }, adapter, signal);
     assert.equal(result.kind, "verified", JSON.stringify(result));
     assert.equal((await adapter.inspect(signal, false)).controls.find(control => control.label === "Certification")?.readback, "Example certificate");
@@ -3067,7 +3077,7 @@ test("skill search finds virtualized options and queries qualified equivalents",
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
       <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
-        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search" aria-controls="choices">
+        <div data-automation-id="multiSelectContainer"><input aria-required="true" id="skills--skills" enterkeyhint="search" aria-controls="choices">
           <div id="selected"></div></div>
       </div></main><div role="listbox" id="choices" style="height:32px;overflow:auto" hidden></div>
       <script>
@@ -3105,7 +3115,7 @@ test("skill catalog qualifiers survive selection, handler verification, and lear
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExpPage">
       <div data-automation-id="formField-skills"><label for="skills--skills">Type to Add Skills</label>
-        <div data-automation-id="multiSelectContainer"><input id="skills--skills" enterkeyhint="search">
+        <div data-automation-id="multiSelectContainer"><input aria-required="true" id="skills--skills" enterkeyhint="search">
           <div id="selected"></div></div>
       </div></main><div role="listbox" id="choices" hidden>
         <div role="option">Python IDLE</div><div role="option">Python (Programming Language)</div>
@@ -3146,7 +3156,7 @@ test("skill catalog qualifiers survive selection, handler verification, and lear
     const evidence = JSON.parse(await readFile(join(root, "profile-field-learning.json"), "utf8"));
     assert.equal(evidence.fields[0].terminalDisposition, "verified");
     assert.equal(evidence.fields[0].mechanics.persistentReadback, "verified_after_rescan");
-    const skills = JSON.stringify(["Python", "Java", "R", "SQL", "C", "C++", "Go", "Rust", "Ruby"]);
+    const skills = JSON.stringify(["Python"]);
     const savedPlan = { ...plan, fields: [field("skills.values", "skill", "multi_select", skills, skills)] };
     const savedCapture = createProfileFieldLearningCapture({
       ...captureOptions, plan: savedPlan, fileName: "profile-field-learning-02.json",
@@ -3508,7 +3518,7 @@ test("empty education portal closes before discovering the next control", async 
         <input id="education-1--school" enterkeyhint="search" required>
       </div>
       <div data-automation-id="formField-degree"><label>Degree</label>
-        <button id="education-1--degree" aria-controls="degrees">Select One</button>
+        <button aria-required="true" id="education-1--degree" aria-controls="degrees">Select One</button>
         <div id="degrees" role="listbox" hidden><div role="option">Bachelors</div></div>
       </div>
     </main>
@@ -4110,7 +4120,7 @@ test("flat source discovery tolerates duplicate labels but never selects an ambi
     await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
       <div data-automation-id="formField-source">
         <label for="source--source">How Did You Hear About Us?</label>
-        <button type="button" id="source--source" aria-haspopup="listbox" aria-controls="sources">Select One</button>
+        <button aria-required="true" type="button" id="source--source" aria-haspopup="listbox" aria-controls="sources">Select One</button>
       </div></main>
       <ul id="sources" role="listbox" tabindex="-1" hidden>
         <li role="option" data-value="one">Facebook</li>
@@ -4391,7 +4401,7 @@ test("real adapter and handler reconcile every profile section without owned dup
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
-    await page.setContent(fixture);
+    await page.setContent(fixture.replace('data-automation-id="skillsSection"', 'data-automation-id="skillsSection" aria-required="true"'));
     const adapter = new PlaywrightWorkdayProfilePage(page, { pageType: "profile" });
     const experience = [
       field("experience.company", "experience", "text", "Analytical Engines"),
@@ -4537,7 +4547,7 @@ test("My Experience multi-select commits every exact visible skill without comma
       <body data-hunt-profile-page-type="profile">
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
-            <input id="skills--skills" role="combobox" aria-controls="skills-options"
+            <input aria-required="true" id="skills--skills" role="combobox" aria-controls="skills-options"
               aria-expanded="false" placeholder="Search">
             <div id="selected-skills"></div>
             <div id="skills-options" role="listbox" hidden>
@@ -4588,7 +4598,7 @@ fields: [field("skills.values", "skill", "multi_select", options, options)],
   }
 });
 
-test("My Experience bounds a large optional owner skill set to one derived site-valid fact", async () => {
+test("My Experience leaves a large optional owner skill set untouched", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -4635,15 +4645,13 @@ test("My Experience bounds a large optional owner skill set to one derived site-
 
     assert.equal(result.kind, "verified", JSON.stringify(result));
     if (result.kind !== "verified") return;
-    const effective = result.effectivePlan.fields[0]!;
-    assert.equal(effective.answer.kind, "answered");
-    if (effective.answer.kind !== "answered") return;
-    assert.equal(effective.answer.provenance, "journey_derived");
-    assert.equal(effective.answer.lane, "live_owner_fact");
-    assert.equal(effective.answer.value, '["Skill 01"]');
+    assert.deepEqual(result.verifiedFields, []);
+    assert.deepEqual(result.committedFields, []);
+    assert.equal(await page.locator('#skills--skills').inputValue(), "");
+    assert.equal(await page.locator('#skills-options').isVisible(), false);
     assert.deepEqual(
       await page.locator('[data-automation-id="selectedItem"]').allTextContents(),
-      ["Skill 01"],
+      [],
     );
   } finally {
     await browser.close();
@@ -4659,7 +4667,7 @@ test("My Experience trusts a collapsed selected-item over its presentation-only 
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+              <input aria-required="true" id="skills--skills" role="combobox" aria-controls="skills-options"
                 aria-expanded="false" placeholder="Search">
               <ul data-automation-id="selectedItemList" hidden></ul>
               <div id="visible-selected-items"></div>
@@ -4743,7 +4751,7 @@ test("My Experience owns a remounted skill by its production list-item wrapper",
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+              <input aria-required="true" id="skills--skills" role="combobox" aria-controls="skills-options"
                 aria-expanded="false" placeholder="Search">
               <ul data-automation-id="selectedItemList"></ul>
               <div id="presentation-mirror"></div>
@@ -4837,7 +4845,7 @@ test("My Experience excludes a selected skill delete affordance from committed r
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" role="combobox" aria-controls="skills-options"
+              <input aria-required="true" id="skills--skills" role="combobox" aria-controls="skills-options"
                 aria-expanded="false" placeholder="Search">
               <ul data-automation-id="selectedItemList"></ul>
               <div id="skills-options" role="listbox" hidden>
@@ -4904,7 +4912,7 @@ test("My Experience reconciles a committed skill after its prompt activation tar
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" placeholder="Search">
+              <input aria-required="true" id="skills--skills" placeholder="Search">
               <div data-automation-id="responsiveMonikerPrompt">
                 <span data-automation-id="promptSearchButton"><svg></svg></span>
                 <input data-automation-id="searchBox" hidden>
@@ -5052,7 +5060,7 @@ test("My Experience validation ownership is atomic across direct and nested remo
     await configure(false, true);
     const blocked = (await adapter.inspect(AbortSignal.any([]))).controls
       .find(({ fieldId }) => fieldId === "skills.values");
-    assert.equal(blocked?.required, true);
+    assert.equal(blocked?.required, false);
     assert.equal(blocked?.readback, null);
 
     await configure(true, false);
@@ -5137,7 +5145,7 @@ test("My Experience waits for submitted multi-select results without cancelling 
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" placeholder="Search" enterkeyhint="search">
+              <input aria-required="true" id="skills--skills" placeholder="Search" enterkeyhint="search">
               <div id="selected"></div>
             </div>
           </div>
@@ -5197,7 +5205,7 @@ for (const initialDelay of [0, 150]) for (const discover of [false, true]) test(
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-education-fieldOfStudy">
             <div data-automation-id="multiSelectContainer">
-              <input id="education-1--fieldOfStudy" placeholder="Search">
+              <input aria-required="true" id="education-1--fieldOfStudy" placeholder="Search">
               <div id="selected"></div>
             </div>
             <div id="catalog" data-automation-id="activeListContainer" role="listbox"></div>
@@ -5307,7 +5315,7 @@ test("field-of-study discovery uses its bounded busy catalog without selecting a
   try {
     await page.setContent(`<main data-automation-id="applyFlowMyExperiencePage">
       <div data-automation-id="formField-education-fieldOfStudy">
-        <input id="education-1--fieldOfStudy" data-uxi-multiselect-id="study-catalog">
+        <input aria-required="true" id="education-1--fieldOfStudy" data-uxi-multiselect-id="study-catalog">
       </div></main>
       <div id="prompt" data-automation-id="responsiveMonikerPrompt" data-associated-widget="study-catalog" hidden></div>
       <script>
@@ -5348,7 +5356,7 @@ test("My Experience multi-select owns a local Workday prompt without aria-contro
         <main data-automation-id="applyFlowMyExperiencePage">
           <div data-automation-id="formField-skills">
             <div data-automation-id="multiSelectContainer">
-              <input id="skills--skills" placeholder="Search">
+              <input aria-required="true" id="skills--skills" placeholder="Search">
               <button data-automation-id="promptIcon" type="button">Open</button>
               <div id="selected-skills"></div>
               <div id="skills-options" hidden>
@@ -5953,5 +5961,83 @@ test("school commit accepts exact saved value after a lost popup-close acknowled
     const observed = await adapter.observeControl(school.controlId, AbortSignal.any([]));
     assert.equal(observed.backingState, "set");
     assert.equal(await page.locator('#school-options').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+
+test("native country initialization is reread without opening, while discovery mutations fail closed", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    for (const scenario of ["initialize_between_reads", "click_changes_selection"] as const) {
+      await page.setContent(`<main data-automation-id="applyFlowMyInfoPage">
+        <div data-automation-id="formField-country"><label for="country--country">Country</label>
+          <button aria-required="true" type="button" id="country--country" name="country" aria-haspopup="listbox"
+            aria-controls="countries" aria-expanded="false">Select One</button>
+          <div id="countries" role="listbox" hidden><div role="option">Canada</div></div>
+        </div></main><script>
+          (() => { window.countryClicks = 0;
+          const country = document.querySelector('button'), popup = document.querySelector('#countries');
+          country.onclick = () => {
+            window.countryClicks++;
+            country.textContent = 'Canada'; country.setAttribute('aria-valuetext', 'Canada');
+            popup.hidden = false; country.setAttribute('aria-expanded', 'true');
+          };
+          document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { popup.hidden = true; country.setAttribute('aria-expanded', 'false'); }
+          }); })();
+        </script>`);
+      let initialized = false;
+      const wrap = (locator: Locator): Locator => new Proxy(locator, {
+        get(target, property) {
+          if (property === "locator") return (...args: Parameters<Locator["locator"]>) => wrap(target.locator(...args));
+          if (property === "nth") return (index: number) => wrap(target.nth(index));
+          if (property === "first") return () => wrap(target.first());
+          if (property === "innerText") return async (...args: Parameters<Locator["innerText"]>) => {
+            const value = await target.innerText(...args);
+            if (scenario === "initialize_between_reads" && !initialized &&
+                await target.getAttribute("id") === "country--country") {
+              initialized = true;
+              // Finish the original empty read, then deterministically publish the employer default.
+              await target.evaluate(element => {
+                element.textContent = "Canada"; element.setAttribute("aria-valuetext", "Canada");
+              });
+            }
+            return value;
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const observedPage = new Proxy(page, {
+        get(target, property) {
+          if (property === "locator") return (...args: Parameters<typeof page.locator>) => wrap(target.locator(...args));
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const failures: string[] = [];
+      const adapter = new PlaywrightWorkdayProfilePage(observedPage, {
+        pageType: "profile", inspectMissingOptions: true, timeoutMs: 1000,
+        trace: (event, details) => {
+          if (event === "profile_option_observation_cleanup_failed" && details && "underlyingError" in details) {
+            failures.push(String(details.underlyingError));
+          }
+        },
+      });
+      if (scenario === "initialize_between_reads") {
+        const snapshot = await adapter.inspect(AbortSignal.any([]));
+        const country = snapshot.controls.find(control => control.fieldId === "address.country");
+        assert.equal(initialized, true);
+        assert.equal(country?.readback, "Canada");
+        assert.deepEqual(country?.allowedOptions, ["Canada"]);
+        assert.equal(await page.evaluate(() => Reflect.get(window, "countryClicks")), 0);
+        assert.deepEqual(failures, []);
+      } else {
+        await assert.rejects(adapter.inspect(AbortSignal.any([])));
+        assert.equal(await page.evaluate(() => Reflect.get(window, "countryClicks")), 1);
+        assert.deepEqual(failures, ["backing_state_changed"]);
+      }
+    }
   } finally { await browser.close(); }
 });

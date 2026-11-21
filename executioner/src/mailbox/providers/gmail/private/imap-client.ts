@@ -45,10 +45,12 @@ try:
     if len(request_bytes) < 2 or len(request_bytes) > 65536:
         fail(4)
     request = json.loads(request_bytes.decode('utf-8'))
-    if sorted(request) != ['accountPassword','companyName','notAfter','notBefore','recipientAddress','verificationHost']:
+    connection_check = sorted(request) == ['accountPassword','recipientAddress']
+    if not connection_check and sorted(request) != ['accountPassword','companyName','notAfter','notBefore','recipientAddress','verificationHost']:
         fail(4)
-    start = datetime.fromisoformat(request['notBefore'].replace('Z', '+00:00'))
-    end = datetime.fromisoformat(request['notAfter'].replace('Z', '+00:00'))
+    if not connection_check:
+        start = datetime.fromisoformat(request['notBefore'].replace('Z', '+00:00'))
+        end = datetime.fromisoformat(request['notAfter'].replace('Z', '+00:00'))
     client = None
     try:
         client = imaplib.IMAP4_SSL('imap.gmail.com', 993, timeout=20)
@@ -58,6 +60,9 @@ try:
         status, _ = client.select('INBOX', readonly=True)
         if status != 'OK':
             fail(3)
+        if connection_check:
+            sys.stdout.write('{"connected":true}')
+            raise SystemExit(0)
         since = datetime.fromtimestamp(start.timestamp() - 86400, timezone.utc).strftime('%d-%b-%Y')
         before = datetime.fromtimestamp(end.timestamp() + 86400, timezone.utc).strftime('%d-%b-%Y')
         status, data = client.search(None, 'SINCE', since, 'BEFORE', before, 'TO', '"' + request['recipientAddress'] + '"', 'TEXT', '"' + request['verificationHost'] + '"')
@@ -162,6 +167,22 @@ export class GmailImapClient {
 
   constructor(executable = "python.exe") {
     this.#executable = executable;
+  }
+
+  async checkConnection(recipientAddress: string, accountPassword: string, signal: AbortSignal): Promise<void> {
+    await this.#acquire(signal);
+    const input = Buffer.from(JSON.stringify({ recipientAddress, accountPassword }));
+    try {
+      signal.throwIfAborted();
+      const output = await this.#run(input, signal);
+      try {
+        if (new TextDecoder().decode(output) !== '{"connected":true}') throw new GmailImapFailure("mailbox_query_invalid");
+      } finally { output.fill(0); }
+    } finally {
+      input.fill(0);
+      this.#active--;
+      this.#waiting.shift()?.();
+    }
   }
 
   async query(

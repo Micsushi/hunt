@@ -168,14 +168,10 @@ function copyReadback(value: unknown): BrowserReadback | undefined {
 }
 
 function copyTarget(value: unknown): BrowserTargetObservation | undefined {
-  const target = dataRecord(value, [
-    "token",
-    "name",
-    "required",
-    "control",
-    "state",
-    "readback",
-  ]);
+  const keys = ["token", "name", "required", "control", "state", "readback"];
+  const target = dataRecord(value, keys) ?? dataRecord(value, [...keys, "rawQuestion"]) ??
+    dataRecord(value, [...keys, "rawOptions"]) ?? dataRecord(value, [...keys, "rawQuestion", "rawOptions"]);
+  const rawOptions = target?.rawOptions === undefined ? undefined : dataArray(target.rawOptions, 64);
   const control = copyControl(target?.control);
   const state = copyState(target?.state);
   const readback = copyReadback(target?.readback);
@@ -183,6 +179,8 @@ function copyTarget(value: unknown): BrowserTargetObservation | undefined {
     target === undefined ||
     !opaqueIdentifier(target.token) ||
     !boundedString(target.name) ||
+    target.rawQuestion !== undefined && typeof target.rawQuestion !== "string" ||
+    target.rawOptions !== undefined && (rawOptions === undefined || !rawOptions.every(option => typeof option === 'string')) ||
     typeof target.required !== "boolean" ||
     control === undefined ||
     state === undefined ||
@@ -191,6 +189,8 @@ function copyTarget(value: unknown): BrowserTargetObservation | undefined {
   return Object.freeze({
     token: target.token,
     name: target.name,
+    ...(target.rawQuestion === undefined ? {} : {rawQuestion: target.rawQuestion}),
+    ...(rawOptions === undefined ? {} : {rawOptions: Object.freeze(rawOptions)}),
     required: target.required,
     control,
     state,

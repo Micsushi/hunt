@@ -11,6 +11,7 @@ This module is board-agnostic: the same check applies to LinkedIn, Indeed, and a
 
 import re
 import unicodedata
+from functools import lru_cache
 
 # Lane ids must match keys in hunter.config.SEARCH_TERMS.
 LANE_ENGINEERING = "engineering"
@@ -139,6 +140,8 @@ _PM_TOKEN = re.compile(r"(?<![a-z])pm(?![a-z])")
 def canonicalize_title_text(value):
     if not value or not isinstance(value, str):
         return ""
+    if value.isascii():
+        return " ".join(value.lower().split())
     normalized = unicodedata.normalize("NFKD", value)
     without_accents = "".join(char for char in normalized if not unicodedata.combining(char))
     return " ".join(without_accents.lower().split())
@@ -179,6 +182,10 @@ def title_matches_search_lane(title, lane):
         return True
 
     title_key = canonicalize_title_text(title)
+    if lane == LANE_DATA and re.fullmatch(
+        r"analyst(?:\s+|\s*[-–—,]\s*)media effectiveness", title_key
+    ):
+        return True
     if lane == LANE_IT_SUPPORT:
         # Canadian occupation codes are not Network Operations Centre roles.
         title_key = re.sub(r"\bnoc(?:\s+code)?[\s:#()-]*\d{4,5}\b", "", title_key)
@@ -249,8 +256,13 @@ _TARGET_TITLE_SUFFIX_VARIANTS = {
 }
 
 
+@lru_cache(maxsize=512)
+def _phrase_pattern(phrase):
+    return re.compile(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])")
+
+
 def _contains_phrase(text, phrase):
-    return re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text) is not None
+    return _phrase_pattern(phrase).search(text) is not None
 
 
 def build_search_queries(target_job_titles, experience_levels):

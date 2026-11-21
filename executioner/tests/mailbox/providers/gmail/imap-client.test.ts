@@ -9,6 +9,37 @@ import { setImmediate } from "node:timers/promises";
 
 import { encodeGmailImapQueryRequest, GmailImapClient } from "../../../../src/mailbox/providers/gmail/private/imap-client.ts";
 
+test("connection check logs in and opens inbox read-only without searching or fetching mail", async () => {
+  const source = await readFile("src/mailbox/providers/gmail/private/imap-client.ts", "utf8");
+  const script = source.split("const imapQueryScript = String.raw`")[1]!.split("`;", 1)[0]!;
+  for (const scenario of ["success", "auth", "network"]) {
+    const setup = `
+import imaplib
+class FakeImap:
+    def __init__(self, host, port, timeout):
+        assert host == 'imap.gmail.com' and port == 993
+        if '${scenario}' == 'network': raise OSError('synthetic')
+    def login(self, address, password):
+        assert address == 'fixture@example.invalid' and password == 'synthetic'
+        if '${scenario}' == 'auth': raise imaplib.IMAP4.error('synthetic')
+        return ('OK', [])
+    def select(self, mailbox, readonly):
+        assert mailbox == 'INBOX' and readonly is True
+        return ('OK', [])
+    def search(self, *args): raise AssertionError('must not search mail')
+    def fetch(self, *args): raise AssertionError('must not fetch mail')
+    def logout(self): pass
+imaplib.IMAP4_SSL = FakeImap
+`;
+    const result = spawnSync(process.platform === "win32" ? "python.exe" : "python3", ["-c", setup + script], {
+      input: JSON.stringify({ recipientAddress: "fixture@example.invalid", accountPassword: "synthetic" }),
+      encoding: "utf8", windowsHide: true, timeout: 10_000,
+    });
+    assert.equal(result.status, scenario === "success" ? 0 : scenario === "auth" ? 2 : 3, result.stderr);
+    assert.equal(result.stdout, scenario === "success" ? '{"connected":true}' : "");
+  }
+});
+
 test("shared IMAP client caps processes and cancels waiting and active queries without early permit release", async t => {
   const children: Array<EventEmitter & { stdout: EventEmitter; stdin: EventEmitter & { end(): void }; kill(): boolean }> = [];
   let alive = 0, maximum = 0, kills = 0;

@@ -11,10 +11,6 @@
   color: var(--muted);
 }
 
-.infoCount {
-  color: var(--muted);
-}
-
 .pills {
   display: flex;
   gap: 5px;

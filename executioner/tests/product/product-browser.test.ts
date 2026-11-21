@@ -1,17 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, type Page } from "playwright";
 import { startProductServer } from "../../src/product/server.ts";
-import { applicationFixture, accountFixture } from "./fixture.ts";
+import { fixtureApplicantProfile, applicationFixture, accountFixture } from "./fixture.ts";
+
+function isolatedExtension(root: string, origin: string) {
+  const extension = join(root, "extension");
+  cpSync(resolve("extension"), extension, { recursive: true });
+  for (const file of ["manifest.json", "background.js", "popup.js", "website-handoff.js"]) {
+    const path = join(extension, file);
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("47831", new URL(origin).port));
+  }
+  return extension;
+}
 
 test("real extension fills concurrent tabs through Review and requires fresh per-job submission", { timeout: 300_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "c3-product-check-"));
-  const service = await startProductServer({ root });
+  const service = await startProductServer({ root, port: 0 });
   const token = readFileSync(service.tokenPath, "utf8");
-  const extension = resolve("extension");
+  const extension = isolatedExtension(root, service.origin);
   const context = await chromium.launchPersistentContext(join(root, "browser"), {
     headless: true, channel: "chromium", ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}),
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
@@ -31,12 +41,16 @@ test("real extension fills concurrent tabs through Review and requires fresh per
       if (!worker) await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert.ok(worker, "Hunt C3 extension worker must initialize");
-    await worker.evaluate(`chrome.storage.local.set({token:${JSON.stringify(token)}}).then(() => connect())`);
+    await worker.evaluate(token => (globalThis as any).chrome.storage.local.set({token}), token);
+    const pairing = await context.newPage();
+    await pairing.goto(worker.url().replace(/background\.js$/, "popup.html"));
+    await pairing.evaluate(() => (globalThis as any).chrome.runtime.sendMessage({action:"connect"}));
+    await pairing.close();
     for (let i = 0; i < 100 && !service.queue.snapshot().connected; i++) await new Promise(r => setTimeout(r, 50));
     assert.equal(service.queue.snapshot().connected, true);
     const count = Number(process.env.C3_BATCH_CHECK_COUNT ?? 2);
     assert.ok(count >= 2 && count <= 30);
-    await context.route(/https:\/\/fixture\d+\.wd1\.myworkdayjobs\.com\//, route => route.fulfill({ contentType: "text/html", body: route.request().url().includes("//fixture0.") ? accountFixture : applicationFixture }));
+    await context.route(/https:\/\/fixture\d+\.wd1\.myworkdayjobs\.com\//, route => route.fulfill({ contentType: "text/html", body: route.request().url().includes("//fixture0.") ? accountFixture.replace('()=>document.querySelector(\'#error\').innerHTML=\'<p data-automation-id="accountNotFoundError">Account not found</p>\'', '()=>profile()') : applicationFixture }));
     const pages: Page[] = [];
     for (let i = 0; i < count; i++) {
       const page = await context.newPage();
@@ -44,12 +58,13 @@ test("real extension fills concurrent tabs through Review and requires fresh per
       pages.push(page);
     }
     const tabs = await worker.evaluate("chrome.tabs.query({})") as { id: number; url: string }[];
-    await api("settings", { applicant: { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }, resumeBase64: Buffer.from("%PDF-1.4\nsynthetic fixture").toString("base64") });
+    await api("settings", { profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }), resumeBase64: Buffer.from("%PDF-1.4\nsynthetic fixture").toString("base64") });
     await api("account", { email: "fixture@example.invalid", password: "Synthetic-only-123!" });
     let verifications = 0;
     service.queue.verifyEmail = async page => {
-      assert.equal(await page.evaluate("sessionStorage.getItem('created')"), "yes");
-      await page.evaluate("sessionStorage.setItem('verified','yes')"); verifications++;
+      const fixturePage = pages.find(candidate=>candidate.url()===page.url())!;
+      assert.equal(await fixturePage.evaluate("sessionStorage.getItem('created')"), "yes");
+      await fixturePage.evaluate("sessionStorage.setItem('verified','yes')"); verifications++;
     };
     await api("concurrency", { value: count });
     // Exercise the actual popup entry point on the first selected job.
@@ -62,8 +77,14 @@ test("real extension fills concurrent tabs through Review and requires fresh per
     const deadline = Date.now() + 180_000;
     while (service.queue.jobs.some(j => ["queued", "running"].includes(j.status)) && Date.now() < deadline) await new Promise(r => setTimeout(r, 250));
     assert.deepEqual(service.queue.jobs.map(j => j.status), Array(count).fill("review"), JSON.stringify(service.queue.snapshot()));
-    assert.equal(await worker.evaluate("attached.size"), 0, "Review tabs must release debugger connections");
-    assert.equal(verifications, 1);
+    for (const page of pages) {
+      const tabId = tabs.find(t => t.url === page.url())!.id;
+      await assert.rejects(worker.evaluate(tabId =>
+        (globalThis as any).chrome.debugger.sendCommand({tabId}, "Page.getFrameTree"), tabId),
+      /not attached|not attaching/i, "Review tabs must release this extension's debugger connection");
+    }
+    assert.equal(verifications, 0);
+    assert.equal(await pages[0]!.evaluate("sessionStorage.getItem('created')"),null);
     for (const page of pages) assert.equal(await page.evaluate("submits"), 0);
     const first = service.queue.jobs[0]!;
     await api(`jobs/${first.id}/action`, { action: "submit", reviewDigest: first.reviewDigest }, 400);
@@ -89,6 +110,7 @@ test("real extension fills concurrent tabs through Review and requires fresh per
     await ui.goto(`${service.origin}/#token=${token}`);
     await ui.getByText("Connected", { exact: true }).waitFor();
     assert.equal(await ui.locator("#jobs li").count(), count);
+    await ui.waitForFunction(() => (document.querySelector('[name="given_name"]') as HTMLInputElement)?.value === "Synthetic");
     assert.equal(await ui.locator('[name="given_name"]').inputValue(), "Synthetic");
     await ui.setViewportSize({ width: 390, height: 844 });
     assert.equal(await ui.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -103,16 +125,20 @@ test("real extension fills concurrent tabs through Review and requires fresh per
 
 test("one extension prepares mixed ATS tabs without offering submission", {timeout:90_000}, async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-mixed-'));
-  const service=await startProductServer({root});
+  const service=await startProductServer({root,port:0});
   const token=readFileSync(service.tokenPath,'utf8');
-  const extension=resolve('extension');
+  const extension=isolatedExtension(root,service.origin);
   const context=await chromium.launchPersistentContext(join(root,'browser'),{headless:true,channel:"chromium",...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{}),args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
   const api=async(path:string,body:unknown)=>{const r=await fetch(`${service.origin}/${path}`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal(r.status,200,await r.clone().text());return r.json();};
   try{
     let worker=context.serviceWorkers()[0];for(let i=0;i<100&&!worker;i++){await new Promise(r=>setTimeout(r,100));worker=context.serviceWorkers()[0];}assert.ok(worker);
-    await worker.evaluate(`chrome.storage.local.set({token:${JSON.stringify(token)}}).then(()=>connect())`);
+    await worker.evaluate(token => (globalThis as any).chrome.storage.local.set({token}), token);
+    const pairing=await context.newPage();
+    await pairing.goto(worker.url().replace(/background\.js$/, 'popup.html'));
+    await pairing.evaluate(()=>(globalThis as any).chrome.runtime.sendMessage({action:'connect'}));
+    await pairing.close();
     for(let i=0;i<100&&!service.queue.snapshot().connected;i++)await new Promise(r=>setTimeout(r,50));assert.equal(service.queue.snapshot().connected,true);
-    await api('settings',{applicant:{given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'},resumeBase64:Buffer.from('%PDF-fixture').toString('base64')});
+    await api('settings',{applicant:{given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',previously_worked_for_organization:'false'},resumeBase64:Buffer.from('%PDF-fixture').toString('base64')});
     const urls=['https://apply.workable.com/fixture/j/ABC123/apply/','https://jobs.lever.co/fixture/11111111-1111-4111-8111-111111111111/apply','https://job-boards.greenhouse.io/fixture/jobs/123','https://jobs.ashbyhq.com/fixture/11111111-1111-4111-8111-111111111111/application'];
     await context.route(/https:\/\/(jobs.lever.co|job-boards.greenhouse.io|jobs.ashbyhq.com|apply.workable.com)\//,r=>r.fulfill({contentType:'text/html',body:'<label>Name<input required></label><label>Email<input type=email required></label><button onclick="window.submits++">Submit application</button><script>window.submits=0</script>'}));
     const pages=[];const inputs=[];for(const url of urls){const p=await context.newPage();await p.goto(url);pages.push(p);const tab=await worker.evaluate(`chrome.tabs.query({}).then(tabs=>tabs.find(t=>t.url===${JSON.stringify(url)}))`) as {id:number};inputs.push({url,tabId:tab.id});}

@@ -129,6 +129,7 @@ class ResumeFixtureLocator {
         busy: false,
         buttonCount: 0,
         progressCount: 0,
+        complete: this.page.uploadComplete,
       } as Result;
     }
     const expected = argument as {

@@ -8,60 +8,109 @@ from hunter.search_lanes import title_matches_search_lane
 
 
 def _indeed_client(term, location, hours_old):
-    from jobspy.indeed import Indeed
+    from jobspy.indeed import (
+        Indeed,
+        RequestsRotating,
+        country_codes,
+        create_session,
+        headers,
+        languages,
+        subdomains,
+    )
     from jobspy.model import Country, ScraperInput, Site
 
     from hunter.config import COUNTRY_INDEED
 
-    country = getattr(Country, COUNTRY_INDEED.upper().replace(" ", "_"), None) or next(
-        (
-            item
-            for item in Country
-            if COUNTRY_INDEED.casefold() in {item.name.replace("_", " ").casefold(), *item.value}
-        ),
-        None,
-    )
-    if country is None:
-        raise ValueError("unsupported_indeed_country")
+    try:
+        country = Country(COUNTRY_INDEED)
+    except ValueError:
+        code = COUNTRY_INDEED.strip().upper()
+        country = next((market for market, value in country_codes.items() if value == code), None)
+        if country is None:
+            raise ValueError("unsupported_indeed_country") from None
 
     client = Indeed()
     client.scraper_input = ScraperInput(
         site_type=[Site.INDEED],
         search_term=term,
         location=location,
-        country=country,
+        country_indeed=country,
         hours_old=hours_old,
         distance=50,
     )
-    domain, client.api_country_code = country.indeed_domain_value
+    country_code = country_codes[country]
+    domain = subdomains.get(country, country_code.lower())
     client.base_url = f"https://{domain}.indeed.com"
-    original_post = client.session.post
-
-    def checked_post(url, **kwargs):
-        kwargs["verify"] = True
-        response = original_post(url, **kwargs)
-        if not response.ok:
-            raise HTTPError(url, response.status_code, "Indeed search failed", None, None)
-        payload = response.json()
-        if payload.get("errors") or not isinstance(
-            (payload.get("data") or {}).get("jobSearch"), dict
-        ):
-            raise ValueError("indeed_search_response_invalid")
-        return response
-
-    # Only this owned client's transport changes; never mutate the installed package/global session.
-    client.session.post = checked_post
+    client.session = create_session(
+        RequestsRotating(client.scraper_input.proxies),
+        client.scraper_input,
+        headers
+        | {
+            "indeed-co": country_code,
+            "indeed-locale": f"{languages.get(country_code, 'en')}-{country_code}",
+        },
+    )
     return client
 
 
-def discover_indeed_query(term, location, category, *, hours_old=24, client_factory=_indeed_client):
+def _indeed_page(client, cursor):
+    from jobspy.indeed import JobSearch
+
+    # JobSpy's public scrape method caps results and swallows transport failures.
+    # Use its query builder and models so Hunter can verify the terminal cursor.
+    query = client._build_query(client._build_filters(), cursor)
+    response = client.session.post(client.api_url, json={"query": query}, verify=True, timeout=20)
+    if not response.ok:
+        raise HTTPError(client.api_url, response.status_code, "Indeed search failed", None, None)
+    try:
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("errors"):
+            raise ValueError
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError
+        search = data.get("jobSearch")
+        if not isinstance(search, dict) or not isinstance(search.get("results"), list):
+            raise ValueError
+        # Validate the cursor without making one bad card invalidate its siblings.
+        page = JobSearch.model_validate({**search, "results": []})
+    except ValueError:
+        raise ValueError("indeed_search_response_invalid") from None
+    rows = []
+    invalid = False
+    for result in search["results"]:
+        job = result.get("job") if isinstance(result, dict) else None
+        if not isinstance(job, dict) or not job.get("key"):
+            invalid = True
+            continue
+        try:
+            row = client._process_job(job)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError, OSError):
+            invalid = True
+            continue
+        if row is not None:
+            rows.append(row)
+    return rows, page.nextCursor, invalid
+
+
+def discover_indeed_query(
+    term,
+    location,
+    category,
+    *,
+    hours_old=24,
+    client_factory=_indeed_client,
+    page_reader=_indeed_page,
+):
     jobs, seen, cursors = [], set(), set()
     cursor, client, error = None, None, None
     try:
         client = client_factory(term, location, hours_old)
         while True:
             check_cancelled()
-            rows, next_cursor = client._scrape_page(cursor)
+            rows, next_cursor, invalid = page_reader(client, cursor)
+            if invalid:
+                error = "indeed_search_card_invalid"
             fresh = 0
             for row in rows:
                 if not row.job_url or not row.title:
@@ -75,7 +124,7 @@ def discover_indeed_query(term, location, category, *, hours_old=24, client_fact
                     continue
                 job = _job(
                     title=row.title,
-                    company=row.company_name,
+                    company=row.company,
                     location=row.location.display_location() if row.location else None,
                     url=row.job_url,
                     source="indeed",

@@ -1,3 +1,4 @@
+import { answerEquivalents, equivalentAnswer } from './answer-equivalence.ts';
 import type {
   BrowserControl,
   BrowserMutation,
@@ -327,6 +328,29 @@ export function sharedUiKnownSemanticAliasMatches(
   actual: string,
   expected: string,
 ): boolean | undefined {
+  if (["website.url", "website.portfolio", "social.linkedin", "social.github"].includes(fieldId)) {
+    try {
+      const observed = new URL(actual), requested = new URL(expected);
+      if (![observed, requested].every(url => ["https:", "http:"].includes(url.protocol))) return undefined;
+      const profilePath = (url: URL) => {
+        const path = url.pathname.replace(/\/$/u, "");
+        return url.hostname.replace(/^www\./iu, "") === "github.com" && /^\/[a-z\d-]+$/iu.test(path)
+          ? path.toLocaleLowerCase("en-US") : path;
+      };
+      return observed.protocol === requested.protocol && observed.port === requested.port &&
+        observed.hostname.replace(/^www\./iu, "") === requested.hostname.replace(/^www\./iu, "") &&
+        profilePath(observed) === profilePath(requested) &&
+        observed.search === requested.search && observed.hash === requested.hash &&
+        observed.username === requested.username && observed.password === requested.password;
+    } catch { return undefined; }
+  }
+  if (fieldId === "education.field_of_study") {
+    const canonical = (value: string) => answerEquivalents(value,fieldId)[0]!;
+    const observed = (optionList(actual) ?? [actual]).map(canonical);
+    const requested = (optionList(expected) ?? [expected]).map(canonical);
+    return new Set(observed).size === observed.length &&
+      new Set(requested).size === requested.length && sameOptions(observed, requested);
+  }
   if (fieldId === "skills.values") {
     const canonical = (value: string) => [...sharedSkillOptionLabels(value)][0]!;
     const observed = (optionList(actual) ?? [actual]).map(canonical);
@@ -334,7 +358,18 @@ export function sharedUiKnownSemanticAliasMatches(
     return new Set(observed).size === observed.length &&
       new Set(requested).size === requested.length && sameOptions(observed, requested);
   }
+  if (['education.degree','phone.device_type','source.how_did_you_hear'].includes(fieldId) && equivalentAnswer(actual,expected,fieldId)) return true;
   const pair = new Set([normalizeOption(actual), normalizeOption(expected)]);
+  if (fieldId === "education.degree") {
+    const observed = normalizeOption(actual), requested = normalizeOption(expected);
+    if (observed === requested) return true;
+    // A degree-level menu can represent a specific bachelor's credential without
+    // claiming a different discipline, such as Bachelor of Arts for Science.
+    const bachelorLevel = /^bachelor(?:['’]s|s)?(?:\s*\/\s*undergraduate)?(?:\s+degree)?(?:\s*\([±]?\s*\d+\s+years?\))?$/u;
+    const bachelorCredential = /^(?:bachelor of (?:science|arts|engineering|commerce|business administration)|b\.?\s?s\.?|bsc|b\.?\s?a\.?|beng)$/u;
+    return bachelorLevel.test(observed) &&
+      (bachelorLevel.test(requested) || answerEquivalents(expected, fieldId).some(value => bachelorCredential.test(value))) ? true : undefined;
+  }
   if (fieldId === "phone.device_type") {
     if (pair.size === 1) return true;
     return pair.size === 2 && pair.has("mobile") && pair.has("cell") ? true : undefined;

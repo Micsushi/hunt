@@ -967,7 +967,7 @@ test("resolved intents remain bound to the observed field and target", async () 
 });
 
 test("an injected owner answer can resolve an observed unknown question", async () => {
-  const consent = field("s2-field-consent", "I consent to this disclosure", "text");
+  const consent = field("s2-field-custom", "Custom recruiter question", "text");
   const resolver: ApplicationAnswerResolver = {
     async resolve(input) {
       return {
@@ -1000,7 +1000,7 @@ test("an injected owner answer can resolve an observed unknown question", async 
   assert.equal(result.ok && result.value.kind, "verified");
   if (!result.ok || result.value.kind !== "verified") return;
   assert.equal(result.value.answers[0]?.provenance, "owner_provided");
-  assert.equal(result.value.answers[0]?.protectedCategory, "consent");
+  assert.equal(result.value.answers[0]?.protectedCategory, null);
   assert.match(result.value.answers[0]?.questionId ?? "", /^observed-question-[0-9a-f]{24}$/u);
   assert.equal(calls.driven, 1);
   assert.equal(calls.verified, 1);
@@ -1240,4 +1240,31 @@ test("optional empty catalog messages are not driven as answers", async () => {
   const required = await handler.complete(request([{...observed, required: true}]), new AbortController().signal);
   assert.notDeepEqual(required, result);
   assert.equal(calls.driven, 0);
+});
+
+
+test("preserved consent skips mutations and unknown consent cannot become an injected owner fact", async () => {
+  for (const label of ["Yes, I have read and consent to the terms and conditions*",
+    "Applicant Privacy Notice", "Privacy Policy", "I have read and understood"]) {
+    for (const mode of ["live", "synthetic_test_non_submittable"] as const) {
+      for (const answerFallbackPolicy of ["owner_facts_only", "deterministic_site_valid_editable"] as const) {
+        for (const [state, required, expected] of [
+          ["empty", true, "blocked"], ["populated", true, "verified"],
+          ["empty", false, "verified"], ["ambiguous", false, "verified"],
+        ] as const) {
+          const { handler, calls } = dependencies({ resolver: {
+            async resolve({field}) { return {ok: true, value: {kind: 'resolved', lane: 'live_owner_fact',
+              intent: {kind: 'toggle', behavior: 'checkbox', fieldId: field.fieldId, target: field.target, checked: true, provenance: 'owner_provided'}}}; },
+          } });
+          const observed = { ...field("consent", label, "checkbox"), state, required };
+          const result = await handler.complete({ ...request([observed]), mode, answerFallbackPolicy },
+            new AbortController().signal);
+          assert.equal(result.ok && result.value.kind, expected);
+          if (result.ok && result.value.kind === "blocked") assert.equal(result.value.code, "protected_answer_denied");
+          assert.equal(calls.driven, 0);
+          assert.equal(calls.verified, 0);
+        }
+      }
+    }
+  }
 });

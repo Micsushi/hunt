@@ -19,6 +19,9 @@ import type {
 import { createApplicationAnswerResolver as createAnswerResolver } from
   "../../../src/form/answers/resolver.ts";
 import { mapVisibleOption } from "../../../src/form/options/mapper.ts";
+import { protectedQuestionCategory } from "../../../src/ats/workday/application/questions/protected.ts";
+import { resolveQuestion } from "../../../src/form/questions/catalog.ts";
+import { sharedUiReadbackState } from "../../../src/deterministic/ui-state-model.ts";
 import { testingQuestionSemanticType } from "../../../src/form/answers/testing-policy.ts";
 import type { ApplicationFieldObservation } from "../../../src/form/answers/application-types.ts";
 import {
@@ -349,8 +352,6 @@ test("protected placeholders fail closed while low-risk placeholders remain avai
   ]);
   for (const protectedField of [
     field("Have you ever been employed by QTS Data Centers?", "radio", yesNo),
-    field("Yes, I have read and consent to the terms and conditions", "checkbox"),
-    field("I Agree", "checkbox"),
   ]) {
     assert.deepEqual(await resolver.resolve(
       request(protectedField),
@@ -1064,6 +1065,34 @@ test("same-field option disappearance reselects once when no valid value is comm
   }
 });
 
+test("synthetic narrative respects explicit sentence counts without borrowing an unrelated owner narrative", async () => {
+  const label = "Tell us about a time when you pursued a goal or solved a problem without being asked. What drove you to do it? In 3-4 sentences.";
+  const { resolver } = resolverWith({ kind: "profile_answer_missing" });
+  const observed = field(label, "textarea");
+  const signal = new AbortController().signal;
+  const result = await resolver.resolve(syntheticRequest(observed), signal);
+  assert.ok(result.ok && result.value.kind === "resolved" && result.value.intent.kind === "text");
+  assert.equal(result.value.lane, "synthetic_test_default");
+  assert.equal(result.value.intent.value.split(/[.!?]+/u).filter(value => value.trim()).length, 3);
+  assert.match(result.value.intent.value, /fictional test/iu);
+  assert.notEqual(result.value.intent.value, "I am interested in this role.");
+  const live = await resolver.resolve(request(observed), signal);
+  assert.equal(live.ok && live.value.kind === "resolved", false);
+  const tooShort = await resolver.resolve(syntheticRequest({ ...observed, constraints: {
+    inputType: "text", min: null, max: null, maxLength: 20, pattern: null, readOnly: false,
+  } } as ApplicationFieldObservation), signal);
+  assert.equal(tooShort.ok && tooShort.value.kind, "unsupported_constraint");
+  for (const instruction of ["In 4-3 sentences", "In 0 sentences", "In 11 sentences", "In 3 sentences and 4 sentences"]) {
+    const unsupported = await resolver.resolve(syntheticRequest(field(instruction, "textarea")), signal);
+    assert.equal(unsupported.ok && unsupported.value.kind, "unsupported_constraint", instruction);
+  }
+  for (const instruction of ["In 3–4 sentences", "In 3 to 4 sentences", "Exactly 3 sentences"]) {
+    const variant = await resolver.resolve(syntheticRequest(field(instruction, "textarea")), signal);
+    assert.ok(variant.ok && variant.value.kind === "resolved" && variant.value.intent.kind === "text");
+    assert.equal(variant.value.intent.value.split(/[.!?]+/u).filter(value => value.trim()).length, 3);
+  }
+});
+
 test("unknown synthetic text honors bounded native types, quantified patterns, lengths, ranges, and steps", async () => {
   const { resolver } = resolverWith({ kind: "profile_answer_missing" });
   const cases = [
@@ -1345,6 +1374,7 @@ test("durable prior-employment and employee-referral facts resolve to No", async
   assert.deepEqual(queried, [
     "previously_worked_for_organization",
     "previously_worked_for_organization",
+    "current_associate",
     "associate_referral",
   ]);
 });
@@ -1413,4 +1443,97 @@ test("qualified binary choices require an unambiguous actual option", () => {
   const options = ["Yes, I am over 18", "No, I am 16-17", "No, I am under 16"].map((label, i) => ({ id: optionId(`age-${i}`), label: boundedText(label) }));
   assert.equal(mapVisibleOption(true, options).kind, "matched");
   assert.equal(mapVisibleOption(false, options).kind, "option_ambiguous");
+});
+
+test("general authorization cannot answer an explicit any-employer or proof requirement", async () => {
+  const label = "Are you legally authorized to work for any employer in Canada and able to provide proof of such?";
+  const { resolver } = resolverWith({kind:"answered",value:true,provenance:"owner_provided",lane:"live_owner_fact"});
+  const result = await resolver.resolve(request(field(label,"select",[
+    {id:optionId("yes"),label:boundedText("Yes")},{id:optionId("no"),label:boundedText("No")},
+  ])),new AbortController().signal);
+  assert.deepEqual(result,{ok:false,error:{code:"protected_answer_denied",retryable:false}});
+});
+
+test("Canadian authorization and sponsorship use only their scoped saved answers", async () => {
+  const options = ["Yes", "No"].map(label => ({id:optionId(label.toLowerCase()),label:boundedText(label)}));
+  const signal = new AbortController().signal;
+  for (const [label, factId, value] of [
+    ["Are you legally entitled to work in Canada?", "work_authorization_canada", true],
+    ["Are you authorized to work lawfully in the Canada?", "work_authorization_canada", true],
+    ["Will you require sponsorship to work in Canada?", "sponsorship_required_canada", false],
+    ["Will you now or in the future require sponsorship from Novara to work in Canada?", "sponsorship_required_canada", false],
+    ["Will you require sponsorship?", "sponsorship_required", false],
+  ] as const) {
+    const {resolver,profile} = resolverWith({kind:"answered",value,provenance:"owner_provided",lane:"live_owner_fact"});
+    const result = await resolver.resolve({...request(field(label,"select",options)),employerNames:["Novara"]},signal);
+    assert.equal(result.ok && result.value.kind,"resolved",label);
+    assert.deepEqual(profile.calls.map(({request: input}) => (input as {factId:string}).factId),[factId]);
+  }
+  const {resolver,profile} = resolverWith({kind:"answered",value:true,provenance:"owner_provided",lane:"live_owner_fact"});
+  for (const label of ["Are you authorized to work in the United States?",
+    "Will you require sponsorship to work in the U.S.?", "Are you authorized to work in Mexico?",
+    "Are you authorized to work in Canada as a Canadian citizen or permanent resident?",
+    "Are you authorized to work in Canada without visa sponsorship?"]) {
+    const result = await resolver.resolve(request(field(label,"select",options)),signal);
+    assert.deepEqual(result,{ok:false,error:{code:"protected_answer_denied",retryable:false}},label);
+  }
+  assert.equal(profile.calls.length,0);
+});
+
+
+test("only approved recruitment terms use saved consent; required unknown declarations use authorized provisional fallback", async () => {
+  const approvedLabels = new Set(['Yes, I have read and consent to the terms and conditions*','Applicant Privacy Notice','Privacy Policy','Terms','Terms & Conditions','Accept terms','I have read the terms']);
+  for (const label of ["Yes, I have read and consent to the terms and conditions*", "I Agree",
+    "Applicant Privacy Notice", "Privacy Policy", "Terms", "Terms & Conditions", "Accept terms", "I have read the terms", "I have read and understood",
+    "I agree to disclose my gender", "I consent to disclose my veteran status", "I agree that I am authorized to work in Canada"]) {
+    for (const stored of [{ kind: "profile_answer_missing" } as const,
+      { kind: "answered", value: true, provenance: "owner_provided", lane: "live_owner_fact" } as const]) {
+      const { resolver, profile } = resolverWith(stored);
+      for (const mode of ["live", "synthetic_test_non_submittable"] as const) {
+        for (const answerFallbackPolicy of ["owner_facts_only", "deterministic_site_valid_editable"] as const) {
+          const observed = field(label, "checkbox");
+          const input = { ...request(observed), mode, answerFallbackPolicy };
+          const approved = approvedLabels.has(label) && stored.kind==='answered';
+          const answer = await resolver.resolve(input, new AbortController().signal);
+          if (approved) {
+            assert.ok(answer.ok && answer.value.kind==='resolved');
+            if(answer.ok && answer.value.kind==='resolved') {
+              assert.equal(answer.value.lane,'live_owner_fact');
+              assert.equal(answer.value.intent.kind,'toggle');
+              if(answer.value.intent.kind==='toggle') assert.equal(answer.value.intent.checked,true);
+            }
+          } else if (mode === "synthetic_test_non_submittable" || answerFallbackPolicy === "deterministic_site_valid_editable") {
+            assert.ok(answer.ok && answer.value.kind === "resolved");
+            if (answer.ok && answer.value.kind === "resolved") assert.equal(answer.value.lane, "synthetic_test_default");
+          } else assert.deepEqual(answer, {
+            ok: false, error: { code: "protected_answer_denied", retryable: false },
+          });
+          for (const preserved of [{ ...observed, state: "populated" as const },
+            { ...observed, required: false }]) {
+            assert.deepEqual(await resolver.resolve({ ...input, field: preserved }, new AbortController().signal), {
+              ok: true, value: { kind: "readback_only", fieldId: observed.fieldId },
+            });
+          }
+        }
+      }
+      if (!approvedLabels.has(label)) assert.equal(profile.calls.length, 0);
+    }
+  }
+});
+
+
+test("consent preservation uses checked backing state and excludes employment questions", async () => {
+  assert.equal(sharedUiReadbackState("checkbox", "visible", { kind: "checked", checked: true }), "populated");
+  assert.equal(sharedUiReadbackState("checkbox", "visible", { kind: "checked", checked: false }), "empty");
+  for (const text of ["What are your salary expectations?", "How many co-op terms have you previously had?",
+    "Now that CI catches regressions automatically, manual exploratory testing is mostly obsolete. Agree or disagree? Why?",
+    "Are you currently subject to any company agreement (NDA, Non-compete, etc.) that would prevent you from working with INTEGER Holdings Corporation?"]) {
+    const label = boundedText(text), question = resolveQuestion(label);
+    assert.notEqual(protectedQuestionCategory(label, question.kind === "resolved" ? question.id : undefined), "consent");
+  }
+  const options=["This will be my first co-op term","1","2","3","4"].map((label,i)=>({id:optionId(`coop-${i}`),label:boundedText(label)}));
+  const answer=await resolverWith({kind:"profile_answer_missing"}).resolver.resolve(syntheticRequest(field("How many co-op terms have you previously had?","select",options)),new AbortController().signal);
+  assert.equal(answer.ok&&answer.value.kind==="resolved"&&answer.value.intent.kind==="choice",true);
+  const opinion=await resolverWith({kind:"profile_answer_missing"}).resolver.resolve(syntheticRequest(field("Now that CI catches regressions automatically, manual exploratory testing is mostly obsolete. Agree or disagree? Why?","textarea")),new AbortController().signal);
+  assert.equal(opinion.ok&&opinion.value.kind==="resolved"&&opinion.value.intent.kind==="text",true);
 });

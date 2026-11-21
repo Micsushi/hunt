@@ -31,7 +31,6 @@ from .llm.llm_enrich import (
     analyze_job_fit_with_ollama,
     check_low_rag_unsupported_target_with_ollama,
     enrich_with_ollama_if_enabled,
-    generate_summary,
     rewrite_bullet_targeted,
 )
 from .llm.rag import match_keywords_to_bullets
@@ -40,6 +39,7 @@ from .resume.generator import generate_tailored_resume
 from .resume.parser import parse_resume_file
 from .resume.renderer import render_resume_tex
 from .resume.source_loader import load_bullet_library, load_candidate_profile
+from .resume.source_summary import capture_original_sources, compile_source_summary
 from .storage import build_attempt_dir, ensure_dir, file_hash, write_json, write_text
 
 
@@ -589,6 +589,7 @@ def _run_pipeline(
     )
 
     # --- LLM rewrite passes ---
+    original_summary_sources = capture_original_sources(parsed_resume, tailored_doc)
     all_selected_bullets: list[str] = [
         b for entry in tailored_doc.experience for b in entry.bullets
     ] + [b for entry in tailored_doc.projects for b in entry.bullets]
@@ -741,43 +742,6 @@ def _run_pipeline(
             if k < len(plan):
                 plan[k]["text"] = t_bullet
 
-    # Step 4: Generate summary from candidate context + mid-tier keywords.
-    exp_lines = [
-        f"{e.get('title', '')} at {e.get('company', '')}"
-        for e in (candidate_profile.get("experience_entries") or [])[:3]
-        if e.get("title") and e.get("company")
-    ]
-    skill_names = [
-        s.get("name", "")
-        for bucket in ("languages", "frameworks", "developer_tools")
-        for s in (candidate_profile.get("skills", {}).get(bucket) or [])
-        if s.get("name")
-    ][:8]
-    candidate_context = ""
-    if exp_lines:
-        candidate_context += "Experience: " + "; ".join(exp_lines) + ". "
-    if skill_names:
-        candidate_context += "Skills: " + ", ".join(skill_names) + "."
-
-    summary_rewrite_meta: dict = {}
-    if candidate_context:
-        summary_result = generate_summary(
-            candidate_context,
-            title,
-            kw_match["summary_keywords"],
-        )
-        summary_rewrite_meta = summary_result
-
-    trace["step4_summary"] = {
-        "context_sent": candidate_context,
-        "keywords_used": kw_match.get("summary_keywords", []),
-        "summary": summary_rewrite_meta.get("summary", ""),
-        "success": summary_rewrite_meta.get("success", False),
-        "duration_ms": summary_rewrite_meta.get("duration_ms"),
-        "error": summary_rewrite_meta.get("error"),
-    }
-    # --- end LLM rewrite passes ---
-
     fallback_used = False
     concern_flags = list(dict.fromkeys(structured_output["concern_flags"]))
     if classification["weak_description"]:
@@ -798,17 +762,7 @@ def _run_pipeline(
             write_text(
                 attempt_dir / "ollama_response.txt", str(llm_meta.get("response_text") or "")
             )
-    # Always write summary (even if empty - webapp always shows the card).
-    write_json(
-        attempt_dir / "summary_rewrite.json",
-        {
-            "summary": summary_rewrite_meta.get("summary", ""),
-            "success": summary_rewrite_meta.get("success", False),
-            "duration_ms": summary_rewrite_meta.get("duration_ms"),
-            "error": summary_rewrite_meta.get("error"),
-            "keywords_used": kw_match.get("summary_keywords", []),
-        },
-    )
+
     if bullet_rewrites:
         write_json(
             attempt_dir / "bullet_rewrite.json",
@@ -834,6 +788,7 @@ def _run_pipeline(
     )
     # Version 1: no summary. Deepcopy so trim loop doesn't mutate the original.
     doc_no_summary = copy.deepcopy(tailored_doc)
+    doc_no_summary.summary = ""
     so_no_summary = copy.deepcopy(structured_output)
     structured_output_path, compile_result, tex_path, compile_history = _compile_with_fit_retry(
         attempt_dir,
@@ -842,22 +797,28 @@ def _run_pipeline(
         stem="output",
     )
 
-    # Version 2: with summary (only when Ollama produced one).
-    _generated_summary = summary_rewrite_meta.get("summary", "")
-    tex_path_summary: str | None = None
-    pdf_path_summary: str | None = None
-    compile_result_summary: dict | None = None
-    if _generated_summary:
-        doc_with_summary = copy.deepcopy(tailored_doc)
-        so_with_summary = copy.deepcopy(structured_output)
-        doc_with_summary.summary = _generated_summary
-        _, compile_result_summary, tex_path_summary, _ = _compile_with_fit_retry(
-            attempt_dir,
-            doc_with_summary,
-            so_with_summary,
-            stem="output_summary",
-        )
-        pdf_path_summary = compile_result_summary.get("pdf_path")
+    # Fit only the primary PDF. The optional source summary never removes more content.
+    retained_counts = {
+        (kind, entry.entry_id): len(entry.bullets)
+        for kind, entries in (("exp", doc_no_summary.experience), ("proj", doc_no_summary.projects))
+        for entry in entries
+    }
+    summary_result = compile_source_summary(
+        attempt_dir,
+        doc_no_summary,
+        parsed_resume,
+        [
+            source
+            for source in original_summary_sources
+            if source["selected_local_idx"]
+            < retained_counts.get((source["kind"], source["entry_id"]), 0)
+        ],
+        compile_result,
+    )
+    trace["step4_summary"] = summary_result
+    write_json(attempt_dir / "summary_rewrite.json", summary_result)
+    pdf_path_summary = summary_result["pdf_path_summary"]
+    tex_path_summary = summary_result["tex_path_summary"]
 
     compile_log_path = write_text(attempt_dir / "compile.log", compile_result["log_text"])
     metadata = {
@@ -965,6 +926,9 @@ def _run_pipeline(
         "tex_path": tex_path,
         "pdf_path_summary": pdf_path_summary,
         "tex_path_summary": tex_path_summary,
+        "summary_origin": summary_result["summary_origin"],
+        "summary_outcome": summary_result["summary_outcome"],
+        "summary_notice": summary_result["summary_notice"],
         "metadata_path": metadata_path,
         "summary_rewrite_path": str(attempt_dir / "summary_rewrite.json"),
         "bullet_rewrite_path": str(attempt_dir / "bullet_rewrite.json")

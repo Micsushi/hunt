@@ -20,6 +20,7 @@ TEST_TARGETS = {
         "--ignore=tests/test_component4_new_features.py",
     ],
     "c0": [
+        "tests/test_c3_product_handoff.py",
         "tests/test_c0_control_api.py",
         "tests/test_review_ops.py",
         "tests/test_resume_review_ui.py",

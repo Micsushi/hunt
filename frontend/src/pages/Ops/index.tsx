@@ -20,6 +20,26 @@ import { SystemStatusPanel } from '@/pages/Control/SystemStatus'
 import styles from './Ops.module.css'
 import { coverageRows } from './discoveryCoverage'
 import { CompanyPreview } from './CompanyPreview'
+import { Pagination } from '@/components/Pagination'
+
+function coverageStatus(source: ReturnType<typeof coverageRows>[number]) {
+  if (source.status === 'ok') return 'Complete'
+  if (source.last_error === 'posting_date_unknown') return 'Posting dates unverified'
+  if (source.last_error === 'application_links_not_verified') return 'Application links unverified'
+  if (source.status === 'pending_manual')
+    return source.last_error === 'ambiguous_career_boards' ? 'Needs setup' : 'Not supported'
+  return (
+    (
+      {
+        partial: 'Incomplete',
+        running: 'Searching',
+        unverified: 'Unverified',
+        failed: 'Failed',
+        rate_limited: 'Rate limited',
+      } as Record<string, string>
+    )[source.status] ?? source.status.replace(/_/g, ' ')
+  )
+}
 
 function coverageIssue(error: string | null): string {
   if (!error) return 'None reported'
@@ -60,7 +80,7 @@ function coverageIssue(error: string | null): string {
     pagination_repeated: 'The site repeated a page. More results may remain.',
     application_links_not_verified: 'Listings found; application links still need verification.',
   }
-  return messages[error] ?? error.replace(/_/g, ' ')
+  return messages[error] ?? error
 }
 
 const REQUEUE_BUTTONS = [
@@ -105,6 +125,7 @@ export function OpsPage() {
   const [c1Result, setC1Result] = useState<unknown>(null)
   const [coverageSearch, setCoverageSearch] = useState('')
   const [coverageFilter, setCoverageFilter] = useState('attention')
+  const [coveragePage, setCoveragePage] = useState(1)
   const discovery = useQuery({
     queryKey: ['c1-discovery-health'],
     queryFn: fetchC1DiscoveryHealth,
@@ -123,11 +144,19 @@ export function OpsPage() {
       )
     : 0
   const completedChecks = checks.filter((row) => row.status === 'ok').length
+  const runningChecks = checks.filter((row) => row.status === 'running').length
+  const failedChecks = checks.filter((row) => row.status === 'failed').length
+  const attentionChecks = checks.length - completedChecks - runningChecks
   const visibleChecks = checks.filter(
     (row) =>
-      (coverageFilter === 'all' || row.status !== 'ok') &&
+      (coverageFilter === 'all' || !['ok', 'running'].includes(row.status)) &&
       row.source.toLocaleLowerCase().includes(coverageSearch.trim().toLocaleLowerCase()),
   )
+  const currentCoveragePage = Math.min(
+    coveragePage,
+    Math.max(1, Math.ceil(visibleChecks.length / 10)),
+  )
+  const pageChecks = visibleChecks.slice((currentCoveragePage - 1) * 10, currentCoveragePage * 10)
 
   const { data: accountsData } = useQuery({
     queryKey: ['linkedin-accounts'],
@@ -315,7 +344,6 @@ export function OpsPage() {
             className={styles.btn}
             disabled={!!loadingBtn}
             onClick={() => runC1('drain', () => triggerC1Enrich(500))}
-            title="Enrich up to 500 pending rows in one background run"
           >
             Enrich up to 500
           </button>
@@ -326,8 +354,10 @@ export function OpsPage() {
             <pre className={styles.apiRef}>{JSON.stringify(c1Result, null, 2)}</pre>
           </details>
         ) : null}
-        <details className={styles.coverage} open>
-          <summary>Search coverage</summary>
+        <section className={styles.coverage} aria-labelledby="coverage-heading">
+          <h3 id="coverage-heading" className={styles.panelTitle}>
+            Search coverage
+          </h3>
           {scan?.state && (
             <div className={styles.coverageNote}>
               <p role="status">
@@ -343,7 +373,34 @@ export function OpsPage() {
                   <> Last saved: {new Date(scan.last_saved_at * 1000).toLocaleString()}.</>
                 )}
               </p>
-              {scan.running && Object.keys(scan.active ?? {}).length > 0 && (
+            </div>
+          )}
+          {!!checks.length && (
+            <p className={styles.coverageNote} role="status">
+              {completedChecks} complete · {attentionChecks} need attention
+              {failedChecks > 0 && <> ({failedChecks} failed)</>}
+              {runningChecks > 0 && <> · {runningChecks} searching</>}
+            </p>
+          )}
+          {discovery.isPending && <p role="status">Loading source results…</p>}
+          {!!discovery.data?.unimplemented_sources?.length && (
+            <p>Sources not searched: {discovery.data.unimplemented_sources.join(', ')}.</p>
+          )}
+          {discovery.isError && (
+            <p role="alert">
+              Source results could not be loaded.{' '}
+              <button className={styles.btn} onClick={() => discovery.refetch()}>
+                Retry
+              </button>
+            </p>
+          )}
+          {discovery.data && checks.length === 0 && (
+            <p>No source checks recorded yet. Run a search to collect results.</p>
+          )}
+          {!!checks.length && (
+            <details className={styles.coverageDetails}>
+              <summary>Source checks ({checks.length})</summary>
+              {scan?.running && Object.keys(scan.active ?? {}).length > 0 && (
                 <details>
                   <summary>Currently searching ({Object.keys(scan.active ?? {}).length})</summary>
                   <ul>
@@ -362,32 +419,7 @@ export function OpsPage() {
                   </ul>
                 </details>
               )}
-            </div>
-          )}
-          {discovery.isPending && <p role="status">Loading source results…</p>}
-          {!!discovery.data?.unimplemented_sources?.length && (
-            <p>
-              Not yet scripted: {discovery.data.unimplemented_sources.join(', ')}. These sources
-              have not been searched by this run.
-            </p>
-          )}
-          {discovery.isError && (
-            <p role="alert">
-              Source results could not be loaded.{' '}
-              <button className={styles.btn} onClick={() => discovery.refetch()}>
-                Retry
-              </button>
-            </p>
-          )}
-          {discovery.data && checks.length === 0 && (
-            <p>No source checks recorded yet. Run a search to collect results.</p>
-          )}
-          {!!checks.length && (
-            <>
-              <p className={styles.coverageNote}>
-                {completedChecks} checks completed; {checks.length - completedChecks} need
-                attention.
-              </p>
+              <p className={styles.coverageNote}>Partial or failed checks may miss jobs.</p>
               <div className={styles.formGrid}>
                 <label className={styles.field}>
                   Find a source
@@ -395,7 +427,10 @@ export function OpsPage() {
                     className={styles.input}
                     type="search"
                     value={coverageSearch}
-                    onChange={(event) => setCoverageSearch(event.target.value)}
+                    onChange={(event) => {
+                      setCoverageSearch(event.target.value)
+                      setCoveragePage(1)
+                    }}
                   />
                 </label>
                 <label className={styles.field}>
@@ -403,13 +438,22 @@ export function OpsPage() {
                   <select
                     className={styles.input}
                     value={coverageFilter}
-                    onChange={(event) => setCoverageFilter(event.target.value)}
+                    onChange={(event) => {
+                      setCoverageFilter(event.target.value)
+                      setCoveragePage(1)
+                    }}
                   >
                     <option value="attention">Need attention</option>
                     <option value="all">All checks</option>
                   </select>
                 </label>
               </div>
+              <Pagination
+                page={currentCoveragePage}
+                total={visibleChecks.length}
+                limit={10}
+                onChange={setCoveragePage}
+              />
               <div
                 className={`${styles.tableWrap} ${styles.coverageResults}`}
                 tabIndex={0}
@@ -418,35 +462,33 @@ export function OpsPage() {
               >
                 <table className={styles.table}>
                   <caption className={styles.coverageNote}>
-                    Latest checks by source. Partial or failed checks do not mean there are no jobs.
+                    {visibleChecks.length
+                      ? `${(currentCoveragePage - 1) * 10 + 1}–${Math.min(currentCoveragePage * 10, visibleChecks.length)} of ${visibleChecks.length} checks`
+                      : '0 checks'}
                   </caption>
                   <thead>
                     <tr>
                       <th scope="col">Source / search</th>
-                      <th scope="col">Coverage</th>
+                      <th scope="col">Result</th>
                       <th scope="col">Leads</th>
-                      <th scope="col">Unfinished work</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleChecks.map((source) => (
+                    {pageChecks.map((source) => (
                       <tr key={source.source}>
                         <td>{source.source.replace(/^company:/, '')}</td>
                         <td>
-                          {source.status === 'ok'
-                            ? 'Check completed'
-                            : source.last_error === 'posting_date_unknown'
-                              ? 'Catalog read; dates unknown'
-                              : source.last_error === 'application_links_not_verified'
-                                ? 'Leads found; links unverified'
-                                : source.status === 'pending_manual'
-                                  ? source.last_error === 'ambiguous_career_boards'
-                                    ? 'Needs setup'
-                                    : 'Not supported'
-                                  : source.status.replace(/_/g, ' ')}
+                          {coverageStatus(source)}
+                          {source.last_error &&
+                            !['posting_date_unknown', 'application_links_not_verified'].includes(
+                              source.last_error,
+                            ) && (
+                              <p className={styles.coverageReason}>
+                                {coverageIssue(source.last_error)}
+                              </p>
+                            )}
                         </td>
                         <td data-label="Leads">{source.lead_count}</td>
-                        <td>{coverageIssue(source.last_error)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -459,9 +501,9 @@ export function OpsPage() {
                   </p>
                 )}
               </div>
-            </>
+            </details>
           )}
-        </details>
+        </section>
       </div>
 
       <div className={styles.panel}>
@@ -476,7 +518,6 @@ export function OpsPage() {
           <div className={styles.panel}>
             <div className={styles.panelHeader}>
               <h2 className={styles.panelTitle}>LinkedIn accounts</h2>
-              <span className={styles.panelMeta}>{accountsData?.accounts.length ?? 0} saved</span>
             </div>
             <div className={styles.formGrid}>
               <label className={styles.field}>
@@ -531,7 +572,9 @@ export function OpsPage() {
                   {(accountsData?.accounts ?? []).map((a) => (
                     <tr key={a.id}>
                       <td>
-                        <div>{a.display_name || a.username}</div>
+                        {a.display_name && a.display_name !== a.username && (
+                          <div>{a.display_name}</div>
+                        )}
                         <div className="mono">{a.username}</div>
                       </td>
                       <td>{a.auth_state}</td>
@@ -555,7 +598,6 @@ export function OpsPage() {
           <div className={styles.panel}>
             <div className={styles.panelHeader}>
               <h2 className={styles.panelTitle}>Component settings</h2>
-              <span className={styles.panelMeta}>{settingsData?.settings.length ?? 0} keys</span>
             </div>
             <div className={styles.formGrid}>
               <label className={styles.field}>
@@ -640,8 +682,7 @@ export function OpsPage() {
         <div className={styles.panel}>
           <h2 className={styles.panelTitle}>Expired sessions and rate limits</h2>
           <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
-            Moves failed rows back to pending (clears retry timers). Use after auth is refreshed or
-            a rate-limit window has passed.
+            Requeue after reconnecting or waiting out the rate limit. Retry timers are cleared.
           </p>
           <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
             Failed jobs: <strong>Expired session</strong> {authN} · <strong>Rate limited</strong>{' '}
@@ -656,7 +697,6 @@ export function OpsPage() {
                   className={`${styles.btn} ${btn.primary ? styles.btnPrimary : ''}`}
                   onClick={() => handleRequeue(btn.source, btn.codes, key)}
                   disabled={loadingBtn === key}
-                  title={`Requeue ${btn.source} rows with error codes: ${btn.codes.join(', ')}`}
                 >
                   {loadingBtn === key ? 'Working…' : btn.label}
                 </button>
@@ -669,18 +709,16 @@ export function OpsPage() {
         <div className={styles.panel}>
           <h2 className={styles.panelTitle}>Interrupted jobs</h2>
           <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
-            Rows stuck in "processing" state are moved back to "pending". Use when a worker crashed
-            mid-enrichment.
+            Requeue jobs left processing after an interruption.
           </p>
           <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
-            Interrupted jobs: <strong>{staleN}</strong>
+            <strong>{staleN}</strong> jobs stuck in processing
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <button
               className={`${styles.btn} ${styles.btnPrimary}`}
               onClick={handleStale}
               disabled={loadingBtn === 'stale'}
-              title="Move all stale processing rows back to pending"
             >
               {loadingBtn === 'stale' ? 'Working…' : 'Requeue stale processing'}
             </button>
@@ -701,11 +739,7 @@ export function OpsPage() {
           </p>
           <div className={styles.checkboxRow}>
             {BULK_STATUS_OPTIONS.map((o) => (
-              <label
-                key={o.value}
-                className={styles.checkLabel}
-                title={`Include ${o.label} rows in the requeue`}
-              >
+              <label key={o.value} className={styles.checkLabel}>
                 <input
                   type="checkbox"
                   checked={bulkStatuses.includes(o.value)}
@@ -716,19 +750,13 @@ export function OpsPage() {
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              className={styles.btn}
-              onClick={() => handleBulk(true)}
-              disabled={!!loadingBtn}
-              title="Count how many rows would be moved without changing anything"
-            >
+            <button className={styles.btn} onClick={() => handleBulk(true)} disabled={!!loadingBtn}>
               {loadingBtn === 'bulk-dry' ? 'Counting…' : 'Count matching jobs'}
             </button>
             <button
               className={`${styles.btn} ${styles.btnPrimary}`}
               onClick={() => handleBulk(false)}
               disabled={!!loadingBtn}
-              title="Move all matching rows to pending"
             >
               {loadingBtn === 'bulk-run' ? 'Working…' : 'Requeue matching rows'}
             </button>
@@ -739,34 +767,6 @@ export function OpsPage() {
             )}
           </div>
         </div>
-      </details>
-      <details className={styles.panel}>
-        <summary className={styles.sectionSummary}>API reference</summary>
-        <pre className={styles.apiRef}>
-          {`POST /api/ops/requeue-errors
-  { "source": "linkedin", "error_codes": ["auth_expired", "rate_limited"] }
-
-GET /api/system/status
-GET /api/settings
-GET /api/linkedin/accounts
-
-POST /api/ops/bulk-requeue
-  { "source": null, "status": "all", "q": "", "tag": "",
-    "target_statuses": ["failed", "blocked"], "dry_run": false }
-
-POST /api/ops/requeue-stale-processing
-  {}
-
-POST /api/jobs/bulk-selection
-  { "action": "requeue"|"set_status"|"delete",
-    "job_ids": [1,2,3],
-    "enrichment_status": "pending",   // only for set_status
-    "confirm_delete": true }          // only for delete
-
-CLI equivalent:
-  python3 scripts/hunterctl.py requeue-retryable
-  python3 scripts/hunterctl.py requeue-errors --error-code auth_expired`}
-        </pre>
       </details>
     </div>
   )

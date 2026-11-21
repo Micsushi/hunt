@@ -61,10 +61,14 @@ export interface ResumeReviewVersion {
   compiled_document_revision: number
   edit_revision: number
   compile_status?: string | null
+  compiled_fits_one_page?: boolean | null
+  application_warning?: string | null
+  summary_origin?: 'source' | null
 }
 
 export interface ResumeReviewPackage {
   review_id: string
+  summary_notice?: string | null
   source: {
     input_kind: string
     input_filename: string
@@ -152,6 +156,8 @@ export interface FletcherQueueItem {
     log_url?: string | null
     compile_status?: string | null
     fits_one_page?: boolean | null
+    summary_notice?: string | null
+    summary_outcome?: string | null
     role_family?: string | null
     job_level?: string | null
   }

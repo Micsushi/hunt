@@ -22,6 +22,14 @@ from .review_models import (
 )
 
 INDEX_NAME = "review_index.json"
+SELECTION_RETRY = (
+    "PDF compiled, but the application resume selection could not be refreshed. "
+    "Compile again to retry before handing this job to Applications."
+)
+INELIGIBLE_PDF = (
+    "PDF compiled, but it is not verified as one page. "
+    "Shorten the resume or check the PDF tools, then compile again before using Applications."
+)
 VERSION_FILENAME_PARTS = {
     ResumeReviewVersionName.STARTING: "starting",
     ResumeReviewVersionName.NO_SUMMARY: "no_summary",
@@ -192,17 +200,25 @@ def compile_current_document(
                 Path(staging).rename(published)
                 state.compiled_revision = next_revision
                 state.compiled_document_revision = state.document_revision
+                state.compiled_fits_one_page = bool(result.get("fits_one_page"))
                 state.dirty = False
+                state.application_warning = (
+                    INELIGIBLE_PDF if not state.compiled_fits_one_page else SELECTION_RETRY
+                )
                 state.pdf_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/pdf"
                 state.tex_url = f"/api/fletcher/reviews/{review_id}/versions/{vname.value}/tex"
             atomic_json(attempt / "review_package.json", model_to_dict(current))
-            if state.compile_status == "ok" and result.get("fits_one_page"):
-                _update_job_selected_resume(
+            if state.compile_status == "ok":
+                selection_warning = _update_job_selected_resume(
                     current,
                     vname,
                     published / "output.pdf",
                     published / "output.tex",
                 )
+                state.application_warning = (
+                    selection_warning if state.compiled_fits_one_page else INELIGIBLE_PDF
+                )
+                atomic_json(attempt / "review_package.json", model_to_dict(current))
             return current
 
 
@@ -211,7 +227,7 @@ def _update_job_selected_resume(
     version: ResumeReviewVersionName,
     pdf_path: Path,
     tex_path: Path,
-) -> None:
+) -> str | None:
     if version == ResumeReviewVersionName.STARTING:
         return
     job_id = package.job.job_id
@@ -230,8 +246,10 @@ def _update_job_selected_resume(
                 (job_id,),
             )
             job = dict(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone() or {})
-            if not job.get("selected_resume_ready_for_c3") or not _job_is_ready_for_c3(job):
-                return
+            if not _job_is_ready_for_c3(job):
+                return (
+                    "This PDF is not selected for Applications. Check this job's resume readiness."
+                )
             selected = conn.execute(
                 """
                 SELECT v.*, a.pdf_path AS attempt_pdf_path, a.tex_path AS attempt_tex_path
@@ -244,12 +262,12 @@ def _update_job_selected_resume(
                 (job.get("selected_resume_version_id"), job_id, job_id),
             ).fetchone()
             if selected is None:
-                return
+                return "No valid application resume is selected. Generate a new C2 resume from the job."
             if (
                 package.job.attempt_id is not None
                 and package.job.attempt_id != selected["resume_attempt_id"]
             ):
-                return
+                return "This PDF belongs to an earlier attempt. Applications keeps the selected attempt."
             attempt = attempt_dir_for_review(package.review_id).resolve()
             stem = "output_summary" if version == ResumeReviewVersionName.WITH_SUMMARY else "output"
             previous_pdf = Path(job.get("selected_resume_pdf_path") or "").resolve()
@@ -261,7 +279,7 @@ def _update_job_selected_resume(
                     not revision.isdecimal()
                     or not 0 < int(revision) < package.versions[version].compiled_revision
                 ):
-                    return
+                    return "This version is not selected for Applications. The selected version is unchanged."
                 expected = (
                     attempt
                     / "versions"
@@ -271,7 +289,7 @@ def _update_job_selected_resume(
                     / "output.pdf"
                 )
                 if previous_pdf != expected:
-                    return
+                    return "This version is not selected for Applications. The selected version is unchanged."
             for kind in ("pdf", "tex"):
                 previous = previous_pdf.with_suffix(f".{kind}")
                 paths = (
@@ -282,7 +300,13 @@ def _update_job_selected_resume(
                 if not previous.is_file() or any(
                     not path or Path(path).resolve() != previous for path in paths
                 ):
-                    return
+                    return SELECTION_RETRY
+            if package.versions[version].compiled_fits_one_page is False:
+                conn.execute(
+                    "UPDATE jobs SET selected_resume_ready_for_c3 = FALSE WHERE id = ?", (job_id,)
+                )
+                conn.commit()
+                return INELIGIBLE_PDF
             # Refresh the existing choice and its provenance, never create a selection.
             conn.execute(
                 "UPDATE resume_versions SET pdf_path = ?, tex_path = ?, content_hash = ? WHERE id = ?",
@@ -301,7 +325,8 @@ def _update_job_selected_resume(
                 """
                 UPDATE jobs
                 SET selected_resume_pdf_path = ?,
-                    selected_resume_tex_path = ?
+                    selected_resume_tex_path = ?,
+                    selected_resume_ready_for_c3 = TRUE
                 WHERE id = ?
                 """,
                 (str(pdf_path), str(tex_path), job_id),
@@ -310,7 +335,71 @@ def _update_job_selected_resume(
         finally:
             conn.close()
     except Exception:
-        return
+        return SELECTION_RETRY
+
+
+def read_selected_resume_pdf(pdf_path: Path, job_id: int) -> bytes:
+    """Read one selected snapshot; publication cannot overtake its identity check."""
+    path = pdf_path.expanduser().resolve()
+    is_revision = (
+        len(path.parents) >= 5
+        and path.parent.parent.name == "revisions"
+        and path.parents[3].name == "versions"
+    )
+    attempt = path.parents[4] if is_revision else path.parent
+    package_path = attempt / "review_package.json"
+
+    def read_pdf() -> bytes:
+        with path.open("rb") as stream:
+            content = stream.read(5 * 1024 * 1024 + 1)
+        if len(content) > 5 * 1024 * 1024:
+            raise ValueError("The selected resume is too large.")
+        return content
+
+    if not package_path.exists():
+        if is_revision:
+            raise ValueError(
+                "The selected resume review is unavailable. Open its C2 workspace and retry."
+            )
+        return read_pdf()
+    with publication_lock(attempt):
+        try:
+            package = model_validate(
+                ResumeReviewPackage, json.loads(package_path.read_text(encoding="utf-8"))
+            )
+        except (ValueError, UnicodeError):
+            raise ValueError(
+                "The selected resume review could not be read. Open its C2 workspace."
+            ) from None
+        version = (
+            path.parents[2].name
+            if is_revision
+            else "with_summary"
+            if path.name == "output_summary.pdf"
+            else "no_summary"
+        )
+        state = package.versions.get(_version_name(version))
+        # Fresh queue packages are unbound until opened; the gateway checks selected DB ownership.
+        if package.job.job_id not in (None, job_id) or state is None:
+            raise ValueError(
+                "The selected PDF does not match this job's review. Open its C2 workspace."
+            )
+        if state.compiled_revision:
+            latest = (
+                attempt
+                / "versions"
+                / version
+                / "revisions"
+                / f"{state.compiled_revision:04d}"
+                / "output.pdf"
+            )
+            if path != latest or state.compiled_fits_one_page is False:
+                raise ValueError(
+                    "The selected application PDF is not the latest eligible compiled revision. "
+                    "Open the C2 resume workspace and compile a one-page resume before retrying."
+                )
+        # Saved edits and failed compiles deliberately retain the last published PDF.
+        return read_pdf()
 
 
 def revert_current_document(

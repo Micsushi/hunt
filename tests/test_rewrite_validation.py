@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fletcher.llm.llm_enrich import (
     categorize_keyword,
     keyword_requires_direct_support,
@@ -25,6 +27,24 @@ def test_common_tech_terms_do_not_require_direct_support():
     for keyword in ["React", "backend services", "API", "Terraform"]:
         assert categorize_keyword(keyword) == "tech"
         assert not keyword_requires_direct_support(keyword)
+
+
+def test_rewrite_preserves_explicit_scope_even_when_model_approves(monkeypatch):
+    import fletcher.llm.llm_enrich as mod
+
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    original = "Wrote a Python script to check ten sample CSV rows for missing values in a class exercise."
+    for context, accepted in [("", False), (" during a class exercise", True)]:
+        rewritten = "Used Python for data validation on ten sample CSV rows, checking missing values" + context + "."
+        responses = iter([
+            json.dumps({"bullet": rewritten, "keywords_used": ["data validation"]}),
+            json.dumps({"accepted": True, "keywords_supported": ["data validation"], "keywords_rejected": []}),
+        ])
+        monkeypatch.setattr(mod, "_ollama_chat", lambda _prompt: next(responses))
+        result = mod.rewrite_bullet_targeted(original, ["data validation"])
+        assert result["success"] is accepted
+        assert result["bullet"] == (rewritten if accepted else original)
+        assert result["keywords_used"] == (["data validation"] if accepted else [])
 
 
 def test_llm_validator_rejects_unsupported_claim(monkeypatch):
@@ -103,6 +123,9 @@ def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypat
             '"keywords_used": ["React"], "keywords_skipped": []}'
         ),
     )
+    monkeypatch.setattr(mod, "validate_rewrite_with_ollama", lambda **_kwargs: {
+        "accepted": True, "keywords_supported": ["React"], "keywords_rejected": [],
+    })
 
     result = mod.rewrite_bullet_targeted(
         "Enhanced user engagement by building a responsive UI using Next.js.",

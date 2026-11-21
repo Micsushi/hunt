@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { UiBehaviorId } from "../../contracts/index.ts";
+import { employmentQuestion, referralQuestion, rankQuestionCandidates } from './matching.ts';
 import type {
   ApplicationProfileFactId,
   DiscoveredIntakeField,
@@ -91,10 +92,64 @@ export const questionCatalog = Object.freeze([
 ] as const satisfies readonly QuestionCatalogEntry[]);
 
 const questionAliasCatalog = Object.freeze([
-  aliasEntry("s1-question-country", ["Country"], ["select"]),
+  // Existing current-page wording shares the same stable facts in both workflows.
+  aliasEntry("s1-question-given-name", ["first name","legal first name","prénom"], ["text", "textarea"], {"kind":"profile","factId":"given_name"}),
+  aliasEntry("s1-question-family-name", ["last name","legal last name","nom de famille"], ["text", "textarea"], {"kind":"profile","factId":"family_name"}),
+  aliasEntry("owner-question-preferred-name", ["preferred name","preferred first name"], ["text", "textarea"], { kind: "profile", factId: "preferred_name" }),
+  aliasEntry("owner-question-email-address", ["email","email address","e-mail","adresse e-mail","adresse courriel / email","confirm your email"], ["text", "textarea"], { kind: "profile", factId: "email_address" }),
+  aliasEntry("s1-question-phone-number", ["phone","mobile phone","téléphone","numéro de téléphone / phone number"], ["text", "textarea"], {"kind":"profile","factId":"phone_number"}),
+  aliasEntry("owner-question-phone-country-code", ["Phone country code", "Country phone code", "Phone country"], ["select", "listbox", "text"], { kind: "profile", factId: "phone_country_code" }),
+  aliasEntry("owner-question-current-location", ["Location", "Current location"], ["text", "textarea"], { kind: "profile", factId: "current_location" }),
+  aliasEntry("owner-question-city", ["city","ville"], ["text", "textarea"], { kind: "profile", factId: "city" }),
+  aliasEntry("owner-question-postal-code", ["postal code","zip code","zip","code postal"], ["text", "textarea"], { kind: "profile", factId: "postal_code" }),
+  aliasEntry("owner-question-current-company", ["current company"], ["text", "textarea"], { kind: "profile", factId: "current_company" }),
+  aliasEntry("owner-question-current-title", ["current title"], ["text", "textarea"], { kind: "profile", factId: "current_title" }),
+  aliasEntry("owner-question-linkedin-url", ["linkedin link","linkedin","linkedin profile","linkedin profile url","linkedin url"], ["text", "textarea"], { kind: "profile", factId: "linkedin_url" }),
+  aliasEntry("owner-question-github-url", ["github","github profile","github url","github profile url"], ["text", "textarea"], { kind: "profile", factId: "github_url" }),
+  aliasEntry("owner-question-portfolio-url", ["portfolio","portfolio url","portfolio website","website, blog or portfolio","website"], ["text", "textarea"], { kind: "profile", factId: "portfolio_url" }),
+  aliasEntry("owner-question-address-line1", ["address"], ["text", "textarea"], {"kind":"profile","factId":"address_line1","ownerProvidedOnly":true}),
+  aliasEntry("workday-question-desired-salary", ["what would be your salary expectations for the position?"], ["text", "textarea"], {"kind":"profile","factId":"salary_expectations","ownerProvidedOnly":true}),
+  aliasEntry("owner-question-address-line1", ["Street address", "Address Line 1"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "address_line1", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-address-line2", ["Address Line 2", "Apartment or unit"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "address_line2", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-institution", ["University", "School name", "School or University", "School/University"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_institution", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-degree", ["Degree"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_degree", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-field-of-study", ["Field of study", "Major"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_field_of_study", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-start-year", ["First year attended"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_start_year", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-end-year", ["Graduation year", "Last year attended"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_end_year", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-gpa", ["GPA", "Grade point average", "What is your average GPA?"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_gpa", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-gpa-scale", ["GPA scale"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_gpa_scale", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-languages", ["Languages spoken"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "languages", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-driver-license", ["Driver licence class"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "driver_license", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-reason-for-leaving", ["Reason for leaving"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "reason_for_leaving", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-relocation-preference", ["Preferred relocation location"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "relocation_preference", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-work-arrangements", ["Preferred work arrangement"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "work_arrangements", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-employment-types", ["Preferred employment types"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "employment_types", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-acceptable-work-terms", ["Acceptable work term lengths"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "acceptable_work_terms", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-official-coop-program", ["Are you enrolled in an official co-op program?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "official_coop_program", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-current-coop-wil", ["Are you currently enrolled in a Co-op or Work-Integrated Learning (WIL) program through your school?"], ["text", "textarea", "radio", "select", "listbox"], { kind: "profile", factId: "official_coop_program", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-returning-to-studies", ["Will you return to university after your work term?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "returning_to_studies", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-university-coop-approval", ["Can your university approve a co-op placement?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "university_coop_approval", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-relocation-assistance-required", ["Do you require relocation assistance?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "relocation_assistance_required", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-overtime-available", ["Are you willing to work overtime?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "overtime_available", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-evenings-available", ["Are you available to work evenings?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "evenings_available", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-weekends-available", ["Are you available to work weekends?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "weekends_available", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-overnights-available", ["Are you available to work overnight shifts?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "overnights_available", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-vehicle-access", ["Do you have access to a vehicle?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "vehicle_access", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-valid-drivers-licence", ["Do you have a valid driver's licence?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "valid_drivers_licence", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-background-check-willing", ["Are you willing to undergo a background check?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "background_check_willing", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-references-available", ["Are references available upon request?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "references_available", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-may-contact-employer", ["May we contact this employer?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "may_contact_employer", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-recruiting-texts", ["Would you like to receive recruiting text messages?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "recruiting_texts", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-marketing-messages", ["Would you like to receive marketing messages?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "marketing_messages", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-talent-community", ["Would you like to join our talent community?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "talent_community", ownerProvidedOnly: true }),
+
+  aliasEntry("s1-question-country", ["Country", "Pays"], ["select", "listbox", "text"]),
+  aliasEntry("owner-question-residence-region", ["Which U.S. State or Canadian Province do you reside in?", "State", "Province", "State/Province"], ["select", "listbox", "text"],
+    { kind: "profile", factId: "region", ownerProvidedOnly: true }),
   aliasEntry(
     "s1-question-work-authorization",
-    ["Are you legally authorized to work in this country?"],
+    ["Are you legally authorized to work in this country?", "Are you legally entitled to work in Canada?",
+      "Are you authorized to work lawfully in the Canada?"],
     ["radio", "select", "listbox"],
   ),
   aliasEntry(
@@ -117,8 +172,8 @@ const questionAliasCatalog = Object.freeze([
   ),
   aliasEntry(
     "s1-question-earliest-start-date",
-    ["Earliest Start Date", "Desired Start Date", "What is your availability/start date?", "When are you available to start?"],
-    ["date", "text"],
+    ["Earliest Start Date", "Desired Start Date", "Date available", "What is your availability/start date?", "When are you available to start?", "When are you looking to start?"],
+    ["date", "text", "textarea"],
   ),
   aliasEntry(
     "workday-question-highest-education",
@@ -138,7 +193,7 @@ const questionAliasCatalog = Object.freeze([
   ),
   aliasEntry(
     "workday-question-desired-salary",
-    ["Desired Salary", "Salary Expectation", "Desired Compensation", "What are your salary expectations?", "Salary expectations"],
+    ["Desired Salary", "Desired pay", "Salary Expectation", "Desired Compensation", "What are your salary expectations?", "Salary expectations", "What salary range are you targeting?", "What is your target compensation range?"],
     ["text", "textarea", "select", "listbox"],
     { kind: "profile", factId: "salary_expectations", ownerProvidedOnly: true },
   ),
@@ -219,7 +274,7 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry(
     "workday-placeholder-application-source",
     ["How Did You Hear About Us?"],
-    ["select", "listbox"],
+    ["radio", "select", "listbox"],
     {
       kind: "profile",
       factId: "application_source",
@@ -329,7 +384,7 @@ const questionSemanticCatalog = Object.freeze([
     ["previous", "employment", "company"],
     ["previous", "employment", "affiliate"],
   ] },
-  { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"]] },
+  { id: "workday-placeholder-application-source", keywordGroups: [["hear", "about"], ["application", "source"], ["how", "learn", "about", "employer"]] },
   { id: "workday-placeholder-relative-employment", keywordGroups: [["relative", "employed"], ["relatives", "employed"], ["family", "employed"]] },
   { id: "workday-placeholder-associate-referral", keywordGroups: [["referred", "associate"], ["referred", "employee"]] },
   { id: "workday-question-current-associate", keywordGroups: [["current", "integer", "associate"], ["currently", "integer", "associate"], ["currently", "work", "at"], ["currently", "employed", "by"], ["currently", "employed", "with"]] },
@@ -363,6 +418,20 @@ export function generatedLearningDefaultFor(
 }
 
 export function resolveQuestion(text: string) {
+  const exact=resolveCatalogText([...questionCatalog,...questionAliasCatalog],text);
+  if(exact.kind!=='unknown') return exact;
+  if (/\b(?:have you(?: ever)?|did you) referred? (?:an?|any|other)\b/iu.test(text)) return {kind:'unknown' as const};
+  const referral=referralQuestion(text);
+  if(referral) return referral.negated?{kind:'unknown' as const}:{kind:'resolved' as const,id:'workday-placeholder-associate-referral' as const,provenance:'reviewed_catalog' as const};
+  const employment = employmentQuestion(text);
+  if(employment?.negated) return {kind:'unknown' as const};
+  if(employment?.qualified) return resolveCatalogKeywords(questionSemanticCatalog,text);
+  if (employment) {
+    return {kind:'resolved' as const, id:employment.period === 'current'
+      ? 'workday-question-current-associate' as const : 'workday-placeholder-prior-employment' as const,
+      provenance:'reviewed_catalog' as const};
+  }
+  if (/\b(?:sex assigned at birth|biological sex|legal sex)\b/iu.test(text)) return {kind:'unknown' as const};
   // A numeric amount, not a yes/no willingness or a travel narrative.
   const value = text.normalize("NFKC").toLowerCase();
   if (/\btravel\b/u.test(value) &&
@@ -379,6 +448,29 @@ export function resolveQuestion(text: string) {
         ? questionSemanticCatalog.filter(entry => entry.id !== "workday-question-current-associate")
         : questionSemanticCatalog, text)
     : alias;
+}
+
+/** Stable IDs bind wording to profile facts; uncertain suggestions never edit the catalog. */
+export function inspectQuestionMatch(text: string) {
+  const resolution = resolveQuestion(text);
+  const employment = employmentQuestion(text) ?? referralQuestion(text);
+  const entries = [...questionCatalog,...questionAliasCatalog];
+  const exact = resolveCatalogText(entries,text);
+  const question = resolution.kind === 'resolved' ? questionFor(resolution.id) : undefined;
+  return {resolution, family:employment?.family ?? (resolution.kind==='resolved'?resolution.id:null),
+    context:employment ?? null,
+    factId:question?.source?.kind==='profile'?question.source.factId:null,
+    factIds:employment?.period==='ever' ? ['current_associate','previously_worked_for_organization'] :
+      question?.source?.kind==='profile' ? [question.source.factId] : [],
+    method:resolution.kind==='resolved' ? exact.kind==='resolved'?'exact':employment?'pattern':'keywords' : 'unmatched',
+    candidates:resolution.kind==='resolved'?[]:rankQuestionCandidates(entries,text),
+    provisional:resolution.kind!=='resolved' || employment?.qualified===true && exact.kind!=='resolved'};
+}
+
+export function matchingDictionary() {
+  return [...questionCatalog,...questionAliasCatalog].map(entry=>({id:entry.id,labels:entry.labels,
+    factId:entry.source?.kind==='profile'?entry.source.factId:null,
+    controls:'behaviors' in entry?entry.behaviors:[entry.behavior]}));
 }
 
 export function questionFor(id: CanonicalQuestionId) {

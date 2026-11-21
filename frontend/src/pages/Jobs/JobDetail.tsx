@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobDetail, useResumeAttempts, useAdjacentJobs } from '@/hooks/useJobDetail'
 import { useUiStore } from '@/store/ui'
 import {
@@ -12,6 +12,7 @@ import {
 } from '@/api/jobs'
 import {
   enqueueFletcherJob,
+  fetchFletcherJobs,
   fetchSystemStatus,
   verifyEasyApply,
   type EasyApplyVerifyResult,
@@ -23,8 +24,26 @@ import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
 import type { JobDetail, JobsQuery, SortDirection, SortField } from '@/types/job'
 import { get, post } from '@/api/client'
+import {
+  downloadApplicationHandoff,
+  sendApplicationsToBrowser,
+  isGenericApplicationUrl,
+} from '@/api/c3'
+import { browserC3, usesBrowserC3, type BrowserC3Status } from '@/api/browserC3'
 
 const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
+const FLETCHER_QUEUE_KEY = ['fletcher-jobs', 100]
+
+function activeResumeRun(
+  jobs: Awaited<ReturnType<typeof fetchFletcherJobs>>['jobs'],
+  jobId: number,
+) {
+  const matches = jobs.filter((run) => run.input.job_id === jobId)
+  return (
+    matches.find((run) => run.status === 'running' || run.status === 'cancel_requested') ??
+    matches.find((run) => run.status === 'queued')
+  )
+}
 
 type EditableField =
   | 'company'
@@ -295,25 +314,37 @@ function ServiceChip({ label, componentKey }: { label: string; componentKey: str
     refetchInterval: 60_000,
   })
   const status = (data?.components as Record<string, { status?: string }>)?.[componentKey]?.status
-  const ok = status === 'ok'
-  const unknown = !status
+  if (!status || status === 'ok') return null
+
   return (
-    <span
-      className={`${styles.serviceChip} ${ok ? styles.serviceOk : unknown ? styles.serviceUnknown : styles.serviceDown}`}
-    >
+    <span className={`${styles.serviceChip} ${styles.serviceDown}`}>
       <span className={styles.serviceDot} />
-      {label}: {unknown ? 'unknown' : ok ? 'online' : 'offline'}
+      {label}: offline
     </span>
   )
 }
 
 function ApplicationActions({ job }: { job: JobDetail }) {
+  const browserConnection = usesBrowserC3()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const active = useRef(false)
   const pending = useRef(false)
   const [queuing, setQueuing] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadMessage, setDownloadMessage] = useState('')
+  const [downloadFailed, setDownloadFailed] = useState(false)
   const [handoffError, setHandoffError] = useState('')
+  const handoffButton = useRef<HTMLButtonElement>(null)
+  const recoveryButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (
+      handoffError &&
+      (document.activeElement === handoffButton.current || document.activeElement === document.body)
+    ) {
+      recoveryButton.current?.focus()
+    }
+  }, [handoffError])
   useEffect(() => {
     active.current = true
     return () => {
@@ -321,31 +352,39 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     }
   }, [])
   // Match the handoff gateway's families; it also validates the posting URL and resume.
-  const supported = ['workday', 'greenhouse', 'lever', 'ashby', 'workable'].includes(
-    job.ats_type ?? '',
-  )
+  const generic = isGenericApplicationUrl(job.apply_url)
+  const supported =
+    generic || ['workday', 'greenhouse', 'lever', 'ashby', 'workable'].includes(job.ats_type ?? '')
   const connection = useQuery({
     queryKey: ['c3-job', job.id],
     queryFn: () =>
-      get<{
-        connected: boolean
-        configured: boolean
-        jobs: { id: string; sourceJobId?: number; stage: string; status: string }[]
-      }>('/api/c3/state'),
+      browserConnection
+        ? browserC3<BrowserC3Status>('status').then((state) => ({
+            ...state,
+            jobs: [] as { id: string; sourceJobId?: number; stage: string; status: string }[],
+          }))
+        : get<{
+            connected: boolean
+            configured: boolean
+            jobs: { id: string; sourceJobId?: number; stage: string; status: string }[]
+          }>('/api/c3/state'),
     enabled: supported,
     retry: false,
     refetchInterval: 10000,
     refetchOnWindowFocus: false,
   })
   const application = connection.data?.jobs.find((item) => item.sourceJobId === job.id)
-  const blocked = ['applied', 'canceled', 'cancelled'].includes(
+  const connectionUnavailable =
+    connection.isError || (!connection.data && connection.errorUpdatedAt > 0)
+  const isLocalHost = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
+  const eligibilityBlocked = ['applied', 'canceled', 'cancelled'].includes(
     (job.status ?? '').trim().toLowerCase(),
   )
     ? 'This job is already applied or cancelled.'
     : job.discovery_suppressed_reason
       ? 'This job is excluded from discovery.'
       : !supported
-        ? 'Supported application sites: Workday, Greenhouse, Lever, Ashby and Workable.'
+        ? 'This application link is not supported. Open the employer page to review it.'
         : job.apply_type !== 'external_apply'
           ? 'An external application is required.'
           : !['done', 'done_verified'].includes(job.enrichment_status ?? '')
@@ -354,29 +393,79 @@ function ApplicationActions({ job }: { job: JobDetail }) {
                 !job.selected_resume_pdf_path ||
                 !job.selected_resume_version_id
               ? 'Prepare and select a C2 resume first.'
-              : connection.isError
-                ? 'Application progress is unavailable. Retry the connection before filling.'
-                : !connection.data
-                  ? 'Checking application service…'
-                  : !connection.data.configured
-                    ? 'Set up your profile in Applications first.'
-                    : ''
+              : ''
+  const blocked =
+    eligibilityBlocked ||
+    (connectionUnavailable
+      ? isLocalHost
+        ? 'Application service unavailable. Start C3, then retry.'
+        : connection.error instanceof Error
+          ? connection.error.message
+          : 'Open the Hunt C3 extension and connect to the local app, or use Download for local C3.'
+      : !connection.data
+        ? 'Checking application service…'
+        : !connection.data.configured
+          ? 'Set up your profile in Applications first.'
+          : '')
+
+  async function downloadHandoff() {
+    if (pending.current || eligibilityBlocked) return
+    pending.current = true
+    setDownloading(true)
+    setDownloadMessage('')
+    setDownloadFailed(false)
+    try {
+      await downloadApplicationHandoff([job.id])
+      if (active.current)
+        setDownloadMessage(
+          'Download started. Open Applications in your local C3 workspace and import this file.',
+        )
+    } catch (error) {
+      if (active.current) {
+        setDownloadFailed(true)
+        setDownloadMessage(
+          error instanceof Error ? error.message : 'Could not download application',
+        )
+      }
+    } finally {
+      pending.current = false
+      if (active.current) setDownloading(false)
+    }
+  }
 
   async function handoff() {
-    if (pending.current || blocked) return
+    if (pending.current || blocked || handoffError) return
+    const restoreFocus = document.activeElement === handoffButton.current
     pending.current = true
     setQueuing(true)
     setHandoffError('')
+    setDownloadMessage('')
+    setDownloadFailed(false)
     try {
-      await post('/api/c3/handoff', { job_ids: [job.id] })
+      if (browserConnection) {
+        const result = await sendApplicationsToBrowser([job.id])
+        if (active.current)
+          setDownloadMessage(
+            result.workspaceOpened
+              ? 'Added paused. Continue in the local C3 workspace.'
+              : 'Added paused. In Hunt C3, choose Open workspace to continue.',
+          )
+      } else await post('/api/c3/handoff', { job_ids: [job.id] })
       void qc.invalidateQueries({ queryKey: ['c3-job', job.id] })
-      if (active.current) navigate('/executioner')
+      if (active.current && !browserConnection) navigate('/executioner')
     } catch (error) {
       if (active.current)
         setHandoffError(error instanceof Error ? error.message : 'Could not queue application')
     } finally {
       pending.current = false
-      if (active.current) setQueuing(false)
+      if (active.current) {
+        setQueuing(false)
+        if (restoreFocus)
+          requestAnimationFrame(() => {
+            if (document.activeElement === document.body && !handoffButton.current?.disabled)
+              handoffButton.current?.focus()
+          })
+      }
     }
   }
 
@@ -384,16 +473,15 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     <div className={styles.applicationActions}>
       {application && (
         <p role="status">
-          {connection.isError ? 'Last known application' : 'Application'}: {application.stage}.{' '}
+          {connectionUnavailable ? 'Last known application' : 'Application'}: {application.stage}.{' '}
           <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>
             View application
           </button>
         </p>
       )}
       {blocked && <p role="status">{blocked}</p>}
-      {supported && connection.isError && (
-        <p role="alert">
-          {connection.error.message}{' '}
+      {!eligibilityBlocked && connectionUnavailable && (isLocalHost || browserConnection) && (
+        <p>
           <button
             className={styles.actionBtn}
             disabled={connection.isFetching}
@@ -414,15 +502,52 @@ function ApplicationActions({ job }: { job: JobDetail }) {
       {handoffError && (
         <p role="alert">
           {handoffError}{' '}
-          <button className={styles.actionBtn} onClick={() => navigate('/executioner')}>
+          <button
+            ref={recoveryButton}
+            className={styles.actionBtn}
+            onClick={() => navigate('/executioner')}
+          >
             Check Applications
+          </button>
+          <button
+            className={styles.actionBtn}
+            disabled={connection.isFetching}
+            onClick={async (event) => {
+              const button = event.currentTarget
+              const refreshed = await connection.refetch()
+              if (!refreshed.isError) {
+                const restoreFocus =
+                  document.activeElement === button || document.activeElement === document.body
+                setHandoffError('')
+                if (restoreFocus) requestAnimationFrame(() => handoffButton.current?.focus())
+              }
+            }}
+          >
+            Refresh application progress
           </button>
         </p>
       )}
-      <button className={styles.actionBtn} disabled={queuing || !!blocked} onClick={handoff}>
-        {queuing ? 'Queuing…' : 'Fill application'}
+      <button
+        ref={handoffButton}
+        className={styles.actionBtn}
+        disabled={queuing || downloading || !!blocked || !!handoffError}
+        onClick={handoff}
+      >
+        {queuing ? 'Sending…' : browserConnection ? 'Send to local C3' : 'Fill application'}
       </button>
-      <p>Stops before submission.</p>
+      <button
+        className={styles.actionBtn}
+        disabled={queuing || downloading || !!eligibilityBlocked}
+        onClick={downloadHandoff}
+      >
+        {downloading ? 'Preparing download…' : 'Download for local C3'}
+      </button>
+      {downloadMessage && <p role={downloadFailed ? 'alert' : 'status'}>{downloadMessage}</p>}
+      <p>
+        {browserConnection
+          ? 'Adds paused. Choose when to fill in the local workspace.'
+          : 'Stops before submission.'}
+      </p>
     </div>
   )
 }
@@ -462,6 +587,7 @@ function JobDetail({ jobId }: { jobId: number }) {
   const qc = useQueryClient()
   const showToast = useUiStore((s) => s.showToast)
   const [generating, setGenerating] = useState(false)
+  const enqueuePending = useRef(false)
   const [openingReviewId, setOpeningReviewId] = useState<number | 'selected' | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [verifyResult, setVerifyResult] = useState<EasyApplyVerifyResult | null>(null)
@@ -473,6 +599,22 @@ function JobDetail({ jobId }: { jobId: number }) {
   const { data: job, isLoading, error, refetch, isFetching } = useJobDetail(jobId)
   const history = useResumeAttempts(jobId)
   const attempts = history.data ?? []
+  const resumeQueue = useQuery({
+    queryKey: FLETCHER_QUEUE_KEY,
+    queryFn: () => fetchFletcherJobs(100),
+    refetchInterval: (query) =>
+      activeResumeRun(query.state.data?.jobs ?? [], jobId) ? 5000 : 30000,
+  })
+  const resumeRun = activeResumeRun(resumeQueue.data?.jobs ?? [], jobId)
+  const runStep = resumeRun?.progress.current_step?.replace(/_/g, ' ')
+  const hadResumeRun = useRef(false)
+  useEffect(() => {
+    if (hadResumeRun.current && !resumeRun) {
+      void qc.invalidateQueries({ queryKey: ['resume-attempts', jobId] })
+      void qc.invalidateQueries({ queryKey: ['job', jobId] })
+    }
+    hadResumeRun.current = Boolean(resumeRun)
+  }, [resumeRun, qc, jobId])
   const navigation = useAdjacentJobs(jobId, adjacentQuery)
   const adjacent = navigation.data
 
@@ -624,14 +766,28 @@ function JobDetail({ jobId }: { jobId: number }) {
   }
 
   async function handleGenerate() {
+    if (enqueuePending.current || resumeRun || !resumeQueue.data || resumeQueue.isError) return
+    enqueuePending.current = true
     setGenerating(true)
     try {
-      await enqueueFletcherJob({ jobId })
+      const queued = await enqueueFletcherJob({ jobId })
+      await qc.cancelQueries({ queryKey: FLETCHER_QUEUE_KEY })
+      qc.setQueryData<Awaited<ReturnType<typeof fetchFletcherJobs>>>(
+        FLETCHER_QUEUE_KEY,
+        (cache) => ({
+          jobs: [
+            queued,
+            ...(cache?.jobs ?? []).filter((run) => run.queue_item_id !== queued.queue_item_id),
+          ],
+        }),
+      )
       showToast('Resume run queued')
       qc.invalidateQueries({ queryKey: ['fletcher-jobs'] })
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Queue failed', 'error')
+      void qc.invalidateQueries({ queryKey: FLETCHER_QUEUE_KEY })
     } finally {
+      enqueuePending.current = false
       setGenerating(false)
     }
   }
@@ -714,12 +870,11 @@ function JobDetail({ jobId }: { jobId: number }) {
           </button>
         </p>
       )}
-      {/* Top menu card */}
+      <h1 className={styles.jobTitle}>{job.title || `Job #${job.id}`}</h1>
       <div className={styles.menuCard}>
         <button ref={backRef} className={styles.backBtn} onClick={() => navigate(jobsListPath)}>
           ← Back
         </button>
-        <span className={styles.headerId}>#{job.id}</span>
         <div className={styles.navBtns}>
           <button
             className={styles.navBtn}
@@ -804,23 +959,21 @@ function JobDetail({ jobId }: { jobId: number }) {
                   { label: 'No', value: 'No' },
                 ]}
               />
-              <ReadonlyField label="Source" value={job.source} />
+              {job.source && <ReadonlyField label="Source" value={job.source} />}
               <ReadonlyField label="Discovery fit" value={discoveryLabel(job)} />
-              <ReadonlyField label="Apply type" value={job.apply_type?.replace(/_/g, ' ')} />
-              <ReadonlyField label="ATS type" value={job.ats_type} />
-              <ReadonlyField label="Apply host" value={job.apply_host} mono />
-              <ReadonlyField
-                label="Auto-apply"
-                value={job.auto_apply_eligible === 1 ? 'Yes' : 'No'}
-              />
-              <ReadonlyField label="Posted" value={job.date_posted} />
-              <ReadonlyField label="Scraped" value={job.date_scraped} />
+              {job.apply_type && job.apply_type !== 'unknown' && (
+                <ReadonlyField label="Apply type" value={job.apply_type.replace(/_/g, ' ')} />
+              )}
+              {job.ats_type && job.ats_type !== 'unknown' && (
+                <ReadonlyField label="ATS type" value={job.ats_type} />
+              )}
+              {job.date_posted && <ReadonlyField label="Posted" value={job.date_posted} />}
               <InlineField
                 label="Tag"
                 field="operator_tag"
                 value={job.operator_tag}
                 onSave={handleFieldSave}
-                placeholder="e.g. applied, skip, followup"
+                placeholder="Add tag"
               />
               <InlineField
                 label="Notes"
@@ -828,7 +981,7 @@ function JobDetail({ jobId }: { jobId: number }) {
                 value={job.operator_notes}
                 onSave={handleFieldSave}
                 type="textarea"
-                placeholder="Free-form notes..."
+                placeholder="Add notes"
               />
             </div>
           </div>
@@ -837,16 +990,7 @@ function JobDetail({ jobId }: { jobId: number }) {
             <div className={styles.panelTitleRow}>
               <h2 className={styles.panelTitle}>Job description</h2>
               <div className={styles.jdMeta}>
-                {descriptionSource === 'scraped' && (
-                  <span className={styles.scrapedBadge}>Scraped</span>
-                )}
-                {descriptionSource === 'manual' && (
-                  <span className={styles.manualBadge}>Manual</span>
-                )}
-                <label
-                  className={styles.lockToggle}
-                  title="When locked, enrichment will not overwrite this description"
-                >
+                <label className={styles.lockToggle}>
                   <input
                     type="checkbox"
                     checked={descriptionSource === 'manual'}
@@ -861,7 +1005,7 @@ function JobDetail({ jobId }: { jobId: number }) {
                       }
                     }}
                   />
-                  Lock (prevent enrich overwrite)
+                  Protect description from enrichment
                 </label>
               </div>
             </div>
@@ -871,7 +1015,7 @@ function JobDetail({ jobId }: { jobId: number }) {
               value={job.description}
               onSave={handleDescriptionSave}
               type="textarea"
-              placeholder="No description yet. Enrichment will fill this from the listing, or click to enter it manually."
+              placeholder="Add a job description"
             />
           </div>
         </div>
@@ -889,9 +1033,10 @@ function JobDetail({ jobId }: { jobId: number }) {
                 value={<StatusBadge status={job.enrichment_status} />}
               />
               <ReadonlyField label="Attempts" value={job.enrichment_attempts} />
-              <ReadonlyField label="Enriched at" value={job.enriched_at} />
-              <ReadonlyField label="Last started" value={job.last_enrichment_started_at} />
-              <ReadonlyField label="Next retry" value={job.next_enrichment_retry_at} />
+              {job.enriched_at && <ReadonlyField label="Enriched at" value={job.enriched_at} />}
+              {job.next_enrichment_retry_at && (
+                <ReadonlyField label="Next retry" value={job.next_enrichment_retry_at} />
+              )}
               {job.last_enrichment_error && (
                 <ReadonlyField label="Last error" value={job.last_enrichment_error} mono />
               )}
@@ -1008,25 +1153,51 @@ function JobDetail({ jobId }: { jobId: number }) {
               </h2>
               <ServiceChip label="Fletcher" componentKey="c2" />
             </div>
-            <div className={styles.fieldList}>
-              <ReadonlyField
-                label="JD usable"
-                value={
-                  job.latest_resume_jd_usable === 1
-                    ? 'Yes'
-                    : job.latest_resume_jd_usable === 0
-                      ? 'No'
-                      : '-'
-                }
-              />
-              <ReadonlyField label="Usable reason" value={job.latest_resume_jd_usable_reason} />
-              <ReadonlyField
-                label="Ready for C3"
-                value={job.selected_resume_ready_for_c3 === 1 ? 'Yes' : 'No'}
-              />
-            </div>
+            {job.latest_resume_jd_usable === 0 && job.latest_resume_jd_usable_reason && (
+              <p role="status">{job.latest_resume_jd_usable_reason}</p>
+            )}
+            {resumeRun && !resumeQueue.isError ? (
+              <p role="status">
+                {resumeRun.status === 'queued'
+                  ? 'Resume queued'
+                  : resumeRun.status === 'cancel_requested'
+                    ? 'Cancelling resume run'
+                    : `Generating resume${runStep && runStep !== 'running' ? ` · ${runStep}` : ''}`}{' '}
+                <Link to="/fletcher">Fletcher queue</Link>
+              </p>
+            ) : resumeQueue.isError ? (
+              <p role="alert">
+                Resume queue unavailable.{' '}
+                <button
+                  type="button"
+                  className={styles.actionBtn}
+                  aria-disabled={resumeQueue.isFetching}
+                  onClick={(event) => {
+                    if (resumeQueue.isFetching) return
+                    const button = event.currentTarget
+                    void resumeQueue.refetch().then((result) => {
+                      if (
+                        result.isSuccess &&
+                        (document.activeElement === button ||
+                          (!button.isConnected && document.activeElement === document.body))
+                      ) {
+                        resumeRef.current?.focus()
+                      }
+                    })
+                  }}
+                >
+                  {resumeQueue.isFetching ? 'Checking queue…' : 'Retry queue'}
+                </button>
+              </p>
+            ) : null}
             <div className={styles.panelActions}>
-              <button className={styles.actionBtn} onClick={handleGenerate} disabled={generating}>
+              <button
+                className={styles.actionBtn}
+                onClick={handleGenerate}
+                disabled={
+                  generating || Boolean(resumeRun) || !resumeQueue.data || resumeQueue.isError
+                }
+              >
                 {generating ? 'Queueing...' : 'Tailor for saved job'}
               </button>
               <button
@@ -1142,33 +1313,11 @@ function JobDetail({ jobId }: { jobId: number }) {
                         </a>
                       </div>
                     </div>
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 12,
-                        flexWrap: 'wrap',
-                        marginTop: 6,
-                        fontSize: '0.8rem',
-                      }}
-                    >
-                      <span className="muted">
-                        Family: <strong>{a.role_family ?? '-'}</strong>
-                      </span>
-                      <span className="muted">
-                        Level: <strong>{a.job_level ?? '-'}</strong>
-                      </span>
-                      <span className="muted">
-                        JD OK:{' '}
-                        <strong>
-                          {a.jd_usable === 1 ? 'yes' : a.jd_usable === 0 ? 'no' : '-'}
-                        </strong>
-                      </span>
-                    </div>
                   </div>
                 ))}
               </div>
             )}
-            {history.isSuccess && attempts.length === 0 && (
+            {history.isSuccess && attempts.length === 0 && !resumeRun && (
               <p className="muted" style={{ fontSize: '0.85rem', marginTop: 12 }}>
                 No attempts yet.
               </p>

@@ -282,7 +282,7 @@ export function armNavigationWitness(input: { readonly rootSelector: string; rea
           set(value) {
             const owner = declarationLoaders.get(this);
             if (owner === undefined) invalidateStyleContext();
-            const normalized = String(value);
+            const normalized = value === null ? "" : String(value);
             if (normalized === "") nativeDeclarationRemoveProperty.call(this, cssName);
             else nativeDeclarationSetProperty.call(this, cssName, normalized);
             if (owner !== undefined) captureExactLoaderState(owner, "other", "style");

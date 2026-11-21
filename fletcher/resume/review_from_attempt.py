@@ -10,6 +10,7 @@ from fletcher.config import DEFAULT_OG_RESUME_PATH
 from .compiler import compile_tex
 from .parser import parse_resume_file
 from .renderer import render_resume_tex
+from .review_io import atomic_json, publication_lock
 from .review_models import (
     ResumeReviewJobInfo,
     ResumeReviewLlmInfo,
@@ -18,8 +19,10 @@ from .review_models import (
     ResumeReviewVersion,
     ResumeReviewVersionName,
     build_review_id,
+    model_to_dict,
+    model_validate,
 )
-from .review_store import write_review_package
+from .review_store import _safe_attempt_dir, register_review, write_review_package
 
 
 def _read_json(path: str | None) -> dict[str, Any]:
@@ -51,7 +54,37 @@ def create_review_package_from_attempt(
     tex_path = Path(str(attempt.get("tex_path") or ""))
     if not tex_path.exists():
         raise FileNotFoundError("Attempt TeX artifact is missing.")
-    attempt_dir = tex_path.parent
+    attempt_dir = _safe_attempt_dir(tex_path.parent)
+    # Reopen the saved workspace, including older workspaces nested inside a revision.
+    while not (attempt_dir / "review_package.json").exists():
+        if not (
+            attempt_dir.name.isdecimal()
+            and attempt_dir.parent.name == "revisions"
+            and attempt_dir.parent.parent.name
+            in {version.value for version in ResumeReviewVersionName}
+            and attempt_dir.parent.parent.parent.name == "versions"
+        ):
+            break
+        attempt_dir = _safe_attempt_dir(attempt_dir.parents[3])
+    package_path = attempt_dir / "review_package.json"
+    if package_path.exists():
+        with publication_lock(attempt_dir):
+            package = model_validate(
+                ResumeReviewPackage, json.loads(package_path.read_text(encoding="utf-8"))
+            )
+            job_id = (job or {}).get("id", attempt.get("job_id"))
+            attempt_id = attempt.get("id")
+            if package.job.job_id not in (None, job_id) or package.job.attempt_id not in (
+                None,
+                attempt_id,
+            ):
+                raise ValueError("Review package belongs to a different resume attempt.")
+            if package.job.job_id != job_id or package.job.attempt_id != attempt_id:
+                package.job.job_id = job_id
+                package.job.attempt_id = attempt_id
+                atomic_json(package_path, model_to_dict(package))
+        register_review(attempt_dir, package.review_id)
+        return package
     review_id = build_review_id(f"{attempt_dir}:{attempt.get('id') or ''}")
     source_resume_path = Path(str(attempt.get("source_resume_path") or original_resume_path))
     if not source_resume_path.exists():
@@ -64,8 +97,10 @@ def create_review_package_from_attempt(
     keywords = _read_json(attempt.get("keywords_path"))
     raw_keywords = keywords.get("must_have_terms") or keywords.get("raw") or []
     provider = str(attempt.get("model_backend") or "heuristic")
+    summary_result = _read_json(attempt_dir / "source_summary.json")
     package = ResumeReviewPackage(
         review_id=review_id,
+        summary_notice=summary_result.get("summary_notice"),
         source=ResumeReviewSourceInfo(
             input_kind=str(attempt.get("source_resume_type") or "tex"),
             input_filename=Path(str(attempt.get("source_resume_path") or source_resume_path)).name,
@@ -116,10 +151,11 @@ def create_review_package_from_attempt(
         log_url=f"/api/fletcher/reviews/{review_id}/log",
     )
     summary_tex = attempt_dir / "output_summary.tex"
-    if summary_tex.exists():
+    if summary_tex.exists() and summary_result.get("summary_outcome") != "omitted":
         generated_summary = parse_resume_file(summary_tex)
         package.versions[ResumeReviewVersionName.WITH_SUMMARY] = ResumeReviewVersion(
             original=original,
+            summary_origin=summary_result.get("summary_origin"),
             generated=generated_summary,
             current=generated_summary,
             pdf_url=_version_url(review_id, "with_summary", "pdf"),

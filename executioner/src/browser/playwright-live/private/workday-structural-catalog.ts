@@ -1,3 +1,5 @@
+import type { Page } from 'playwright';
+import { observeWorkdayPage } from '../../../ats/workday/page-observation.ts';
 import type {
   AccountActionIntent,
   AccountFieldName,
@@ -11,6 +13,7 @@ interface CountableLocator {
 }
 
 export interface WorkdayStructuralPage {
+  evaluate?: Page['evaluate'];
   locator(selector: string): CountableLocator;
 }
 
@@ -166,7 +169,7 @@ const accountFactRules = Object.freeze([
   rule("structural_trait_account_absent_v1", WORKDAY_ACCOUNT_FACT_SELECTORS.absent),
   rule("structural_trait_account_exists_v1", WORKDAY_ACCOUNT_FACT_SELECTORS.exists),
   rule(
-    "structural_trait_account_password_reset_required_v1",
+    "structural_trait_account_credentials_rejected_v1",
     WORKDAY_SIGN_IN_REJECTION_SELECTORS.credentialsOrLocked,
   ),
   rule(
@@ -204,7 +207,8 @@ export const WORKDAY_RUNTIME_ERROR_SELECTORS = Object.freeze([
 ]);
 const WORKDAY_RAW_503_SELECTOR = ':text-is("{\\"503\\":\\"service-unavailable\\"}")';
 export const WORKDAY_RUNTIME_ERROR_DESTINATION_SELECTORS = Object.freeze([
-  WORKDAY_RUNTIME_ERROR_SELECTORS[0]!,
+  '[data-automation-id="applyFlowPage"] :text-is("Please refresh the page and then try again.")',
+  'body:has(:text-is("Please refresh the page and then try again.")) :text-is("Something went wrong")',
   WORKDAY_RAW_503_SELECTOR,
 ]);
 
@@ -224,6 +228,9 @@ export async function inspectWorkdayStructure(
     }
   | { readonly kind: "ambiguous" }
 > {
+  const observation = page.evaluate ? await observeWorkdayPage({evaluate:page.evaluate.bind(page)}) : undefined;
+  if (observation?.kind === 'employer_error') return {kind:'posting_unavailable',reason:'runtime_error'};
+  if (observation && ['unknown','loading','completed','credential_rejected','employer_coded_error'].includes(observation.kind)) return {kind:'ambiguous'};
   const unavailableFacts = await matchingUnavailable(page);
   if (unavailableFacts.length > 1) return { kind: "ambiguous" };
   if (unavailableFacts.length === 1) {
@@ -231,7 +238,7 @@ export async function inspectWorkdayStructure(
   }
 
   const traitIds = ["structural_trait_ats_workday_family_v1"];
-  if (routeIsPosting) traitIds.push("structural_trait_page_job_posting_v1");
+  if (routeIsPosting && (!observation || observation.kind === 'entry')) traitIds.push("structural_trait_page_job_posting_v1");
   const inlineVerification = await anyExactVisible(
     page,
     WORKDAY_INLINE_VERIFICATION_SELECTORS,
@@ -332,6 +339,7 @@ export async function isExactWorkdayMaintenancePage(
 export async function isExactWorkdayRuntimeErrorPage(
   page: WorkdayStructuralPage,
 ): Promise<boolean> {
+  if (page.evaluate) return (await observeWorkdayPage({evaluate:page.evaluate.bind(page)})).kind === 'employer_error';
   return await allExactVisible(page, WORKDAY_RUNTIME_ERROR_SELECTORS) ||
     await anyExactVisible(page, [WORKDAY_RAW_503_SELECTOR]);
 }

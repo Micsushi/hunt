@@ -50,6 +50,9 @@ class ResumeReviewVersion(BaseModel):
     compiled_revision: int = 0
     compiled_document_revision: int = 0
     compile_status: str | None = None
+    compiled_fits_one_page: bool | None = None
+    application_warning: str | None = None
+    summary_origin: Literal["source"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -69,6 +72,7 @@ class ResumeReviewVersion(BaseModel):
 
 class ResumeReviewPackage(BaseModel):
     review_id: str
+    summary_notice: str | None = None
     source: ResumeReviewSourceInfo = Field(default_factory=ResumeReviewSourceInfo)
     job: ResumeReviewJobInfo = Field(default_factory=ResumeReviewJobInfo)
     llm: ResumeReviewLlmInfo = Field(default_factory=ResumeReviewLlmInfo)

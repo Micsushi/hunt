@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -32,13 +32,9 @@ from .llm.llm_enrich import (
     bucket_skill_keywords_with_ollama,
     capitalize_skill_phrase,
     extract_keywords_with_ollama,
-    filter_summary_keywords_with_ollama,
-    generate_summary,
     keyword_visible_in_text,
     restore_textbf_from_original,
     rewrite_bullet_targeted,
-    validate_summary_grounding,
-    validate_summary_with_ollama,
 )
 from .llm.rag import match_keywords_to_bullets, score_bullets_for_drop
 from .pipeline import _compile_with_fit_retry
@@ -57,6 +53,7 @@ from .resume.review_models import (
     build_review_id,
 )
 from .resume.review_store import write_review_package
+from .resume.source_summary import compile_source_summary
 from .storage import build_attempt_dir, ensure_dir, write_json, write_text
 from .text_normalize import repair_mojibake
 
@@ -155,11 +152,13 @@ def _make_review_package(
             pdf_url=_review_url(review_id, "with_summary", "pdf"),
             tex_url=_review_url(review_id, "with_summary", "tex"),
             compile_status=result.get("compile_status"),
+            summary_origin=result.get("summary_origin"),
         )
 
     provider = _config.resume_llm_provider()
     package = ResumeReviewPackage(
         review_id=review_id,
+        summary_notice=result.get("summary_notice"),
         source=ResumeReviewSourceInfo(
             input_kind=source_report.input_kind,
             input_filename=source_report.input_filename,
@@ -879,8 +878,7 @@ def _filter_summary_keywords(
     candidate_context: str,
     validation_reasons: list[str],
 ) -> tuple[list[str], list[str]]:
-    # If the LLM summary-keyword filter is unavailable, keep the signals in the
-    # safer summary lane and let summary generation/validation decide support.
+    # Retain keyword bookkeeping; source summaries do not consume these terms.
     included = _dedupe(list(base_keywords) + list(skipped_keywords))[:SUMMARY_KEYWORD_LIMIT]
     included_l = {keyword.lower() for keyword in included}
     excluded = [
@@ -925,12 +923,6 @@ def _summary_validation_retry_feedback(validation: dict[str, Any]) -> tuple[str,
         "Use only role/process keywords that fit the candidate background.",
         "",
     )
-
-
-def _summary_filter_needs_llm(keywords: list[str]) -> bool:
-    """Use model judgment whenever there are summary keywords to choose from."""
-    cleaned = _dedupe([keyword for keyword in keywords if keyword.strip()])
-    return bool(cleaned)
 
 
 def _keyword_rewrite_eligible(keyword: str) -> bool:
@@ -1074,7 +1066,7 @@ def _fit_to_page(
                         ),
                     )
                 )
-            elif len(remaining) == floor:
+            elif len(remaining) <= floor:
                 flagged.append(bucket)
                 logger.step("bucket_floor_reached", stem=stem, kind=bucket[0], entry_id=bucket[1])
 
@@ -1572,11 +1564,11 @@ def _run_iteration(
     logger: PipelineLogger,
 ) -> tuple[dict[str, Any] | None, BucketId | None]:
     doc = copy.deepcopy(parsed)
-    existing_summary = doc.summary
     _filter_doc_to_active_buckets(doc, active_bucket_ids)
     doc.summary = ""
 
     active_bullets, active_sources = _collect_active_bullets(doc, active_bucket_ids)
+    original_sources = copy.deepcopy(active_sources)
     _annotate_rag_indices(active_sources)
     logger.step(
         "active_buckets",
@@ -1874,133 +1866,20 @@ def _run_iteration(
         and _summary_keyword_supported(kw, candidate_context, validation_reasons)
     ]
     base_summary_keywords = _dedupe(list(kw_match.get("summary_keywords", [])))
-    summary_filter_candidates = _dedupe(base_summary_keywords + skipped_to_summary)
-    if _summary_filter_needs_llm(summary_filter_candidates):
-        summary_filter = filter_summary_keywords_with_ollama(
-            keywords=summary_filter_candidates,
-            candidate_context=candidate_context,
-            job_title=title or _default_target_title(),
-            logger=logger,
-        )
-    else:
-        summary_filter = {"success": False, "error": "no_summary_keywords"}
-    if summary_filter.get("success"):
-        mid_keywords = _dedupe(list(summary_filter.get("included") or []))[:SUMMARY_KEYWORD_LIMIT]
-        included_l = {keyword.lower() for keyword in mid_keywords}
-        excluded_summary_keywords = [
-            keyword
-            for keyword in _dedupe(
-                list(summary_filter.get("excluded") or []) + summary_filter_candidates
-            )
-            if keyword.lower() not in included_l
-        ]
-    else:
-        mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
-            base_summary_keywords,
-            skipped_to_summary,
-            candidate_context,
-            validation_reasons,
-        )
+    mid_keywords, excluded_summary_keywords = _filter_summary_keywords(
+        base_summary_keywords,
+        skipped_to_summary,
+        candidate_context,
+        validation_reasons,
+    )
     logger.step("keywords_skipped_to_summary", keywords=skipped_to_summary)
     logger.step(
         "summary_keyword_filter",
         base_keywords=base_summary_keywords,
         included=mid_keywords,
         excluded=excluded_summary_keywords,
-        mode="llm"
-        if summary_filter.get("success")
-        else str(summary_filter.get("error") or "deterministic_fallback"),
+        mode="source_summary_bookkeeping",
     )
-
-    summary_meta: dict = {}
-    if candidate_context:
-        _log_ollama_runtime(logger, "before_summary")
-        logger.step("summary_start", keyword_count=len(mid_keywords), keywords=mid_keywords)
-        summary_meta = generate_summary(
-            candidate_context,
-            title or _default_target_title(),
-            mid_keywords,
-            existing_summary=existing_summary,
-            role_family=str(classification.get("role_family") or ""),
-            job_level=str(classification.get("job_level") or ""),
-            logger=logger,
-        )
-        logger.step(
-            "summary_done",
-            success=summary_meta.get("success"),
-            duration_ms=summary_meta.get("duration_ms"),
-            error=summary_meta.get("error"),
-            summary=summary_meta.get("summary", "")[:200] if summary_meta.get("success") else None,
-            keywords_used=summary_meta.get("keywords_used") or [],
-            retry_reason=summary_meta.get("retry_reason") or "",
-            keyword_use_reason=summary_meta.get("keyword_use_reason") or "",
-        )
-        if summary_meta.get("summary"):
-            summary_validation, _summary_validation_mode = _validate_summary_with_defense(
-                summary=summary_meta["summary"],
-                candidate_context=candidate_context,
-                keywords=mid_keywords,
-                logger=logger,
-            )
-            if not summary_validation["accepted"]:
-                feedback, retry_reason_fallback = _summary_validation_retry_feedback(
-                    summary_validation
-                )
-                retry_keywords = [
-                    keyword
-                    for keyword in mid_keywords
-                    if keyword
-                    not in _keywords_rejected_by_summary_validation(
-                        summary_validation, mid_keywords
-                    )
-                ]
-                logger.step(
-                    "summary_validation_retry_start",
-                    reasons=summary_validation.get("reasons"),
-                    feedback=feedback,
-                    keywords=retry_keywords,
-                )
-                retry_meta = generate_summary(
-                    candidate_context,
-                    title or _default_target_title(),
-                    retry_keywords,
-                    existing_summary=existing_summary,
-                    line_feedback=feedback,
-                    role_family=str(classification.get("role_family") or ""),
-                    job_level=str(classification.get("job_level") or ""),
-                    logger=logger,
-                )
-                if retry_reason_fallback and not retry_meta.get("retry_reason"):
-                    retry_meta["retry_reason"] = retry_reason_fallback
-                retry_validation, retry_validation_mode = _validate_summary_with_defense(
-                    summary=retry_meta.get("summary", ""),
-                    candidate_context=candidate_context,
-                    keywords=retry_keywords,
-                    logger=logger,
-                )
-                logger.step(
-                    "summary_validation_retry_done",
-                    success=retry_meta.get("success"),
-                    duration_ms=retry_meta.get("duration_ms"),
-                    error=retry_meta.get("error"),
-                    accepted=retry_validation.get("accepted"),
-                    reasons=retry_validation.get("reasons"),
-                    mode=retry_validation_mode,
-                    keywords_used=retry_meta.get("keywords_used") or [],
-                    retry_reason=retry_meta.get("retry_reason") or "",
-                    keyword_use_reason=retry_meta.get("keyword_use_reason") or "",
-                )
-                if retry_meta.get("summary") and retry_validation["accepted"]:
-                    summary_meta = retry_meta
-                    mid_keywords = retry_keywords
-                else:
-                    summary_meta = {
-                        "summary": "",
-                        "success": False,
-                        "error": "summary_validation_failed",
-                    }
-    else:
-        logger.step("summary_skipped", reason="no candidate context from parsed experience")
 
     doc_ns = copy.deepcopy(doc)
     doc_ns.summary = ""
@@ -2013,6 +1892,12 @@ def _run_iteration(
             + list(kw_match.get("summary_keywords", []))
         )
         if _rag_kept_keyword(keyword, rag_tiers)
+        and not any(
+            str(reason).partition(":")[0]
+            in {"unsupported_domain_keyword", "unsupported_summary_domain", "llm_rejected_keyword"}
+            and str(reason).partition(":")[2].lower() == keyword.strip().lower()
+            for reason in validation_reasons
+        )
     ]
     no_summary_skill_keywords = _dedupe(rag_supported_summary_skill_kws)
     no_summary_skills_added = _add_keywords_to_skills(
@@ -2032,159 +1917,34 @@ def _run_iteration(
     if removed:
         return None, removed
 
-    pdf_summary: str | None = None
-    tex_summary: str | None = None
-    summary_error = summary_meta.get("error")
-    _generated_summary = summary_meta.get("summary", "")
-    if _generated_summary:
-        doc_s = copy.deepcopy(doc_ns)
-        doc_s.summary = _generated_summary
-        summary_unused_keywords = [
-            keyword
-            for keyword in _dedupe(mid_keywords + excluded_summary_keywords)
-            if not keyword_visible_in_text(keyword, _generated_summary)
-        ]
-        logger.step(
-            "skills_keyword_reuse",
-            version="with_summary",
-            candidate_count=len(summary_unused_keywords),
-            reason="summary variant inherits no-summary skill enrichment",
-        )
-        summary_sources = _filter_sources_present_in_doc(doc_s, sources_for_score)
-        summary_bullets = [str(source.get("text") or "") for source in summary_sources]
-        summary_scores = _score_sources(
-            summary_bullets,
-            summary_sources,
-            raw_keywords,
-            classification,
-            kw_match.get("scores", []),
-            job_title=title,
-            rewritten_refs=rewritten_refs,
-        )
-        cr_s, tex_s, removed = _fit_to_page(
-            attempt_dir,
-            doc_s,
-            "output_summary",
-            summary_sources,
-            summary_scores,
-            logger,
-        )
-        if removed:
-            return None, removed
-        line_status, line_count = _summary_line_count(cr_s.get("pdf_path"))
-        logger.step(
-            "summary_line_check",
-            status=line_status,
-            line_count=line_count,
-            target_min=4,
-            target_max=5,
-        )
-        if _summary_line_check_accepts(line_status, line_count):
-            pdf_summary = cr_s.get("pdf_path")
-            tex_summary = tex_s
-        elif _summary_line_check_retries(line_status, line_count):
-            feedback = f"The current rendered summary is {line_count} lines; revise it to render as 4-5 lines."
-            logger.step("summary_retry_start", line_count=line_count, feedback=feedback)
-            retry_meta = generate_summary(
-                candidate_context,
-                title or _default_target_title(),
-                mid_keywords,
-                existing_summary=existing_summary,
-                line_feedback=feedback,
-                role_family=str(classification.get("role_family") or ""),
-                job_level=str(classification.get("job_level") or ""),
-                logger=logger,
-            )
-            logger.step(
-                "summary_retry_done",
-                success=retry_meta.get("success"),
-                duration_ms=retry_meta.get("duration_ms"),
-                error=retry_meta.get("error"),
-            )
-            if retry_meta.get("summary"):
-                retry_validation, _retry_validation_mode = _validate_summary_with_defense(
-                    summary=retry_meta["summary"],
-                    candidate_context=candidate_context,
-                    keywords=mid_keywords,
-                    logger=logger,
-                    retry="line_count",
-                )
-                if not retry_validation["accepted"]:
-                    summary_error = "summary_validation_failed"
-                    logger.step(
-                        "summary_generation_error",
-                        error=summary_error,
-                        reasons=retry_validation.get("reasons"),
-                    )
-                else:
-                    doc_s.summary = retry_meta["summary"]
-                    retry_sources = _filter_sources_present_in_doc(doc_s, summary_sources)
-                    retry_bullets = [str(source.get("text") or "") for source in retry_sources]
-                    retry_scores = _score_sources(
-                        retry_bullets,
-                        retry_sources,
-                        raw_keywords,
-                        classification,
-                        kw_match.get("scores", []),
-                        job_title=title,
-                        rewritten_refs=rewritten_refs,
-                    )
-                    cr_s, tex_s, removed = _fit_to_page(
-                        attempt_dir,
-                        doc_s,
-                        "output_summary",
-                        retry_sources,
-                        retry_scores,
-                        logger,
-                    )
-                    if removed:
-                        return None, removed
-                    line_status, line_count = _summary_line_count(cr_s.get("pdf_path"))
-                    logger.step(
-                        "summary_line_check",
-                        status=line_status,
-                        line_count=line_count,
-                        target_min=4,
-                        target_max=5,
-                    )
-                    if _summary_line_check_accepts(line_status, line_count):
-                        pdf_summary = cr_s.get("pdf_path")
-                        tex_summary = tex_s
-                        summary_meta = retry_meta
-                    elif _summary_line_check_retries(line_status, line_count):
-                        summary_error = "summary_line_count_out_of_range"
-                        logger.step(
-                            "summary_generation_error", error=summary_error, line_count=line_count
-                        )
-                    else:
-                        summary_error = f"summary_line_check_{line_status}"
-                        logger.step(
-                            "summary_generation_error",
-                            error=summary_error,
-                            line_check_status=line_status,
-                        )
-            else:
-                summary_error = retry_meta.get("error") or "summary_line_count_out_of_range"
-                logger.step("summary_generation_error", error=summary_error)
-        else:
-            summary_error = f"summary_line_check_{line_status}"
-            logger.step(
-                "summary_generation_error",
-                error=summary_error,
-                line_check_status=line_status,
-            )
-    else:
-        logger.step("compile_summary_skipped", reason="no summary generated")
+    live_counts = Counter(
+        (kind, entry.entry_id, _text_hash(bullet))
+        for kind, entries in (("exp", doc_ns.experience), ("proj", doc_ns.projects))
+        for entry in entries
+        for bullet in entry.bullets
+    )
+    retained_refs = set()
+    for source in sources_for_score:
+        key = (source["kind"], source["entry_id"], source["text_hash"])
+        if live_counts[key]:
+            retained_refs.add(_source_ref(source))
+            live_counts[key] -= 1
+    summary_result = compile_source_summary(
+        attempt_dir,
+        doc_ns,
+        parsed,
+        [source for source in original_sources if _source_ref(source) in retained_refs],
+        cr_ns,
+    )
+    logger.step("source_summary", **summary_result)
 
     return (
         {
             "pdf_path": cr_ns.get("pdf_path"),
             "tex_path": tex_ns,
-            "pdf_path_summary": pdf_summary,
-            "tex_path_summary": tex_summary,
+            **summary_result,
             "compile_status": cr_ns.get("compile_status"),
             "fits_one_page": cr_ns.get("fits_one_page"),
-            "summary_error": summary_error,
             "kw_match": kw_match,
             "used_keywords": used_keyword_matches,
         },
@@ -2274,127 +2034,6 @@ def _log_pipeline_debug_summary(
         rewrite_attempts=_latest_step_detail(logger, "bullet_rewrites_summary"),
         summary_line_checks=_all_step_details(logger, "summary_line_check"),
     )
-
-
-def _summary_tool_terms(summary: str) -> list[str]:
-    terms: list[str] = []
-    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9.+#/-]{1,}\b", summary or ""):
-        if (
-            any(ch in token for ch in ".+#/-")
-            or any(ch.isupper() for ch in token[1:])
-            or token.isupper()
-        ):
-            terms.append(token)
-    return _dedupe(terms)
-
-
-def _summary_visible_rejection_overrides(
-    *,
-    summary: str,
-    candidate_context: str,
-    reasons: list[str],
-) -> list[str]:
-    unsupported_markers = (
-        "not listed",
-        "not present",
-        "not in",
-        "not supported",
-        "unsupported",
-        "no evidence",
-    )
-    visible_terms = [
-        term
-        for term in _summary_tool_terms(summary)
-        if keyword_visible_in_text(term, candidate_context)
-    ]
-    overrides: list[str] = []
-    for reason in reasons:
-        reason_l = str(reason).lower()
-        if not any(marker in reason_l for marker in unsupported_markers):
-            continue
-        matching_terms = [
-            term
-            for term in visible_terms
-            if keyword_visible_in_text(term, reason) or term.lower() in reason_l
-        ]
-        if matching_terms:
-            overrides.append(f"visible_evidence_override:{', '.join(matching_terms)}")
-    return _dedupe(overrides)
-
-
-def _summary_validation_needs_llm(
-    *,
-    summary: str,
-    keywords: list[str],
-    grounding: dict[str, Any],
-) -> bool:
-    return bool(summary.strip()) and bool(grounding.get("accepted"))
-
-
-def _validate_summary_with_defense(
-    *,
-    summary: str,
-    candidate_context: str,
-    keywords: list[str],
-    logger: PipelineLogger,
-    retry: str | None = None,
-) -> tuple[dict[str, Any], str]:
-    grounding = validate_summary_grounding(summary, candidate_context, keywords)
-    if not _summary_validation_needs_llm(summary=summary, keywords=keywords, grounding=grounding):
-        summary_validation = {
-            "accepted": grounding["accepted"],
-            "reasons": _dedupe(list(grounding.get("reasons") or [])),
-        }
-        detail = {
-            "accepted": summary_validation.get("accepted"),
-            "reasons": summary_validation.get("reasons"),
-            "mode": "deterministic_fast",
-        }
-        if retry:
-            detail["retry"] = retry
-        logger.step("summary_validation", **detail)
-        return summary_validation, "deterministic_fast"
-
-    summary_validation = validate_summary_with_ollama(
-        summary=summary,
-        candidate_context=candidate_context,
-        keywords=keywords,
-        logger=logger,
-    )
-    mode = "llm"
-    if summary_validation.get("success"):
-        reasons = list(summary_validation.get("reasons") or [])
-        llm_accepted = bool(summary_validation.get("accepted"))
-        overrides = _summary_visible_rejection_overrides(
-            summary=summary,
-            candidate_context=candidate_context,
-            reasons=[str(reason) for reason in reasons],
-        )
-        if overrides and not llm_accepted:
-            llm_accepted = True
-            mode = "llm_visible_override"
-            reasons.extend(overrides)
-        if not grounding["accepted"]:
-            reasons.extend(grounding["reasons"])
-        summary_validation = {
-            **summary_validation,
-            "accepted": llm_accepted and grounding["accepted"],
-            "reasons": _dedupe([str(reason) for reason in reasons]),
-        }
-    else:
-        reasons = list(grounding.get("reasons") or [])
-        reasons.append("summary_validation_llm_unavailable")
-        summary_validation = {"accepted": False, "reasons": _dedupe(reasons)}
-        mode = "llm_unavailable"
-    detail = {
-        "accepted": summary_validation.get("accepted"),
-        "reasons": summary_validation.get("reasons"),
-        "mode": mode,
-    }
-    if retry:
-        detail["retry"] = retry
-    logger.step("summary_validation", **detail)
-    return summary_validation, mode
 
 
 def run_ad_hoc_pipeline(
@@ -2707,9 +2346,9 @@ def run_ad_hoc_pipeline(
     active_bucket_ids: list[BucketId] = []
     for kind, entries in (("exp", parsed.experience), ("proj", parsed.projects)):
         for entry in entries:
-            if len(entry.bullets) < 2:
+            if not any(bullet.strip() for bullet in entry.bullets):
                 logger.step(
-                    "bucket_excluded_below_floor",
+                    "bucket_excluded_empty",
                     kind=kind,
                     entry_id=entry.entry_id,
                     bullet_count=len(entry.bullets),
@@ -2835,7 +2474,10 @@ def run_ad_hoc_pipeline(
         "present_coverage": coverage,
         "rag_scores": list((result.get("kw_match") or {}).get("scores") or []),
         "used_keywords": list(result.get("used_keywords") or []),
-        "llm_error": result.get("summary_error"),
+        "llm_error": None,
+        "summary_outcome": result.get("summary_outcome"),
+        "summary_notice": result.get("summary_notice"),
+        "summary_origin": result.get("summary_origin"),
         **starting_artifacts,
     }
     return _attach_review_package(

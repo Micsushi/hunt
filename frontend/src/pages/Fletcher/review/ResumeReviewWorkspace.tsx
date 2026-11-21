@@ -161,10 +161,15 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
       compileFletcherReviewVersion(reviewId, version, revision),
     onSuccess: async (review, { version: compiledVersion }) => {
       await updateReviewVersion(review, compiledVersion)
+      void qc.invalidateQueries({ queryKey: ['job'] })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
       if (!mounted.current) return
       const status = review.versions[compiledVersion]?.compile_status
+      const warning = review.versions[compiledVersion]?.application_warning
       if (status && status !== 'ok') {
         showToast(`Compile failed: ${status}`, 'error')
+      } else if (warning) {
+        showToast(warning, 'error')
       } else {
         showToast('Resume compiled')
       }
@@ -507,6 +512,21 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
         onCompile={() => void compileDraft()}
         onOpenLink={(href) => void openPossiblyDirtyHref(href)}
       />
+      {data.summary_notice && (
+        <p className={styles.meta} role="status">
+          {data.summary_notice}
+        </p>
+      )}
+      {version.application_warning && (
+        <div className={styles.warning} role="alert">
+          {version.application_warning}
+        </div>
+      )}
+      {version.dirty && (
+        <p className={styles.meta}>
+          PDF opens the last compiled version. Compile to include saved edits.
+        </p>
+      )}
       {data.source.import_warnings.length ? (
         <div className={styles.warning}>{data.source.import_warnings.join(' ')}</div>
       ) : null}
@@ -541,7 +561,7 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
               </button>
             </div>
           ) : (
-            <div className={styles.meta}>Select a block, changed segment, or edit a block.</div>
+            <div className={styles.meta}>Select resume text to review or edit.</div>
           )}
           {editingBlockId ? (
             <div className={styles.smallStack}>
@@ -731,29 +751,11 @@ function KeywordPanel({ review }: { review: ResumeReviewPackage }) {
   return (
     <section className={styles.keywordPanel}>
       <div className={styles.panelTitle}>Keywords</div>
-      {keywords.length ? (
-        <>
-          <KeywordGroup
-            title="Already supported"
-            emptyText="No extracted keywords were already supported."
-            keywords={supportedKeywords}
-            kind="supported"
-          />
-          <KeywordGroup
-            title="Added by rewrite"
-            emptyText="No keyword was newly added to a bullet."
-            keywords={rewriteKeywords}
-            kind="rewrite"
-          />
-          <KeywordGroup
-            title="Other keywords"
-            emptyText="No unused high or medium keyword candidates."
-            keywords={otherKeywords}
-            kind="other"
-          />
-        </>
-      ) : (
-        <div className={styles.meta}>No extracted keywords found.</div>
+      <KeywordGroup title="Already supported" keywords={supportedKeywords} kind="supported" />
+      <KeywordGroup title="Added by rewrite" keywords={rewriteKeywords} kind="rewrite" />
+      <KeywordGroup title="Other keywords" keywords={otherKeywords} kind="other" />
+      {!supportedKeywords.length && !rewriteKeywords.length && !otherKeywords.length && (
+        <div className={styles.meta}>No keyword matches to review.</div>
       )}
     </section>
   )
@@ -761,27 +763,23 @@ function KeywordPanel({ review }: { review: ResumeReviewPackage }) {
 
 function KeywordGroup({
   title,
-  emptyText,
   keywords,
   kind,
 }: {
   title: string
-  emptyText: string
   keywords: KeywordPanelItem[]
   kind: KeywordGroupKind
 }) {
+  if (!keywords.length) return null
+
   return (
     <div className={styles.keywordGroup}>
       <div className={styles.keywordGroupTitle}>{title}</div>
-      {keywords.length ? (
-        <div className={styles.keywordList}>
-          {keywords.map((item) => (
-            <KeywordCard item={item} key={item.keyword} kind={kind} />
-          ))}
-        </div>
-      ) : (
-        <div className={styles.keywordEmpty}>{emptyText}</div>
-      )}
+      <div className={styles.keywordList}>
+        {keywords.map((item) => (
+          <KeywordCard item={item} key={item.keyword} kind={kind} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -800,31 +798,13 @@ function KeywordCard({ item, kind }: { item: KeywordPanelItem; kind: KeywordGrou
         ? item.candidates
         : []
   const supportIdx = usedBulletIdx ?? item.candidates[0]?.bullet_idx
-  const meta =
-    kind === 'rewrite'
-      ? supportIdx === null || supportIdx === undefined
-        ? 'Added in an unmatched bullet'
-        : `Added in bullet ${Number(supportIdx) + 1}`
-      : kind === 'supported'
-        ? supportIdx === null || supportIdx === undefined
-          ? 'Supported in resume'
-          : `Supported by bullet ${Number(supportIdx) + 1}`
-        : visibleCandidates.length
-          ? 'Best resume bullet'
-          : String(item.tier || '').toLowerCase() === 'mid'
-            ? 'Medium match, not used'
-            : 'No high-match bullet candidates'
   return (
     <div className={styles.keywordItem}>
-      <div>
-        <div className={styles.keywordName}>{item.keyword}</div>
-        <div className={styles.keywordMeta}>{meta}</div>
-        <CandidateList candidates={visibleCandidates} kind={kind} showEmptyHint={hasHighMatch} />
-      </div>
-      <div className={styles.keywordScore}>
-        <span>{item.tier || item.status || 'raw'}</span>
-        <strong>{Math.round((item.score || 0) * 100)}%</strong>
-      </div>
+      <div className={styles.keywordName}>{item.keyword}</div>
+      {kind !== 'other' && supportIdx != null && (
+        <div className={styles.keywordMeta}>Bullet {supportIdx + 1}</div>
+      )}
+      <CandidateList candidates={visibleCandidates} kind={kind} />
     </div>
   )
 }
@@ -832,17 +812,12 @@ function KeywordCard({ item, kind }: { item: KeywordPanelItem; kind: KeywordGrou
 function CandidateList({
   candidates,
   kind,
-  showEmptyHint,
 }: {
   candidates: NonNullable<KeywordScore['candidates']>
   kind: KeywordGroupKind
-  showEmptyHint: boolean
 }) {
-  if (!candidates.length) {
-    return kind === 'rewrite' && showEmptyHint ? (
-      <div className={styles.keywordCandidateHint}>No alternate bullet candidates.</div>
-    ) : null
-  }
+  if (!candidates.length) return null
+
   return (
     <div
       className={styles.keywordCandidates}

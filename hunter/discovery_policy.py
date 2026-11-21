@@ -9,7 +9,7 @@ from hunter import config
 from hunter.config import TITLE_BLACKLIST, WATCHLIST
 from hunter.search_lanes import canonicalize_title_text, matching_search_lane
 
-DISCOVERY_POLICY_VERSION = 15
+DISCOVERY_POLICY_VERSION = 16
 
 EMPLOYER_ALIASES = {
     "amazon web services": "amazon",
@@ -395,7 +395,7 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         and not re.search(r"\b(?:it|technical) project coordinator\b", title)
         and bool(
             re.search(
-                r"\b(?:construction (?:projects?|sites?)|concrete (?:projects?|pours?)|"
+                r"\b(?:construction (?:projects?|sites?|environment)|concrete (?:projects?|pours?)|"
                 r"mental health programs?|student counsel(?:l)?ing|student health (?:projects?|promotion))\b",
                 description := canonicalize_title_text(job.get("description")),
             )
@@ -407,9 +407,10 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
             + " "
             # General office-software literacy is not a technical project duty.
             + re.sub(
-                r"\bability to (?:learn|use) (?:"
+                r"\b(?:ability to (?:learn|use) (?:"
                 r"(?:new )?applications, systems,? and software programs|"
-                r"(?:standard )?office software)\b",
+                r"(?:standard )?office software)|"
+                r"willingness to learn [a-z0-9]+, our in-house software)\b",
                 "",
                 description,
             ),

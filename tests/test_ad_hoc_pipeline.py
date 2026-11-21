@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -293,7 +294,7 @@ def _make_parsed_doc():
 
 
 @pytest.fixture()
-def base_mocks(monkeypatch):
+def base_mocks(monkeypatch, tmp_path):
     """Monkeypatch all external calls in ad_hoc_pipeline for unit tests."""
     import fletcher.ad_hoc_pipeline as mod
 
@@ -313,11 +314,13 @@ def base_mocks(monkeypatch):
         mod,
         "filter_summary_keywords_with_ollama",
         MagicMock(return_value={"success": False, "included": [], "excluded": []}),
+        raising=False,
     )
     monkeypatch.setattr(
         mod,
         "validate_summary_with_ollama",
         MagicMock(return_value={"success": False, "accepted": True, "reasons": []}),
+        raising=False,
     )
     monkeypatch.setattr(
         mod,
@@ -367,12 +370,16 @@ def base_mocks(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        mod, "generate_summary", MagicMock(return_value={"summary": "", "success": False})
+        mod,
+        "generate_summary",
+        MagicMock(return_value={"summary": "", "success": False}),
+        raising=False,
     )
     monkeypatch.setattr(
         mod,
         "validate_summary_grounding",
         MagicMock(return_value={"accepted": True, "reasons": []}),
+        raising=False,
     )
     monkeypatch.setattr(
         mod,
@@ -387,13 +394,27 @@ def base_mocks(monkeypatch):
             }
         ),
     )
+    from fletcher.resume import source_summary
+
+    monkeypatch.setattr(source_summary, "compile_tex", mod.compile_tex)
     monkeypatch.setattr(mod, "score_bullets_for_drop", MagicMock(return_value=[0.9, 0.4, 0.7, 0.6]))
     monkeypatch.setattr(mod, "_summary_line_count", MagicMock(return_value=("ok", 4)))
-    monkeypatch.setattr(mod, "ensure_dir", MagicMock(return_value=Path("/tmp/ad_hoc")))
-    monkeypatch.setattr(mod, "build_attempt_dir", MagicMock(return_value=Path("/tmp/ad_hoc")))
+    attempt_dir = tmp_path / "ad_hoc"
+    attempt_dir.mkdir()
+    monkeypatch.setattr(mod, "ensure_dir", MagicMock(return_value=attempt_dir))
+    monkeypatch.setattr(mod, "build_attempt_dir", MagicMock(return_value=attempt_dir))
     monkeypatch.setattr(mod, "write_json", MagicMock(return_value="/tmp/keywords.json"))
     monkeypatch.setattr(mod, "write_text", MagicMock(side_effect=lambda path, _content: str(path)))
     monkeypatch.setattr(mod._config, "RAG_ENABLED", True)
+    from fletcher.llm import llm_enrich
+
+    for name in (
+        "filter_summary_keywords_with_ollama",
+        "generate_summary",
+        "validate_summary_with_ollama",
+        "validate_summary_grounding",
+    ):
+        monkeypatch.setattr(llm_enrich, name, getattr(mod, name))
     return mod
 
 
@@ -540,12 +561,15 @@ def test_log_path_set(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     result = run_ad_hoc_pipeline(title="SWE", description="job")
-    assert Path(result["log_path"]) == Path("/tmp/ad_hoc/pipeline_log.txt")
+    assert Path(result["log_path"]) == Path(result["attempt_dir"]) / "pipeline_log.txt"
 
 
-def test_no_summary_pdf_when_summary_empty(base_mocks):
+def test_no_summary_pdf_when_source_empty(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
+    parsed = base_mocks.parse_resume_file.return_value
+    parsed.experience[0].title_company_location = ""
+    parsed.projects[0].project_title = ""
     result = run_ad_hoc_pipeline(title="SWE", description="job")
     assert result["pdf_path_summary"] is None
 
@@ -603,11 +627,14 @@ def test_summary_context_includes_relevant_bullet_evidence(base_mocks):
     base_mocks.generate_summary.return_value = {"summary": "A great candidate.", "success": True}
     base_mocks.score_bullets_for_drop.return_value = [0.1, 0.9, 0.3, 0.2]
 
-    run_ad_hoc_pipeline(title="SWE", description="job")
+    result = run_ad_hoc_pipeline(title="SWE", description="job")
 
-    candidate_context = base_mocks.generate_summary.call_args.args[0]
-    assert "Relevant evidence:" in candidate_context
-    assert "Improved SQL queries." in candidate_context
+    summary = json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())[
+        "summary"
+    ]
+    assert "SWE at Acme (2021-2024): Built Python service." in summary
+    assert "Improved SQL queries." in summary
+    base_mocks.generate_summary.assert_not_called()
 
 
 def test_keywords_partitioned_correctly(base_mocks):
@@ -687,7 +714,7 @@ def test_one_high_rag_match_is_downgraded_to_summary(base_mocks):
     run_ad_hoc_pipeline(title="Software Developer", description="job")
 
     base_mocks.rewrite_bullet_targeted.assert_not_called()
-    assert base_mocks.generate_summary.call_args.args[2] == ["Azure DevOps"]
+    base_mocks.generate_summary.assert_not_called()
     log_text = base_mocks.write_text.call_args.args[1]
     assert "rag_high_downgraded" in log_text
     assert "not_enough_high_matches_for_bullet_rewrite" in log_text
@@ -720,9 +747,12 @@ def test_two_high_rag_matches_are_rewritten(base_mocks):
     assert "rag_high_downgraded" not in log_text
 
 
-def test_compile_called_once_when_no_summary(base_mocks):
+def test_primary_compile_when_no_source_summary(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
+    parsed = base_mocks.parse_resume_file.return_value
+    parsed.experience[0].title_company_location = ""
+    parsed.projects[0].project_title = ""
     run_ad_hoc_pipeline(title="SWE", description="job")
     assert base_mocks.compile_tex.call_count == 2
 
@@ -740,25 +770,19 @@ def test_compile_called_twice_when_summary_present(base_mocks):
     assert base_mocks.compile_tex.call_count == 3
 
 
-def test_summary_pdf_skipped_when_line_retry_fails(base_mocks):
-    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
-
-    base_mocks.generate_summary.side_effect = [
-        {"summary": "Too short.", "success": True},
-        {"summary": "Still too short.", "success": True},
-    ]
-    base_mocks.validate_summary_with_ollama.return_value = {
-        "success": True,
-        "accepted": True,
-        "reasons": [],
-    }
-    base_mocks._summary_line_count.return_value = ("ok", 2)
-
-    result = run_ad_hoc_pipeline(title="SWE", description="job")
-
-    assert result["pdf_path_summary"] is None
-    assert result["llm_error"] == "summary_line_count_out_of_range"
-    assert base_mocks.generate_summary.call_count == 2
+def test_short_source_summary_is_not_padded_or_retried(base_mocks):
+    base_mocks.parse_resume_file.return_value.summary = "Short source summary."
+    base_mocks._summary_line_count.return_value = ("ok", 1)
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE", description="job")
+    assert result["pdf_path_summary"] is not None
+    assert result["llm_error"] is None
+    assert base_mocks.compile_tex.call_count == 3
+    base_mocks.generate_summary.assert_not_called()
+    base_mocks._summary_line_count.assert_not_called()
+    assert (
+        json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())["summary"]
+        == "Short source summary."
+    )
 
 
 def test_summary_pdf_accepted_when_line_check_unavailable(base_mocks):
@@ -799,25 +823,25 @@ def test_summary_pdf_accepted_when_line_check_unavailable(base_mocks):
 
     assert result["pdf_path_summary"] == "/tmp/out_summary.pdf"
     assert result["llm_error"] is None
-    assert base_mocks.generate_summary.call_count == 1
+    base_mocks.generate_summary.assert_not_called()
+    base_mocks._summary_line_count.assert_not_called()
 
 
-def test_summary_pdf_skipped_when_line_check_fails(base_mocks):
-    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
-
-    base_mocks.generate_summary.return_value = {"summary": "A great candidate.", "success": True}
-    base_mocks.validate_summary_with_ollama.return_value = {
-        "success": True,
-        "accepted": True,
-        "reasons": [],
-    }
-    base_mocks._summary_line_count.return_value = ("failed", None)
-
-    result = run_ad_hoc_pipeline(title="SWE", description="job")
-
+def test_summary_compile_failure_keeps_primary_success(base_mocks):
+    ready = dict(base_mocks.compile_tex.return_value)
+    base_mocks.compile_tex.side_effect = [
+        ready,
+        ready,
+        {"compile_status": "failed", "fits_one_page": False, "page_count": None, "pdf_path": None},
+    ]
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE", description="job")
     assert result["pdf_path_summary"] is None
-    assert result["llm_error"] == "summary_line_check_failed"
-    assert base_mocks.generate_summary.call_count == 1
+    assert result["pdf_path"] == ready["pdf_path"]
+    assert result["compile_status"] == "ok"
+    assert result["llm_error"] is None
+    assert "could not be compiled" in result["summary_notice"]
+    assert "generated no-summary PDF is available" in result["summary_notice"]
+    assert base_mocks.compile_tex.call_count == 3
 
 
 def test_rejected_keyword_does_not_flow_to_summary_generation(base_mocks):
@@ -843,9 +867,13 @@ def test_rejected_keyword_does_not_flow_to_summary_generation(base_mocks):
     }
     base_mocks.generate_summary.return_value = {"summary": "Summary text.", "success": True}
 
-    run_ad_hoc_pipeline(title="Software Engineer", description="job")
+    result = run_ad_hoc_pipeline(title="Software Engineer", description="job")
 
-    assert "real-time threat intelligence" not in base_mocks.generate_summary.call_args.args[2]
+    summary = json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())[
+        "summary"
+    ]
+    assert "real-time threat intelligence" not in summary
+    base_mocks.generate_summary.assert_not_called()
 
 
 def test_partial_rewrite_safe_keyword_gets_second_chance(base_mocks):
@@ -946,9 +974,16 @@ def test_summary_keyword_fallback_caps_to_three_and_excludes_rejected_domains(ba
     }
     base_mocks.generate_summary.return_value = {"summary": "Summary text.", "success": True}
 
-    run_ad_hoc_pipeline(title="Software Engineer", description="job")
+    steps = []
+    run_ad_hoc_pipeline(
+        title="Software Engineer",
+        description="job",
+        progress_callback=lambda name, detail: steps.append((name, detail)),
+    )
 
-    summary_keywords = base_mocks.generate_summary.call_args.args[2]
+    summary_keywords = next(
+        detail["included"] for name, detail in steps if name == "summary_keyword_filter"
+    )
     assert "unit" in summary_keywords
     assert "integration" in summary_keywords
     assert "real-time threat intelligence" not in summary_keywords
@@ -1143,7 +1178,10 @@ def test_no_summary_variant_removes_existing_resume_summary(base_mocks, monkeypa
 
     assert result["compile_status"] == "ok"
     assert captured["output"] == ""
-    assert captured["output_summary"] == "Generated replacement summary."
+    source = json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())
+    assert source["summary"] == "Existing resume summary."
+    assert list(captured) == ["output"]
+    base_mocks.generate_summary.assert_not_called()
 
 
 def test_llm_job_fit_mismatch_is_logged_but_option_b_continues(base_mocks):
@@ -1298,28 +1336,6 @@ def test_skill_bucket_skips_when_resume_has_no_existing_skills(base_mocks):
 
     assert added == []
     base_mocks.bucket_skill_keywords_with_ollama.assert_not_called()
-
-
-def test_summary_validation_visible_evidence_override_for_false_negative(base_mocks):
-    from fletcher.ad_hoc_pipeline import PipelineLogger, _validate_summary_with_defense
-
-    base_mocks.validate_summary_with_ollama.return_value = {
-        "success": True,
-        "accepted": False,
-        "reasons": ["Next.js is not listed in the candidate evidence."],
-    }
-    base_mocks.validate_summary_grounding.return_value = {"accepted": True, "reasons": []}
-
-    validation, mode = _validate_summary_with_defense(
-        summary="Software developer with Next.js experience.",
-        candidate_context="Built a responsive UI using Next.js and Framer Motion.",
-        keywords=[],
-        logger=PipelineLogger(),
-    )
-
-    assert validation["accepted"] is True
-    assert mode == "llm_visible_override"
-    base_mocks.validate_summary_with_ollama.assert_called_once()
 
 
 def test_quality_terms_do_not_route_to_bullet_rewrite(base_mocks):
@@ -1579,11 +1595,16 @@ def test_summary_variant_reuses_skill_enrichment(base_mocks):
         "ignored": [],
     }
 
-    run_ad_hoc_pipeline(title="", description="job")
+    result = run_ad_hoc_pipeline(title="", description="job")
 
     assert base_mocks.bucket_skill_keywords_with_ollama.call_count == 1
-    log_text = base_mocks.write_text.call_args.args[1]
-    assert "skills_keyword_reuse" in log_text
+    primary_tex = next(
+        call.args[1]
+        for call in base_mocks.write_text.call_args_list
+        if Path(call.args[0]).name == "output.tex"
+    )
+    assert "RabbitMQ" in primary_tex
+    assert "RabbitMQ" in Path(result["tex_path_summary"]).read_text()
 
 
 def test_medium_rag_named_keyword_can_flow_to_skills(base_mocks):
@@ -1676,7 +1697,7 @@ def test_non_skill_medium_keywords_are_sent_to_skill_llm_for_rejection(base_mock
     ]
 
 
-def test_small_summary_keyword_set_uses_llm_filter(base_mocks):
+def test_source_summary_skips_llm_filter_but_preserves_skill_candidates(base_mocks):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     base_mocks.partition_keywords.return_value = (
@@ -1694,9 +1715,13 @@ def test_small_summary_keyword_set_uses_llm_filter(base_mocks):
 
     run_ad_hoc_pipeline(title="SWE", description="job")
 
-    assert base_mocks.filter_summary_keywords_with_ollama.call_count == 1
+    base_mocks.filter_summary_keywords_with_ollama.assert_not_called()
+    assert base_mocks.bucket_skill_keywords_with_ollama.call_args.kwargs["keywords"] == [
+        "collaboration",
+        "communication",
+    ]
     log_text = base_mocks.write_text.call_args.args[1]
-    assert "deterministic_fast_path" not in log_text
+    assert "source_summary_bookkeeping" in log_text
 
 
 def test_pipeline_summary_digest_logged(base_mocks):
@@ -1757,66 +1782,34 @@ def test_pipeline_marks_ollama_unavailable_as_failed(base_mocks):
     assert "LLM unavailable" in result["error"]
 
 
-def test_summary_banned_tone_d_check_does_not_retry_when_llm_validator_accepts(base_mocks):
-    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
-    from fletcher.llm.llm_enrich import validate_summary_grounding
-
-    base_mocks.validate_summary_grounding.side_effect = validate_summary_grounding
-    base_mocks.generate_summary.side_effect = [
-        {
-            "summary": "Eager to apply strong development skills in an internship.",
-            "success": True,
-            "duration_ms": 1,
-        },
-        {
-            "summary": "Software developer with supported backend delivery experience.",
-            "success": True,
-            "duration_ms": 1,
-        },
-    ]
-    base_mocks.validate_summary_with_ollama.return_value = {
-        "success": True,
-        "accepted": True,
-        "reasons": [],
-    }
-
-    run_ad_hoc_pipeline(title="SWE Intern", description="job")
-
-    assert base_mocks.generate_summary.call_count == 1
+def test_existing_user_summary_preserves_its_tone(base_mocks):
+    original = "Eager to apply strong development skills in an internship."
+    base_mocks.parse_resume_file.return_value.summary = original
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE Intern", description="job")
+    assert (
+        json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())["summary"]
+        == original
+    )
+    base_mocks.generate_summary.assert_not_called()
+    base_mocks.validate_summary_with_ollama.assert_not_called()
 
 
-def test_summary_style_retry_feedback_comes_from_llm_validator(base_mocks):
-    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
-    from fletcher.llm.llm_enrich import validate_summary_grounding
-
-    base_mocks.validate_summary_grounding.side_effect = validate_summary_grounding
-    base_mocks.generate_summary.side_effect = [
-        {
-            "summary": "Eager to apply strong development skills in an internship.",
-            "success": True,
-            "duration_ms": 1,
-            "retry_reason": "",
-        },
-        {
-            "summary": "Software developer with supported backend delivery experience.",
-            "success": True,
-            "duration_ms": 1,
-            "retry_reason": "",
-        },
-    ]
+def test_model_style_judgment_does_not_replace_user_summary(base_mocks):
+    original = "Proficient in Python from developing production services."
+    base_mocks.parse_resume_file.return_value.summary = original
     base_mocks.validate_summary_with_ollama.return_value = {
         "success": True,
         "accepted": False,
-        "reasons": ["banned_tone:eager"],
+        "reasons": ["style"],
     }
-
-    run_ad_hoc_pipeline(title="SWE Intern", description="job")
-
-    retry_feedback = base_mocks.generate_summary.call_args_list[1].kwargs["line_feedback"]
-    assert "Remove banned tone: eager." in retry_feedback
-    assert "Do not use seeking/apply/excited/eager/motivated phrasing." in retry_feedback
-    log_text = base_mocks.write_text.call_args.args[1]
-    assert "retry_reason: Remove banned tone: eager." in log_text
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE", description="job")
+    assert (
+        json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())["summary"]
+        == original
+    )
+    assert result["summary_origin"] == "source"
+    base_mocks.generate_summary.assert_not_called()
+    base_mocks.validate_summary_with_ollama.assert_not_called()
 
 
 def test_single_keyword_rewrite_failure_does_not_retry(base_mocks):
@@ -1995,50 +1988,81 @@ def test_rag_high_matches_include_alternate_candidates(monkeypatch):
     assert [candidate["bullet_idx"] for candidate in match["candidates"]] == [0, 1]
 
 
-def test_summary_retry_removes_keywords_named_in_validation_reasons(base_mocks):
-    from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
-
+def test_source_summary_does_not_inject_requested_keywords(base_mocks):
     base_mocks.partition_keywords.return_value = (
         [],
-        ["executive-ready insights", "strategic plans", "collaboration"],
+        ["executive-ready insights", "strategic plans"],
         {},
     )
     base_mocks.match_keywords_to_bullets.return_value = {
         "bullet_matches": [],
-        "summary_keywords": ["executive-ready insights", "strategic plans", "collaboration"],
+        "summary_keywords": ["executive-ready insights", "strategic plans"],
         "ignored_keywords": [],
         "scores": [],
         "rag_used": True,
     }
-    base_mocks.generate_summary.side_effect = [
-        {"summary": "Bad summary.", "success": True, "duration_ms": 1},
-        {"summary": "Better summary.", "success": True, "duration_ms": 1},
+    result = base_mocks.run_ad_hoc_pipeline(title="Product Manager", description="job")
+    summary = json.loads((Path(result["attempt_dir"]) / "source_summary.json").read_text())[
+        "summary"
     ]
-    base_mocks.validate_summary_with_ollama.side_effect = [
-        {
-            "success": True,
-            "accepted": False,
-            "reasons": ["executive-ready insights and strategic plans unsupported"],
-        },
-        {"success": True, "accepted": True, "reasons": []},
-    ]
-
-    run_ad_hoc_pipeline(title="Product Manager", description="job")
-
-    assert base_mocks.generate_summary.call_args_list[1].args[2] == ["collaboration"]
+    assert "executive-ready insights" not in summary
+    assert "strategic plans" not in summary
+    assert "Built Python service." in summary
+    base_mocks.generate_summary.assert_not_called()
+    base_mocks.validate_summary_with_ollama.assert_not_called()
 
 
-def test_bucket_below_floor_excluded(base_mocks):
+@pytest.mark.parametrize("experience_count", [1, 2])
+def test_single_bullet_entries_preserved_when_resume_fits(base_mocks, experience_count):
     from fletcher.ad_hoc_pipeline import run_ad_hoc_pipeline
 
     doc = _make_parsed_doc()
+    doc.experience[0].bullets = doc.experience[0].bullets[:experience_count]
     doc.projects[0].bullets = ["Only one."]
     base_mocks.parse_resume_file.return_value = doc
 
-    run_ad_hoc_pipeline(title="SWE", description="job")
+    result = run_ad_hoc_pipeline(title="SWE", description="job")
 
     active_bullets = base_mocks.match_keywords_to_bullets.call_args.args[1]
-    assert active_bullets == ["Built Python service.", "Improved SQL queries."]
+    assert active_bullets == doc.experience[0].bullets + ["Only one."]
+    assert result["compile_status"] == "ok"
+    assert result["fits_one_page"] is True
+    output = next(
+        call.args[1]
+        for call in base_mocks.write_text.call_args_list
+        if Path(call.args[0]).name == "output.tex"
+    )
+    assert "Side Project" in output
+    assert output.count("Only one.") == 1
+
+
+@pytest.mark.parametrize("bullets", [[], [" "]])
+def test_empty_entries_still_excluded(base_mocks, bullets):
+    doc = _make_parsed_doc()
+    doc.projects[0].bullets = bullets
+    base_mocks.parse_resume_file.return_value = doc
+
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE", description="job")
+
+    assert result["compile_status"] == "ok"
+    assert base_mocks.match_keywords_to_bullets.call_args.args[1] == doc.experience[0].bullets
+
+
+def test_single_bullet_resume_reports_failure_when_no_entry_fits(base_mocks):
+    doc = _make_parsed_doc()
+    doc.experience[0].bullets = ["One experience statement."]
+    doc.projects[0].bullets = ["One project statement."]
+    base_mocks.parse_resume_file.return_value = doc
+    base_mocks.compile_tex.return_value.update(fits_one_page=False, page_count=2)
+
+    result = base_mocks.run_ad_hoc_pipeline(title="SWE", description="job")
+
+    assert result["compile_status"] == "failed"
+    assert result["fits_one_page"] is False
+    assert result["pdf_path"] is None
+    assert result["llm_error"] == "all_buckets_exhausted"
+    assert doc.experience[0].bullets == ["One experience statement."]
+    assert doc.projects[0].bullets == ["One project statement."]
 
 
 def test_fit_to_page_drops_lowest_relevance_candidate(monkeypatch):
@@ -2194,11 +2218,14 @@ def test_job_title_similarity_adds_small_drop_score_bonus(monkeypatch):
     assert details["b1"]["score_title_bonus"] == 0.06
 
 
-def test_fit_to_page_removes_bucket_at_floor(monkeypatch):
+@pytest.mark.parametrize("bullet_count", [1, 2])
+def test_fit_to_page_removes_bucket_at_or_below_floor(monkeypatch, bullet_count):
     import fletcher.ad_hoc_pipeline as mod
     from fletcher.pipeline_logger import PipelineLogger
 
     doc = _make_parsed_doc()
+    doc.experience[0].bullets = doc.experience[0].bullets[:bullet_count]
+    doc.projects[0].bullets = doc.projects[0].bullets[:bullet_count]
     active = [("exp", "exp0"), ("proj", "proj0")]
     _bullets, sources = mod._collect_active_bullets(doc, active)
     scores = {source["bullet_id"]: 0.5 for source in sources}

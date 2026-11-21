@@ -1,4 +1,3 @@
-import { isEmptyCatalogMessage } from "../../../../form/options/catalog.ts";
 import { createHash } from "node:crypto";
 
 import {
@@ -54,10 +53,13 @@ import {
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
 import { normalizeCatalogText } from "../../../../form/questions/normalize.ts";
+import { mapVisibleOption } from "../../../../form/options/mapper.ts";
+import { employmentQuestion, referralQuestion } from "../../../../form/questions/matching.ts";
 import type { ActiveListboxEvidence } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
 import {
   isContractApprovedPrivacyChoice,
+  isRecruitmentTermsConsent,
   protectedAnswerProvenanceAllowed,
   protectedQuestionCategory,
   type ProtectedQuestionCategory,
@@ -271,10 +273,6 @@ export function createQuestionnairePageHandler(
       const mode = request.mode;
       for (const field of request.page.fields) {
         if (field.state === "hidden") continue;
-        // An optional empty catalog needs no invented selection. Required
-        // catalogs still resolve normally and remain blocked without an answer.
-        if (!field.required && ["listbox", "select", "radio"].includes(field.behavior) &&
-            field.options.length > 0 && field.options.every(option => isEmptyCatalogMessage(String(option.label)))) continue;
         if (await dependencies.fieldPresent?.(field, signal) === false) continue;
         const question = resolveQuestion(field.label);
         const category = protectedQuestionCategory(
@@ -300,6 +298,21 @@ export function createQuestionnairePageHandler(
           conditionalReveal: request.conditionalReveal ?? false,
           semanticQuestionType: testingQuestionSemanticType(field.label),
         });
+        if (!field.required) continue;
+        // Keep the page's existing decision, including with an injected resolver.
+        let consentDecision: boolean | undefined;
+        if (category === "consent") {
+          if (field.state === 'populated') continue;
+          const decision = isRecruitmentTermsConsent(field.label)
+            ? await (dependencies.profileQuery as ApplicationProfileQuery).query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal)
+            : undefined;
+          if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && typeof decision.value.value === 'boolean') {
+            consentDecision = decision.value.value;
+          } else if (!answerLaneAdmitted(mode, 'synthetic_test_default', request.answerFallbackPolicy)) {
+            recordUnset();
+            return blocked("protected_answer_denied", field.fieldId, category);
+          }
+        }
         const answer = await resolver.resolve({
           mode,
           answerFallbackPolicy: request.answerFallbackPolicy,
@@ -361,6 +374,26 @@ export function createQuestionnairePageHandler(
           return blocked("profile_answer_missing", field.fieldId, category);
         }
         const syntheticLearningDefault = answer.value.lane === "synthetic_test_default";
+        const rawEmployment = field.rawQuestion === undefined ? undefined :
+          employmentQuestion(field.rawQuestion) ?? referralQuestion(field.rawQuestion);
+        if ((field.rawOptions !== undefined || field.rawQuestion !== undefined &&
+            (rawEmployment === undefined || rawEmployment.negated)) && !syntheticLearningDefault) {
+          recordUnset();
+          return blocked("protected_answer_denied", field.fieldId, category);
+        }
+        if (category === "consent" && !syntheticLearningDefault) {
+          const intent = answer.value.intent;
+          const choice = consentDecision === undefined ? undefined : mapVisibleOption(consentDecision, field.options);
+          const matches = consentDecision !== undefined && (
+            intent.kind === 'toggle' && intent.checked === consentDecision ||
+            intent.kind === 'choice' && choice?.kind === 'matched' && intent.optionId === choice.optionId && intent.expectedOption === choice.expectedOption ||
+            intent.kind === 'text' && normalizeCatalogText(intent.value) === (consentDecision ? 'yes' : 'no')
+          );
+          if (!matches) {
+            recordUnset();
+            return blocked("protected_answer_denied", field.fieldId, category);
+          }
+        }
         if (
           category !== null &&
           !syntheticLearningDefault &&

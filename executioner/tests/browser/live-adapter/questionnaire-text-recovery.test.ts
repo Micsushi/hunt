@@ -25,7 +25,7 @@ test("real questionnaire text remount recovers once and repeated loss remains bl
           const page = await browser.newPage();
           const tag = behavior === "text" ? "input" : "textarea";
           await page.setContent(`<html data-hunt-page-id="page-recovery"><body>
-            <label>Expected weekly hours<${tag} data-hunt-target-token="target-hours"></${tag}></label>
+            <label>Expected weekly hours<${tag} required data-hunt-target-token="target-hours"></${tag}></label>
             <button>Continue</button></body></html>`);
           if (timing === "during-driver") {
             await page.locator(tag).evaluate((element, count) => {
@@ -79,7 +79,7 @@ test("real questionnaire text remount recovers once and repeated loss remains bl
             resume: { resumeId: resume.resumeId, sha256: resume.sha256 }, resumeArtifact: resume,
             page: { pageIdentity: { kind: "workday", page: "questionnaire" }, fields: [{
               fieldId: fieldId("field-hours"), target: browserTargetToken("target-hours"),
-              label: boundedText("Expected weekly hours"), required: false, behavior,
+              label: boundedText("Expected weekly hours"), required: true, behavior,
               options: [], state: "empty",
             }] },
           }, new AbortController().signal);

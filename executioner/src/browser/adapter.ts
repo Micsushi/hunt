@@ -1,4 +1,6 @@
 import type { Locator, Page } from "playwright";
+import { createHash } from "node:crypto";
+import { annotateQuestionContext } from '../../extension/question-context.js';
 
 import {
   boundedText,
@@ -99,13 +101,15 @@ export async function inspectPage(
   for (const item of raw) {
     if (item.declaredToken.length === 0) continue;
     if (item.control.kind === "button" && !nextName.test(item.name)) continue;
+    const rawOptions = item.control.kind === 'select' ? item.control.options : item.radioOptions;
+    const hasLongOptions = rawOptions?.some(option => [...option].length > 512);
     const control = normalizeControl(item.control, item.declaredToken);
     const name = boundedControlName(item.name, item.declaredToken);
     const token = browserTargetToken(item.declaredToken);
     const uploaded = uploads.get(token) ?? expectedArtifact;
     let readback = item.control.kind === "file"
       ? await inspectUploadReadback(page, item.index, uploaded)
-      : normalizeReadback(item.readback);
+      : normalizeReadback(item.readback, item.declaredToken);
     if (
       item.interaction === "composite-date" && readback.kind === "text" &&
       !await compositeDateBackingCommitted(
@@ -127,12 +131,13 @@ export async function inspectPage(
     }
     const target = {
       ...item,
-      name,
-      control,
+      // Interaction locators still need the complete physical label.
+      name: item.name,
+      control: item.control,
       readback,
       token,
-      radioOptions: item.radioOptions?.map(bounded),
-      selectedOptions: item.selectedOptions?.map(bounded),
+      radioOptions: item.radioOptions,
+      selectedOptions: item.selectedOptions,
     };
     const matches = targets.get(token);
     if (matches === undefined) targets.set(token, [target]);
@@ -141,13 +146,15 @@ export async function inspectPage(
     observations.push({
       token,
       name,
+      ...(name === item.name ? {} : {rawQuestion: item.name}),
+      ...(hasLongOptions ? {rawOptions} : {}),
       required: item.required,
       control,
       state: item.state,
       readback,
       ...(target.radioOptions === undefined || !target.token.startsWith("target-workday-")
         ? {}
-        : { options: target.radioOptions }),
+        : { options: target.radioOptions.map(option => boundedOptionName(option, item.declaredToken)) }),
     } as BrowserObservation["targets"][number]);
   }
 
@@ -272,7 +279,16 @@ export async function applyMutation(
   upload: Uint8Array | undefined,
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
-  const result = await applyMutationUnchecked(page, target, mutation, upload, timeoutMs);
+  let physical: PhysicalBrowserMutation = mutation;
+  // Only opaque long-option identities need decoding. Ordinary popup choices
+  // may not exist until the driver opens and hydrates the owned popup.
+  if (mutation.kind === 'select' && /^Unclassified option [a-f0-9]{64}$/u.test(mutation.option)) {
+    const options = target.control.kind === 'select' ? target.control.options : target.radioOptions ?? [];
+    const matches = options.filter(option => boundedOptionName(option, target.declaredToken) === mutation.option);
+    if (matches.length !== 1) return matches.length > 1 ? 'ambiguous' : 'invalid';
+    physical = {...mutation, option: matches[0]!};
+  }
+  const result = await applyMutationUnchecked(page, target, physical, upload, timeoutMs);
   if (result !== "applied") return result;
   const sharedType = sharedUiTypeForBrowserControl(target.control);
   const owner = page.locator(`[data-hunt-target-token="${target.declaredToken}"]`);
@@ -291,10 +307,13 @@ export async function applyMutation(
   return "applied";
 }
 
+type PhysicalBrowserMutation = Exclude<BrowserMutation, {kind: 'select'}> |
+  {kind: 'select'; target: ReturnType<typeof browserTargetToken>; option: string};
+
 async function applyMutationUnchecked(
   page: Page,
   target: ResolvedBrowserTarget,
-  mutation: BrowserMutation,
+  mutation: PhysicalBrowserMutation,
   upload: Uint8Array | undefined,
   timeoutMs: number,
 ): Promise<"applied" | "ambiguous" | "invalid"> {
@@ -2128,12 +2147,15 @@ export async function clickNext(
 }
 
 async function inspectControls(page: Page): Promise<RawControl[]> {
+  await page.evaluate(annotateQuestionContext);
   const raw = await page.locator(controlSelector).evaluateAll((elements, {
     checkboxOptionsAttribute, checkboxSelectedOptionAttribute,
   }) => {
     const normalize = (value: string | null | undefined): string =>
       (value ?? "").replace(/\s+/gu, " ").trim();
     const nameOf = (element: Element): string => {
+      const context = element.getAttribute('data-hunt-question-context');
+      if (context) return context;
       const workdayField = element.closest(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
       );
@@ -2504,7 +2526,9 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
       } else if (element instanceof HTMLSelectElement) {
         const options = [...element.options].map((option) => normalize(option.text)).filter(Boolean) as never[];
         control = { kind: "select", element: "select", options };
-        const selected = element.selectedOptions.length >= 1 ? normalize(element.selectedOptions[0]?.text) : "";
+        const selectedOption = element.selectedOptions[0];
+        const selected = selectedOption && !selectedOption.disabled && selectedOption.value !== ''
+          ? normalize(selectedOption.text) : "";
         readback = { kind: "selected", option: selected.length > 0 ? selected as never : null };
         if (element.multiple) {
           interaction = "multi-select";
@@ -2958,11 +2982,10 @@ function bounded(value: string) {
 }
 
 function boundedControlName(value: string, declaredToken: string) {
-  // Workday tenants can use a complete policy acknowledgement as a field
-  // label. Only Workday-bound controls retain a stable prefix; every other
-  // browser target keeps the shared fail-closed structural-string contract.
-  return declaredToken.startsWith("target-workday-")
-    ? boundedText([...value].slice(0, 512).join(""))
+  // A truncated declaration can reverse meaning. Keep an opaque structural
+  // identity and retain complete text separately for the private matching backlog.
+  return [...value].length > 512
+    ? boundedText(`Unclassified question ${createHash('sha256').update(value).digest('hex')}`)
     : boundedText(value);
 }
 
@@ -3152,21 +3175,27 @@ async function checkboxOwnerStructure(group: Locator) {
   });
 }
 
+function boundedOptionName(value: string, declaredToken: string) {
+  return [...value].length > 512
+    ? boundedText(`Unclassified option ${createHash('sha256').update(value).digest('hex')}`)
+    : boundedText(value);
+}
+
 function normalizeControl(control: BrowserControl, declaredToken: string): BrowserControl {
   if (control.kind === "choice") return {
     ...control,
     group: boundedControlName(control.group, declaredToken),
   };
   if (control.kind === "select") {
-    return { ...control, options: control.options.map((option) => bounded(option)) };
+    return { ...control, options: control.options.map((option) => boundedOptionName(option, declaredToken)) };
   }
   return control;
 }
 
-function normalizeReadback(readback: BrowserReadback): BrowserReadback {
+function normalizeReadback(readback: BrowserReadback, declaredToken = ''): BrowserReadback {
   if (readback.kind === "text") return { kind: "text", value: bounded(readback.value) };
   if (readback.kind === "selected") {
-    return { kind: "selected", option: readback.option === null ? null : bounded(readback.option) };
+    return { kind: "selected", option: readback.option === null ? null : boundedOptionName(readback.option, declaredToken) };
   }
   return readback;
 }

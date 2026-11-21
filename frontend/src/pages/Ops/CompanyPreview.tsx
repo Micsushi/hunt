@@ -57,22 +57,23 @@ export function CompanyPreview() {
         <div role="status">
           <p>
             {result.status === 'ok'
-              ? 'Catalog checked.'
+              ? result.sample.length === 0
+                ? 'No jobs matched the current search settings.'
+                : 'Matching jobs.'
               : result.status === 'needs_setup'
-                ? 'Choose which published boards to add.'
+                ? 'Add each board you want to search in Settings.'
                 : result.status === 'needs_scan'
                   ? 'This platform needs a full scheduled scan.'
                   : 'Coverage could not be fully verified.'}{' '}
             Nothing has been saved.
           </p>
-          {result.plan && <p>Hiring platform: {result.plan.method}.</p>}
           {result.error && <p>Check result: {result.error.replace(/_/g, ' ')}.</p>}
           {!!result.plan?.boards?.length && (
             <ul>
               {result.plan.boards.map((board) => (
                 <li key={board.url}>
                   <a href={board.url} target="_blank" rel="noreferrer">
-                    {board.method}: {board.url}
+                    {board.url}
                   </a>
                 </li>
               ))}
@@ -90,9 +91,6 @@ export function CompanyPreview() {
                 </li>
               ))}
             </ul>
-          )}
-          {result.status === 'ok' && result.sample.length === 0 && (
-            <p>No jobs matched the current search settings.</p>
           )}
         </div>
       )}

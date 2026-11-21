@@ -796,6 +796,8 @@ def _process_next_fletcher_job() -> bool:
                 "fits_one_page": result.get("fits_one_page"),
                 "error_type": result.get("error_type"),
                 "llm_error": result.get("llm_error"),
+                "summary_outcome": result.get("summary_outcome"),
+                "summary_notice": result.get("summary_notice"),
                 "error": result.get("error"),
                 "role_family": result.get("role_family"),
                 "job_level": result.get("job_level"),
@@ -945,10 +947,6 @@ def render_nav(current_path):
           {_nav_link("Jobs", "/jobs", current_path=current_path)}
           {_nav_link("Queue & health", "/health-view", current_path=current_path, exact=True)}
           {_nav_link("Ops", "/ops", current_path=current_path, exact=True)}
-        </div>
-        <div class="nav-group nav-group-secondary">
-          <a class="nav-link nav-link-secondary" href="/health" data-no-app-nav="true">Raw health</a>
-          <a class="nav-link nav-link-secondary" href="/api/summary" data-no-app-nav="true">Raw API</a>
         </div>
       </div>
     """
@@ -1699,21 +1697,6 @@ def render_layout(title, body, *, current_path="/"):
             });
           return;
         }
-        const summaryBtn = target && target.closest('#ops-fetch-summary');
-        if (summaryBtn) {
-          event.preventDefault();
-          fetch('/api/summary', { headers: { Accept: 'application/json' } })
-            .then((r) => r.json())
-            .then((data) => {
-              const pre = document.getElementById('ops-summary-preview');
-              if (pre) {
-                pre.style.display = 'block';
-                pre.textContent = JSON.stringify(data, null, 2);
-              }
-              showToast('Loaded /api/summary', 'ok');
-            })
-            .catch((e) => showToast(e.message || 'Fetch failed', 'error'));
-        }
         const bulkDry = target && target.closest('#jobs-bulk-dry-run');
         const bulkRun = target && target.closest('#jobs-bulk-run');
         if (bulkDry || bulkRun) {
@@ -2126,20 +2109,6 @@ def render_queue_jump_strip(summary):
     """
 
 
-def render_monitoring_endpoints_panel():
-    return """
-    <div class="panel">
-      <h2>Monitoring endpoints</h2>
-      <p class="muted">Same queue snapshot in formats for scripts, Prometheus, and UIs.</p>
-      <div class="actions" style="flex-wrap:wrap;gap:8px;">
-        <a class="pill" href="/health" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /health (JSON)</a>
-        <a class="pill" href="/api/summary" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /api/summary</a>
-        <a class="pill" href="/metrics" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /metrics</a>
-      </div>
-    </div>
-    """
-
-
 def render_auth_status(summary):
     linkedin_auth = summary.get("auth", {}).get("linkedin", {})
     events = summary.get("events", {}) or {}
@@ -2298,8 +2267,7 @@ def render_resume_keywords_panel(row, attempts):
         return ""
     return f"""
     <div class="panel">
-      <h2>Keywords extracted (C2)</h2>
-      <p class="muted" style="margin-top:0;">Phrases extracted from the job description and used to score/shape the tailored resume.</p>
+      <h2>Keywords</h2>
       {_render_keyword_pills("Must-have", must)}
       {_render_keyword_pills("Nice-to-have", nice)}
       {_render_keyword_pills("Tools & technologies", tools)}
@@ -2374,7 +2342,7 @@ def render_ai_summary_panel(attempts: list) -> str:
     return f"""
     <div class="panel">
       <h2>Resume summary {status_badge}</h2>
-      <p class="muted" style="margin-top:0;margin-bottom:12px;">Generated from mid-tier JD keywords. Not added to the resume - review only.</p>
+      <p class="muted" style="margin-top:0;margin-bottom:12px;">Preview only. Not added to the resume.</p>
       {body}
     </div>
     """
@@ -2390,9 +2358,6 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
         jid = job_id or attempt.get("job_id")
         created = format_text(attempt.get("created_at") or "-")
         status = attempt.get("status") or "-"
-        family = format_text(attempt.get("role_family") or "-")
-        level = format_text(attempt.get("job_level") or "-")
-        model = format_text(attempt.get("model_name") or "-")
 
         status_cls = "done" if "done" in status else ("failed" if "fail" in status else "pending")
         selected_badge = ""
@@ -2423,10 +2388,8 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
                 f'font-family:Georgia,serif;font-size:0.9rem;line-height:1.55;color:#2a2a2a;">'
                 f"{html.escape(summary_text)}</blockquote>"
             )
-        else:
-            summary_html = '<p class="muted" style="margin:10px 0 0 0;font-size:0.85rem;">No AI summary for this attempt.</p>'
-
-        flags = format_text(attempt.get("concern_flags") or "-")
+        flags = attempt.get("concern_flags")
+        flags_html = f'<p class="muted tiny">Flags: {format_text(flags)}</p>' if flags else ""
 
         cards.append(f"""
         <div style="background:var(--panel-strong);border:1px solid var(--line);border-radius:14px;
@@ -2434,17 +2397,11 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
           <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
             <div>
               {selected_badge}<span class="status {html.escape(status_cls)}" style="font-size:0.78rem;padding:2px 7px;">{html.escape(status)}</span>
-              <span class="muted tiny" style="margin-left:8px;">ID {html.escape(str(aid or "?"))}</span>
               <span class="muted tiny" style="margin-left:8px;">{created}</span>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">{links_html}</div>
           </div>
-          <div style="display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 0 0;">
-            <span class="muted tiny">Family: <strong>{family}</strong></span>
-            <span class="muted tiny">Level: <strong>{level}</strong></span>
-            <span class="muted tiny">Model: <strong>{model}</strong></span>
-            <span class="muted tiny">Flags: <strong>{flags}</strong></span>
-          </div>
+          {flags_html}
           {summary_html}
         </div>
         """)
@@ -2452,7 +2409,6 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
     return f"""
     <div class="panel">
       <h2>Resume history</h2>
-      <p class="muted" style="margin-top:0;">Each card is one generation run. Click Download PDF to get that version. AI summaries are shown below each card - review only, not yet on the resume.</p>
       {"".join(cards)}
     </div>
     """
@@ -2583,7 +2539,6 @@ def render_source_toolbar(
 def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
     return f"""
     <form class="panel" method="get" action="/jobs" style="margin-bottom: 18px;">
-      <p class="muted" style="margin:0 0 12px;">Filter the list below. Status chips are the same filters as the Status menu.</p>
       <div class="filter-form-grid">
         <div style="grid-column: span 2; min-width:min(100%, 280px);">
           <label class="label" for="q">Search</label>
@@ -2726,7 +2681,7 @@ def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, t
     <details class="jobs-advanced-panel">
       <summary>Advanced: requeue many rows by filters (not checkboxes)</summary>
       <div class="jobs-advanced-body">
-        <p class="muted" style="margin-top:0;">Use this when you want every row that matches your <strong>current filters</strong> (source, status tab, search, tag), not only ticked rows. Choose which stored enrichment states to send back to <strong>Pending</strong>. Server caps batch size.</p>
+        <p class="muted" style="margin-top:0;">Applies to all jobs matching the current filters, not just selected rows. Server caps batch size.</p>
         <div id="jobs-bulk-panel"
              data-source="{html.escape(source)}"
              data-status="{html.escape(status)}"
@@ -2963,15 +2918,14 @@ def render_ops_console(*, summary, last_updated: int | None = None):
         banner = f"""
         <div class="panel" style="border-color: var(--good); background: var(--good-soft);">
           <p><strong>Done.</strong> Requeued <strong>{last_updated}</strong> failed row(s) back to <code>pending</code>.</p>
-          <p class="muted">The next scheduled scrape or a manual enrichment run will pick them up.</p>
         </div>
         """
     return f"""
     {banner}
     <div class="panel">
-      <h2>Transient failures : one-click requeue</h2>
-      <p class="muted">Moves <strong>failed</strong> rows whose last error starts with <code>auth_expired:</code> or <code>rate_limited:</code> back to <strong>pending</strong> (clears retry timers and artifacts on those rows). Use after auth is fixed or a rate-limit window has passed.</p>
-      <p>Current failed counts from summary : <strong>auth_expired</strong> {auth_n}, <strong>rate_limited</strong> {rate_n}.</p>
+      <h2>Retry failed jobs</h2>
+      <p class="muted">Reconnect or wait for the rate limit to end before retrying. Requeue clears retry timers and failure artifacts.</p>
+      <p>Sign-in expired: <strong>{auth_n}</strong> · Rate limited: <strong>{rate_n}</strong></p>
       <div class="actions" style="flex-wrap: wrap; gap: 10px;">
         <button type="button" class="pill active ops-requeue-btn" data-source="linkedin" data-codes="auth_expired,rate_limited">LinkedIn : both codes</button>
         <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="auth_expired">LinkedIn : auth_expired only</button>
@@ -2981,7 +2935,7 @@ def render_ops_console(*, summary, last_updated: int | None = None):
       </div>
     </div>
     <div class="panel">
-      <h2>Custom requeue (form, no JavaScript)</h2>
+      <h2>Retry by error</h2>
       <form method="post" action="/ops/requeue-errors" class="stack" style="gap: 12px;">
         <label>Source
           <select name="source">
@@ -2999,26 +2953,8 @@ def render_ops_console(*, summary, last_updated: int | None = None):
       </form>
     </div>
     <div class="panel">
-      <h2>Test and debug endpoints</h2>
-      <p class="muted">Open in a new tab for raw machine output, or use the button to preview JSON in-page.</p>
-      <div class="actions" style="flex-wrap: wrap; gap: 10px;">
-        <a class="pill" href="/health" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /health</a>
-        <a class="pill" href="/api/summary" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /api/summary</a>
-        <a class="pill" href="/metrics" target="_blank" rel="noreferrer" data-no-app-nav="true">GET /metrics</a>
-        <button type="button" class="pill" id="ops-fetch-summary">Fetch /api/summary (here)</button>
-      </div>
-      <pre id="ops-summary-preview" style="display:none; max-height: 320px; overflow: auto; margin-top: 12px; font-size: 0.85rem;"></pre>
-    </div>
-    <div class="panel">
-      <h2>API : scripts and automation</h2>
-      <p class="muted">POST JSON to <code>/api/ops/requeue-errors</code> with body <code>{{"source":"linkedin","error_codes":["auth_expired","rate_limited"]}}</code>.</p>
-      <p class="muted">Bulk filters : <code>POST /api/ops/bulk-requeue</code> with <code>source</code>, <code>status</code> (review tab), <code>q</code>, <code>tag</code>, <code>target_statuses</code>, <code>dry_run</code>. Stale processing : <code>POST /api/ops/requeue-stale-processing</code>.</p>
-      <p class="muted">When <code>REVIEW_OPS_TOKEN</code> is set, send header <code>X-Review-Ops-Token</code> or <code>Authorization: Bearer …</code> on those POSTs (forms pick it up automatically in this UI).</p>
-      <p class="muted">CLI equivalent : <code>python3 scripts/hunterctl.py requeue-retryable</code> or <code>requeue-errors --error-code …</code> from the Hunt repo with <code>HUNT_DB_PATH</code> set.</p>
-    </div>
-    <div class="panel">
       <h2>Stale processing reset</h2>
-      <p class="muted">Same maintenance rule as DB init : old <code>processing</code> claims go back to <code>pending</code>.</p>
+      <p class="muted">Returns interrupted jobs to the queue.</p>
       <div class="actions" style="flex-wrap:wrap;">
         <button type="button" class="pill active" id="ops-stale-reset">Requeue stale processing</button>
         <span class="muted" id="ops-stale-result"></span>
@@ -3687,6 +3623,8 @@ async def api_fletcher_tailor(
                 "compile_status": result.get("compile_status"),
                 "fits_one_page": result.get("fits_one_page"),
                 "llm_error": result.get("llm_error"),
+                "summary_outcome": result.get("summary_outcome"),
+                "summary_notice": result.get("summary_notice"),
                 "error_type": result.get("error_type"),
                 "error": result.get("error"),
                 "review_id": review_id,
@@ -3703,6 +3641,8 @@ async def api_fletcher_tailor(
                 "compile_status": result.get("compile_status"),
                 "fits_one_page": result.get("fits_one_page"),
                 "llm_error": result.get("llm_error"),
+                "summary_outcome": result.get("summary_outcome"),
+                "summary_notice": result.get("summary_notice"),
                 "error_type": result.get("error_type") or "PDFGenerationError",
                 "error": result.get("error")
                 or result.get("llm_error")
@@ -3722,6 +3662,8 @@ async def api_fletcher_tailor(
             "compile_status": result.get("compile_status"),
             "fits_one_page": result.get("fits_one_page"),
             "llm_error": result.get("llm_error"),
+            "summary_outcome": result.get("summary_outcome"),
+            "summary_notice": result.get("summary_notice"),
             "error_type": result.get("error_type"),
             "error": result.get("error"),
             "review_id": review_id,
@@ -4891,7 +4833,6 @@ def render_runtime_state_timeline_panel():
     return f"""
     <div class="panel">
       <h2>Runtime state (recent)</h2>
-      <p class="muted">Latest keys from the <code>runtime_state</code> table (includes LinkedIn auth markers, rate-limit flags, and review audit tail).</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Key</th><th>Updated</th><th>Value (trimmed)</th></tr></thead>
@@ -4918,7 +4859,6 @@ def render_review_audit_panel():
     return f"""
     <div class="panel">
       <h2>Review audit (recent)</h2>
-      <p class="muted">Last writes from the control plane (bulk requeue, stale reset, etc.).</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>At</th><th>Action</th><th>Detail</th></tr></thead>
@@ -4929,34 +4869,12 @@ def render_review_audit_panel():
     """
 
 
-def render_systemd_help_panel():
-    return """
-    <div class="panel">
-      <h2>systemd and journalctl (host)</h2>
-      <p class="muted">Replace unit names with whatever you use on the server. These are typical patterns for inspecting Hunt-related services.</p>
-      <pre style="white-space: pre-wrap;"># Follow logs for a service
-sudo journalctl -u hunt-review.service -f
-
-# Last 200 lines since boot
-sudo journalctl -u hunt-c1-enrichment.service -n 200 --no-pager
-
-# Errors since yesterday
-sudo journalctl -u hunt-review.service --since yesterday -p err --no-pager
-
-# Timer-triggered jobs (if using .timer units)
-systemctl list-timers | grep -i hunt
-</pre>
-    </div>
-    """
-
-
 @app.get("/legacy/health-view", response_class=HTMLResponse)
 def health_view(_auth: str = Depends(require_auth)):
     summary = get_review_queue_summary()
     body = f"""
     <section class="hero">
       <h1>Queue &amp; health</h1>
-      <p>LinkedIn auth, runtime events, full counts by status and source, and enrichment failure codes. The <a href="/" data-app-nav="true">Overview</a> page only shows shortcuts and sample rows : use this page when you need the complete picture.</p>
     </section>
     <section class="stack">
       {render_auth_status(summary)}
@@ -4968,8 +4886,6 @@ def health_view(_auth: str = Depends(require_auth)):
       </div>
       {render_runtime_state_timeline_panel()}
       {render_review_audit_panel()}
-      {render_systemd_help_panel()}
-      {render_monitoring_endpoints_panel()}
     </section>
     """
     return HTMLResponse(render_layout("Queue & health", body, current_path="/health-view"))
@@ -4990,7 +4906,6 @@ def ops_console(
     body = f"""
     <section class="hero">
       <h1>Operator console</h1>
-      <p>Bulk requeue for common transient enrichment failures, quick links to raw JSON and metrics, and the same POST API the CLI uses. Intended as the primary C1 control surface alongside job browse.</p>
     </section>
     <section class="stack">
       {render_ops_console(summary=summary, last_updated=updated)}
@@ -5613,7 +5528,6 @@ def dashboard(request: Request, _auth: str = Depends(require_auth)):
     body = f"""
     <section class="hero">
       <h1>Overview</h1>
-      <p>Quick entry to filtered job lists and a small sample of rows that often need attention. For full counts, auth detail, and failure tables open <a href="/health-view" data-app-nav="true">Queue &amp; health</a> : for bulk requeue and API tests use <a href="/ops" data-app-nav="true">Ops</a>.</p>
     </section>
     <section class="stack">
       {render_queue_jump_strip(summary)}
@@ -5665,7 +5579,6 @@ def jobs_page(
     body = f"""
     <section class="hero">
       <h1>Jobs</h1>
-      <p>Filter with the form and chips, tick rows for bulk actions (requeue, set status, delete), or open a row for detail. The <strong>Queue</strong> column shows when a job is flagged to run before others : it is not a control.</p>
     </section>
     <section class="cards">{render_summary_cards(summary)}</section>
     {render_auth_status(summary) if source in ("all", "linkedin") else ""}
@@ -5734,7 +5647,6 @@ def job_detail(
       </div>
       <div class="panel">
         <h2>Operator</h2>
-        <p class="muted">Notes and tags live on the job row. Priority is the <code>jobs.priority</code> flag for workers that honor it.</p>
         <div class="field" style="margin-bottom: 10px;">
           <div class="label">Priority flag</div>
           <div class="value">{format_text(row.get("priority"))}</div>
@@ -5779,8 +5691,7 @@ def job_detail(
       {render_ai_summary_panel(resume_attempts)}
       {render_resume_history_cards(resume_attempts, job_id=job_id)}
       <div class="panel">
-        <h2>Resume attempts (raw table)</h2>
-        <p class="muted" style="margin-top:0;">Each row is one generation run. Click PDF/TeX to view that version. LLM I/O shows the prompt sent to Ollama and the raw response.</p>
+        <h2>Resume attempts</h2>
         {render_resume_attempts(resume_attempts, job_id=job_id)}
       </div>
       <div class="panel">

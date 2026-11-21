@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { ApplicationPause, fillApplication } from "../../src/product/engine.ts";
-import { applicantProfile } from "../../src/product/sources.ts";
-import { accountFixture, applicationFixture } from "./fixture.ts";
+import { fixtureApplicantProfile, accountFixture, applicationFixture } from "./fixture.ts";
 
 test("missing answers reload only a bound required empty busy catalog and only once", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
@@ -34,7 +33,7 @@ test("missing answers reload only a bound required empty busy catalog and only o
       page.reload = async options => { const result = await reload(options); if (scenario === "persistent") await install(); return result; };
       const stages: string[] = [];
       const fill = fillApplication(page, { url,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+        profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.timeout(25_000), stage => {
         stages.push(stage);
@@ -51,7 +50,7 @@ test("missing answers reload only a bound required empty busy catalog and only o
   } finally { await browser.close(); }
 });
 
-test("unverified saved Review or Experience rewinds and verifies the complete draft", { timeout: 60_000 }, async () => {
+test("saved Review or Experience continues without rewinding and requires owner review", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
@@ -67,25 +66,20 @@ test("unverified saved Review or Experience rewinds and verifies the complete dr
       await page.goto(url);
       const stages: string[] = [];
       const fill = fillApplication(page, { url, learningRoot,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+        profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.timeout(25_000), stage => stages.push(stage));
-      if (scenario === "bad-summary") await assert.rejects(fill);
-      else if (canGoBack) {
-        const result = await fill;
-        assert.ok(result.completedPages > 0);
-        assert.ok(stages.includes("Filling profile"));
-        assert.equal(await page.evaluate("window.rewinds"), 1);
-      } else await assert.rejects(fill, /Open My Information/);
-      if (canGoBack) {
-        const attempt = readdirSync(learningRoot)[0]!;
-        const journal = JSON.parse(readFileSync(join(learningRoot, attempt, "question-answer-learning.json"), "utf8"));
-        const question = journal.questions[0];
-        assert.equal(question.uiType, "select");
-        assert.deepEqual(question.possibleAnswers, ["Select One", "Yes", "No"]);
-        assert.equal(question.monitorBinding, null);
-        assert.equal(question.verificationResult, "not_attempted");
-        assert.equal(question.chosenAnswer, null);
+      const result = await fill;
+      assert.equal(result.needsOwnerReview, true);
+      assert.ok(stages.includes("Continuing saved application"));
+      assert.equal(await page.evaluate("window.rewinds"), undefined);
+      const verification=JSON.parse(readFileSync(join(learningRoot,"review-verification.json"),"utf8"));
+      assert.equal(verification.status,"owner_review_required");
+      assert.equal(verification.earlierPagesNotReverified,true);
+      if(scenario==="experience")assert.ok(result.completedPages>0);
+      else {
+        assert.equal(result.completedPages,0);
+        assert.equal(verification.reason,"current_run_expectations_absent");
       }
       assert.equal(await page.evaluate("submits"), 0);
       await page.close();
@@ -94,11 +88,11 @@ test("unverified saved Review or Experience rewinds and verifies the complete dr
   } finally { await browser.close(); }
 });
 
-test("account entry prefers existing sign-in and follows creation without retrying rejection", { timeout: 90_000 }, async () => {
+test("account entry uses existing sign-in only and never creates or accepts terms", { timeout: 90_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
-    for (const scenario of ["created", "rejected", "existing-inline"]) {
+    for (const scenario of ["created", "rejected", "existing-inline", "terms-unchecked"]) {
       const reject = scenario === "rejected";
       const page = await browser.newPage();
       let fixture = accountFixture
@@ -108,6 +102,7 @@ test("account entry prefers existing sign-in and follows creation without retryi
             ? `document.querySelector('#error').innerHTML='<p data-automation-id="accountNotFoundError">Account not found</p>';`
             : "profile();"}}`)
         .replace("else signIn();", "else createAccount();");
+      if (scenario === "terms-unchecked") fixture=fixture.replace('type="checkbox" checked','type="checkbox"');
       if (scenario === "existing-inline") {
         fixture = fixture.replace('data-automation-id="createAccountPage"', 'data-automation-id="signInFormo"')
           .replace("root.querySelector('button').onclick=()=>{sessionStorage.setItem('created','yes');signIn();};",
@@ -118,10 +113,17 @@ test("account entry prefers existing sign-in and follows creation without retryi
       await page.goto(url);
       const stages: string[] = [];
       const fill = fillApplication(page, { url,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+        profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
         credentials: { email: "fixture@example.invalid", password: "Synthetic-only-123!" },
+        recordAccountAction: () => {},
       }, AbortSignal.timeout(25_000), stage => stages.push(stage));
+      if (scenario !== "existing-inline") {
+        await assert.rejects(fill,/showing account creation/);
+        assert.equal(await page.locator('[data-automation-id="createAccountCheckbox"]').isChecked(),scenario !== "terms-unchecked");
+        assert.equal(await page.evaluate("sessionStorage.getItem('created')"),null);
+        await page.close();continue;
+      }
       if (reject) await assert.rejects(fill, /site rejected account access/);
       else assert.match((await fill).reviewDigest, /^[a-f0-9]{64}$/);
       assert.ok(stages.includes(scenario === "existing-inline" ? "Opening existing account sign-in" : "Signing in after account creation"));
@@ -165,7 +167,7 @@ test("employer error recovery waits for delayed readiness and stops at its reloa
       }) as typeof page.evaluate;
       const controller = new AbortController();
       const fill = fillApplication(page, { url,
-        profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+        profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.any([controller.signal, AbortSignal.timeout(100_000)]), stage => {
         stages.push(stage);
@@ -188,7 +190,7 @@ test("employer error recovery waits for delayed readiness and stops at its reloa
 });
 
 
-test("administrator reset follows email link and resumes the application", { timeout: 60_000 }, async () => {
+test("administrator reset pauses without requesting an email or changing the password", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
@@ -203,20 +205,20 @@ test("administrator reset follows email link and resumes the application", { tim
         : reset ? applicationFixture
         : `<div role="alert"><p>You need to reset your password due to an administrator request. Click Forgot Password to continue.</p></div><button data-automation-id="forgotPasswordLink" onclick="document.body.innerHTML='<input data-automation-id=email><button data-automation-id=resetPasswordButton onclick=resetRequested()>Reset Password</button>'">Forgot password</button>` }));
     await page.goto(url);
-    const result = await fillApplication(page, { url,
-      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+    const result = fillApplication(page, { url,
+      profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
       resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       credentials: { email: "fixture@example.invalid", password: "Synthetic-only-123!" },
+      recordAccountAction:()=>{},
       verifyEmail: async target => { links++; await target.goto("https://fixture.wd1.myworkdayjobs.com/resetPassword?token=synthetic"); },
     }, AbortSignal.timeout(45_000), () => {});
-    assert.match(result.reviewDigest, /^[a-f0-9]{64}$/);
-    assert.equal(requests, 1); assert.equal(links, 1); assert.equal(reset, true);
-    assert.equal(await page.evaluate("submits"), 0);
+    await assert.rejects(result,/requires a password reset/);
+    assert.equal(requests, 0); assert.equal(links, 0); assert.equal(reset, false);
   } finally { await browser.close(); }
 });
 
 
-test("stalled saved-draft Back reopens the posting once and verifies the complete application", { timeout: 60_000 }, async () => {
+test("saved-draft continuation ignores stalled Back and never reopens the posting", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
@@ -226,10 +228,10 @@ test("stalled saved-draft Back reopens the posting once and verifies the complet
     const url = "https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1";
     await page.goto(url);
     const result = await fillApplication(page, { url,
-      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+      profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
       resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
     }, AbortSignal.timeout(45_000), () => {});
-    assert.equal(loads, 2); assert.ok(result.completedPages > 0);
+    assert.equal(loads, 1); assert.ok(result.completedPages > 0); assert.equal(result.needsOwnerReview,true);
     assert.equal(await page.evaluate("submits"), 0);
   } finally { await browser.close(); }
 });
@@ -264,7 +266,7 @@ for (const late of [true, false]) test(`application entry ${late ? "accepts a ve
     };
     await page.goto(url); const stages: string[] = [];
     const fill = fillApplication(page, { url,
-      profile: applicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }),
+      profile: fixtureApplicantProfile({ given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid", previously_worked_for_organization: "false" }),
       resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
     }, AbortSignal.timeout(45_000), stage => stages.push(stage));
     if (late) {
@@ -286,14 +288,14 @@ for (const required of [false, true]) test(`assessment stage ${required ? "repor
     const fixture=applicationFixture.replace('review();', 'assessment();').replace('function review()', `function assessment(){root.innerHTML='<section data-automation-id="takeAssessmentPage"><h2>Take Assessment</h2><button data-automation-id="inlineAssessmentButton">Take Assessment</button><button data-automation-id="pageFooterNextButton">Save and Continue</button></section>';root.querySelector('[data-automation-id="pageFooterNextButton"]').onclick=()=>{${required ? `root.insertAdjacentHTML('beforeend','<div role="alert">You must complete the assessment test to continue with your job application.</div>');` : 'review();'}};} function review()`);
     await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:fixture}));
     const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';await page.goto(url);
-    const run=fillApplication(page,{url,profile:applicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.invalid'}),resume:Buffer.from('%PDF-1.4 synthetic fixture')},AbortSignal.timeout(45000),()=>{});
+    const run=fillApplication(page,{url,profile:fixtureApplicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.invalid',previously_worked_for_organization:'false'}),resume:Buffer.from('%PDF-1.4 synthetic fixture')},AbortSignal.timeout(45000),()=>{});
     if(required)await assert.rejects(run,/requires an assessment before Review/);else assert.match((await run).reviewDigest,/^[a-f0-9]{64}$/);
     assert.equal(await page.evaluate('submits'),0);
   }finally{await browser.close();}
 });
 
 
-test("confirmed existing account recovers a rejected sign-in once", {timeout:60000}, async () => {
+test("rejected sign-in never falls back to account creation or reset", {timeout:60000}, async () => {
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage();let reset=false,requests=0,links=0,creates=0;
@@ -309,7 +311,7 @@ test("confirmed existing account recovers a rejected sign-in once", {timeout:600
       signIn();</script></body>`;
     await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:route.request().url().includes('/resetPassword') ? '<input data-automation-id="password" type="password"><input data-automation-id="verifyPassword" type="password"><button data-automation-id="resetPasswordSubmitButton" onclick="resetDone().then(()=>document.body.innerHTML=\'Password reset\')">Reset</button>' : reset?applicationFixture:account}));
     const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';await page.goto(url);
-    const result=await fillApplication(page,{url,profile:applicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.invalid'}),resume:Buffer.from('%PDF-1.4 synthetic fixture'),credentials:{email:'fixture@example.invalid',password:'Synthetic-only-123!'},verifyEmail:async target=>{links++;await target.goto('https://fixture.wd1.myworkdayjobs.com/resetPassword?token=synthetic');}},AbortSignal.timeout(50000),()=>{});
-    assert.match(result.reviewDigest,/^[a-f0-9]{64}$/);assert.equal(creates,1);assert.equal(requests,1);assert.equal(links,1);assert.equal(await page.evaluate('submits'),0);
+    const result=fillApplication(page,{url,recordAccountAction:()=>{},profile:fixtureApplicantProfile({given_name:'Synthetic',family_name:'Applicant',email_address:'fixture@example.invalid',previously_worked_for_organization:'false'}),resume:Buffer.from('%PDF-1.4 synthetic fixture'),credentials:{email:'fixture@example.invalid',password:'Synthetic-only-123!'},verifyEmail:async target=>{links++;await target.goto('https://fixture.wd1.myworkdayjobs.com/resetPassword?token=synthetic');}},AbortSignal.timeout(50000),()=>{});
+    await assert.rejects(result,/site rejected account access/);assert.equal(creates,0);assert.equal(requests,0);assert.equal(links,0);assert.equal(reset,false);
   }finally{await browser.close();}
 });

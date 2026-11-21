@@ -9,6 +9,12 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "extension/question-context.js",
+    "extension/question-context.d.ts",
+    "extension/shared-choice-widget.js",
+    "extension/shared-choice-widget.d.ts",
+    "extension/workday-account.js",
+    "extension/workday-account.d.ts",
     "docs/corpus-release.md",
     "docs/corpus-acceptance-summary.md"
   ],
@@ -20,6 +26,7 @@
   },
   "scripts": {
     "product": "node scripts/run-product.ts",
+    "mcp:product": "node src/product/mcp.ts",
     "test": "node tests/run.ts",
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",

@@ -1,5 +1,6 @@
+import { observeWorkdayPage } from '../page-observation.ts';
 import { createHash } from "node:crypto";
-import type { Locator, Page } from "playwright";
+import type { JSHandle, Locator, Page } from "playwright";
 import { profileRepeatableCatalog } from "./profile/catalog.ts";
 import { browserPageId, fieldId } from "../../../contracts/index.ts";
 import {
@@ -42,6 +43,7 @@ export interface PlaywrightWorkdayApplicationPageOptions { readonly timeoutMs?: 
   readonly prepareQuestionnaireSnapshot?: (signal: AbortSignal) => Promise<void>;
   readonly trace?: (event: string, details?: object) => void; }
 interface BrowserApplicationSnapshot {
+  readonly documentKey: string;
   readonly page: ApplicationPage;
   readonly lanes: readonly ApplicationHandlerPage[];
   readonly rootSelector: string;
@@ -149,6 +151,30 @@ export class PlaywrightWorkdayApplicationPage {
       questionnaireOccurrences.set(page, { epoch: 0, nextAction: 0 });
     }
   }
+  #navigationDiagnostic(
+    event: string,
+    details: Record<string, boolean | number | string | readonly string[]> = {},
+  ): void {
+    navigationDiagnostic(event, details);
+    const safe: Record<string, string | boolean | number> = { code: event };
+    if (["timeout", "detached", "closed", "other"].includes(String(details.errorClass))) {
+      safe.errorClass = String(details.errorClass);
+    }
+    for (const key of ["activationTimeout", "pointerIntercepted", "elementDetached",
+      "snapshotAvailable", "sourceUnchanged", "validationChanged", "busySeen",
+      "clickObserved", "trustedClickObserved", "targetClickObserved", "clickDefaultPrevented",
+      "pointerDownObserved", "pointerUpObserved", "invalidEventObserved",
+      "windowErrorObserved", "unhandledRejectionObserved"]) {
+      if (typeof details[key] === "boolean") safe[key] = details[key];
+    }
+    for (const key of ["nativeInvalidBeforeCount", "nativeInvalidCount", "nativeInvalidFileCount",
+      "nativeInvalidOptionalCount", "nativeCustomInvalidCount"]) {
+      const value = details[key];
+      if (typeof value === "number" && Number.isFinite(value)) safe[key] = Math.min(512, Math.max(0, Math.floor(value)));
+    }
+    try { this.#trace?.("application_navigation_stage", safe); }
+    catch { /* Optional diagnostics never alter navigation. */ }
+  }
   async observe(signal: AbortSignal): Promise<ApplicationPortResult<ApplicationPageTruth>> {
     const snapshot = await this.#readSnapshot(signal);
     if (snapshot.ok) {
@@ -198,7 +224,7 @@ export class PlaywrightWorkdayApplicationPage {
         !isApplicationFieldNavigationEligible(field)
       )
     ) {
-      navigationDiagnostic("source_guard_failed", {
+      this.#navigationDiagnostic("source_guard_failed", {
         pageMatched: beforeTruth.page === request.from,
         pageIdMatched: beforeTruth.pageId === request.fromPageId,
         submitActivated: beforeTruth.submitActivated,
@@ -211,23 +237,41 @@ export class PlaywrightWorkdayApplicationPage {
     }
     let clicked = false;
     let navigationActionId: string | undefined;
+    let eventEvidence: JSHandle<ReturnType<typeof installNavigationEventEvidence>> | undefined;
+    const finishEventEvidence = async () => {
+      const evidence = eventEvidence;
+      eventEvidence = undefined;
+      if (evidence === undefined) return;
+      try {
+        this.#navigationDiagnostic("action_event_evidence", await evidence.evaluate(state => state.read()));
+      } catch { this.#navigationDiagnostic("action_event_evidence_unavailable"); }
+      finally {
+        await evidence.evaluate(state => state.dispose()).catch(() => {});
+        await evidence.dispose().catch(() => {});
+      }
+    };
     try {
       const action = await this.#waitForActionableNext(before.value.rootSelector, signal);
-      if (action === undefined) return failure("navigation_uncertain", "navigation");
+      if (action === undefined) {
+        this.#navigationDiagnostic("action_unavailable");
+        return failure("navigation_uncertain", "navigation");
+      }
       clicked = true;
-      navigationDiagnostic("action_admitted");
+      this.#navigationDiagnostic("action_admitted");
       // Activate the admitted element itself with a trusted browser gesture.
       // A DOM click is untrusted and some Workday transitions ignore it. Keep
       // a fixed handle so a footer remount cannot retarget the gesture onto a
       // final Submit control.
       let handle: Awaited<ReturnType<Locator["elementHandle"]>> | null = null;
       try {
-        navigationDiagnostic("hit_test_started");
+        this.#navigationDiagnostic("hit_test_started");
         handle = await action.elementHandle();
         if (handle === null) throw new Error("navigation control detached");
         // Workday commits focused search/select drafts on blur. Move focus to
         // the admitted button before activation so its click sees that commit.
+        if ((await observeWorkdayPage(this.#page)).kind === 'employer_coded_error') return failure('page_incomplete','page_type');
         await handle.focus();
+        if ((await observeWorkdayPage(this.#page)).kind === 'employer_coded_error') return failure('page_incomplete','page_type');
         const activated = await handle.evaluate((control) => {
           if (!(control instanceof HTMLButtonElement) || control.disabled ||
               control.getAttribute("aria-disabled") === "true") return false;
@@ -237,25 +281,28 @@ export class PlaywrightWorkdayApplicationPage {
         });
         if (!activated) throw new Error("navigation control activation denied");
         navigationActionId = await this.#armNavigationWitness(before.value.rootSelector);
+        try { eventEvidence = await handle.evaluateHandle(installNavigationEventEvidence, before.value.rootSelector); }
+        catch { this.#navigationDiagnostic("action_event_evidence_unavailable"); }
         await handle.click({ timeout: this.#navigationSettleTimeoutMs });
-        navigationDiagnostic("admitted_control_activated");
-      } catch {
-        navigationDiagnostic("activation_failed");
+        this.#navigationDiagnostic("admitted_control_activated");
+      } catch (error) {
+        this.#navigationDiagnostic("activation_failed", navigationActionFailure(error));
         // Destination readback owns the result.
       } finally {
         await handle?.dispose().catch(() => {});
       }
-      navigationDiagnostic("destination_readback_started");
+      this.#navigationDiagnostic("destination_readback_started");
       let after = await this.#waitForChangedSnapshot(
         before.value,
         signal,
         navigationActionId,
       );
+      await finishEventEvidence();
       if (
         !after.ok && after.error.code === "browser_effect_uncertain" &&
         await this.#unchangedSourceStillRetryable(before.value, signal)
       ) {
-        navigationDiagnostic("unchanged_source_retry_started");
+        this.#navigationDiagnostic("unchanged_source_retry_started");
         const retryAction = await this.#waitForActionableNext(
           before.value.rootSelector,
           signal,
@@ -265,7 +312,9 @@ export class PlaywrightWorkdayApplicationPage {
           try {
             const handle = retryHandle = await retryAction.elementHandle();
             if (handle === null) throw new Error("navigation control detached");
+            if ((await observeWorkdayPage(this.#page)).kind === 'employer_coded_error') return failure('page_incomplete','page_type');
             await handle.focus();
+            if ((await observeWorkdayPage(this.#page)).kind === 'employer_coded_error') return failure('page_incomplete','page_type');
             const admitted = await handle.evaluate((control) => {
               if (!(control instanceof HTMLButtonElement) || control.disabled ||
                   control.getAttribute("aria-disabled") === "true") return false;
@@ -275,21 +324,24 @@ export class PlaywrightWorkdayApplicationPage {
             });
             if (!admitted) throw new Error("navigation control activation denied");
             navigationActionId = await this.#armNavigationWitness(before.value.rootSelector);
+            try { eventEvidence = await handle.evaluateHandle(installNavigationEventEvidence, before.value.rootSelector); }
+            catch { this.#navigationDiagnostic("action_event_evidence_unavailable"); }
             await handle.click({ timeout: this.#navigationSettleTimeoutMs });
-            navigationDiagnostic("unchanged_source_retry_activated");
-          } catch {
-            navigationDiagnostic("unchanged_source_retry_activation_failed");
+            this.#navigationDiagnostic("unchanged_source_retry_activated");
+          } catch (error) {
+            this.#navigationDiagnostic("unchanged_source_retry_activation_failed", navigationActionFailure(error));
           } finally {
             await retryHandle?.dispose().catch(() => {});
           }
           after = await this.#waitForChangedSnapshot(before.value, signal, navigationActionId);
-        }
+          await finishEventEvidence();
+        } else this.#navigationDiagnostic("action_unavailable");
       }
-      navigationDiagnostic(after.ok ? "destination_readback_succeeded" : "destination_readback_failed");
+      this.#navigationDiagnostic(after.ok ? "destination_readback_succeeded" : "destination_readback_failed");
       if (!after.ok) return after;
       const afterTruth = this.#toTruth(after.value);
       if (hasValidationDowngrade(before.value, after.value)) {
-        navigationDiagnostic("validation_downgrade", {
+        this.#navigationDiagnostic("validation_downgrade", {
           beforePage: before.value.page,
           afterPage: after.value.page,
           rootChanged: after.value.rootSelector !== before.value.rootSelector,
@@ -303,7 +355,7 @@ export class PlaywrightWorkdayApplicationPage {
         return failure("page_incomplete", "navigation");
       }
       if (!request.allowed.includes(afterTruth.page) || afterTruth.submitActivated) {
-        navigationDiagnostic("destination_not_allowed", {
+        this.#navigationDiagnostic("destination_not_allowed", {
           beforePage: before.value.page,
           afterPage: after.value.page,
           allowedPages: request.allowed,
@@ -326,7 +378,7 @@ export class PlaywrightWorkdayApplicationPage {
         after.value.navigationWitness !== navigationActionId &&
         after.value.requiredFields.length <= before.value.requiredFields.length
       ) {
-        navigationDiagnostic("semantic_guard_failed", {
+        this.#navigationDiagnostic("semantic_guard_failed", {
           beforePage: before.value.page,
           afterPage: after.value.page,
           rootChanged: false,
@@ -339,7 +391,7 @@ export class PlaywrightWorkdayApplicationPage {
       if (advancesQuestionnaireOccurrence(before.value, after.value, navigationActionId)) {
         questionnaireOccurrences.get(this.#page)!.epoch += 1;
       }
-      navigationDiagnostic("navigation_advanced", {
+      this.#navigationDiagnostic("navigation_advanced", {
         beforePage: before.value.page,
         afterPage: after.value.page,
         rootChanged: after.value.rootSelector !== before.value.rootSelector,
@@ -348,8 +400,8 @@ export class PlaywrightWorkdayApplicationPage {
         afterRequiredCount: after.value.requiredFields.length,
       });
       return { ok: true, value: { advanced: true } };
-    } catch {
-      navigationDiagnostic(clicked ? "navigation_exception_after_admission" : "navigation_exception_before_admission");
+    } catch (error) {
+      this.#navigationDiagnostic(clicked ? "navigation_exception_after_admission" : "navigation_exception_before_admission", navigationActionFailure(error));
       return failure(
         signal.aborted
           ? "operation_cancelled"
@@ -359,6 +411,7 @@ export class PlaywrightWorkdayApplicationPage {
         "navigation",
       );
     } finally {
+      await finishEventEvidence();
       // Destination checks have consumed the witness. Release its DOM references
       // and CSS instrumentation on every exit, including independent page changes.
       if (navigationActionId !== undefined) {
@@ -373,6 +426,11 @@ export class PlaywrightWorkdayApplicationPage {
   ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     if (signal.aborted) return failure("operation_cancelled", "none");
     try {
+      if (prepareQuestionnaire && this.#prepareQuestionnaireSnapshot) {
+        const observation=await observeWorkdayPage(this.#page);
+        if (observation.kind === 'employer_coded_error') return failure('page_incomplete','page_type');
+        if (!['application','review'].includes(observation.kind)) return failure('browser_target_ambiguous','page_type');
+      }
       if (prepareQuestionnaire) {
         if (navigationActionId !== undefined) {
           await this.#freezeNavigationWitness(navigationActionId);
@@ -404,6 +462,13 @@ export class PlaywrightWorkdayApplicationPage {
           sharedUiTypes,
         },
       );
+      const observation = await observeWorkdayPage(this.#page);
+      this.#trace?.('workday_page_observed', observation);
+      if (!('ambiguity' in snapshot) && snapshot.documentKey !== observation.documentKey) return failure('browser_target_stale','page_type');
+      // Preserve the physical source during an admitted navigation's loading witness.
+      // The owned runtime gates new actions on the current observation.
+      if (observation.kind === 'employer_coded_error') return failure('page_incomplete','page_type');
+      if (!['application','review','loading'].includes(observation.kind)) return failure('browser_target_ambiguous','page_type');
       if ("ambiguity" in snapshot) {
         if (process.env.HUNT_C3_VALUE_FREE_ACCOUNT_TRACE === "1") {
           try {
@@ -417,7 +482,8 @@ export class PlaywrightWorkdayApplicationPage {
       }
       return { ok: true, value: snapshot };
     } catch (error) {
-      navigationDiagnostic("snapshot_failed", {
+      this.#navigationDiagnostic("snapshot_failed", {
+        ...navigationActionFailure(error),
         errorName: error instanceof Error ? error.name : "unknown",
         questionnairePopupFailure: error instanceof Error && [
           "questionnaire popup owner unavailable",
@@ -445,6 +511,7 @@ export class PlaywrightWorkdayApplicationPage {
   ): Promise<ApplicationPortResult<BrowserApplicationSnapshot>> {
     let persistedNavigationActionId: string | undefined;
     let currentActionBusySeen = false;
+    let lastSnapshot: BrowserApplicationSnapshot | undefined;
     for (let pass = 0; pass < 2; pass += 1) {
       const deadline = Date.now() + this.#navigationSettleTimeoutMs;
       while (Date.now() < deadline) {
@@ -457,6 +524,8 @@ export class PlaywrightWorkdayApplicationPage {
           currentActionBusySeen = await this.#navigationActionBusySeen(navigationActionId);
         }
         const rawAfter = await this.#readSnapshot(signal, false);
+        if (!rawAfter.ok && rawAfter.error.code === 'page_incomplete') return rawAfter;
+        if (rawAfter.ok) lastSnapshot = rawAfter.value;
         let rawCurrentActionWitness = navigationActionId !== undefined && rawAfter.ok &&
           rawAfter.value.navigationWitness === navigationActionId;
         const rawCandidateChanged = rawAfter.ok && (
@@ -505,7 +574,7 @@ export class PlaywrightWorkdayApplicationPage {
             navigationActionId,
           );
           if (stable !== undefined) return { ok: true, value: stable };
-          navigationDiagnostic("destination_candidate_unstable", {
+          this.#navigationDiagnostic("destination_candidate_unstable", {
             candidatePage: after.value.page,
             rootChanged: after.value.rootSelector !== before.rootSelector,
           });
@@ -548,6 +617,12 @@ export class PlaywrightWorkdayApplicationPage {
         break;
       }
     }
+    this.#navigationDiagnostic("destination_wait_exhausted", {
+      snapshotAvailable: lastSnapshot !== undefined,
+      sourceUnchanged: lastSnapshot !== undefined && lastSnapshot.signature === before.signature,
+      validationChanged: lastSnapshot !== undefined && hasValidationDowngrade(before, lastSnapshot),
+      busySeen: currentActionBusySeen,
+    });
     return failure("browser_effect_uncertain", "navigation");
   }
   async #navigationActionBusySeen(actionId: string): Promise<boolean> {
@@ -741,6 +816,80 @@ function advancesQuestionnaireOccurrence(
   if (before.page !== "questionnaire" || after.page !== "questionnaire") return false;
   return navigationActionId !== undefined && after.navigationWitness === navigationActionId;
 }
+function installNavigationEventEvidence(control: Element, rootSelector: string) {
+  const root = control.getRootNode();
+  const application = control.ownerDocument.querySelector(rootSelector);
+  const form = control instanceof HTMLButtonElement ? control.form : null;
+  const flags = { clickObserved: false, trustedClickObserved: false, targetClickObserved: false,
+    clickDefaultPrevented: false, pointerDownObserved: false, pointerUpObserved: false,
+    invalidEventObserved: false, windowErrorObserved: false, unhandledRejectionObserved: false };
+  let disposed = false;
+  let lastClick: Event | undefined;
+  const nativeCounts = () => {
+    const controls = form === null ? application?.querySelectorAll("input, select, textarea, button") ?? [] : form.elements;
+    let nativeInvalidCount = 0, nativeInvalidFileCount = 0, nativeInvalidOptionalCount = 0, nativeCustomInvalidCount = 0;
+    for (const item of controls) {
+      if (!(item instanceof HTMLInputElement || item instanceof HTMLSelectElement || item instanceof HTMLTextAreaElement || item instanceof HTMLButtonElement) ||
+          !item.willValidate || item.validity.valid) continue;
+      nativeInvalidCount += 1;
+      if (item instanceof HTMLInputElement && item.type === "file") nativeInvalidFileCount += 1;
+      if (!(item instanceof HTMLButtonElement) && !item.required) nativeInvalidOptionalCount += 1;
+      if (item.validity.customError) nativeCustomInvalidCount += 1;
+    }
+    return { nativeInvalidCount, nativeInvalidFileCount, nativeInvalidOptionalCount, nativeCustomInvalidCount };
+  };
+  const nativeInvalidBeforeCount = nativeCounts().nativeInvalidCount;
+  const belongs = (event: Event) => event.composedPath().includes(control);
+  const click = (event: Event) => {
+    if (disposed || !belongs(event)) return;
+    flags.clickObserved = true;
+    flags.trustedClickObserved ||= event.isTrusted;
+    if (lastClick !== undefined) flags.clickDefaultPrevented ||= lastClick.defaultPrevented;
+    lastClick = event;
+  };
+  const targetClick = () => { if (!disposed) flags.targetClickObserved = true; };
+  const pointerDown = (event: Event) => { if (!disposed && belongs(event)) flags.pointerDownObserved = true; };
+  const pointerUp = (event: Event) => { if (!disposed && belongs(event)) flags.pointerUpObserved = true; };
+  const invalid = (event: Event) => {
+    const item = event.target;
+    if (!disposed && (item instanceof HTMLInputElement || item instanceof HTMLSelectElement || item instanceof HTMLTextAreaElement || item instanceof HTMLButtonElement) &&
+        (form === null ? application?.contains(item) : item.form === form)) flags.invalidEventObserved = true;
+  };
+  const error = (event: Event) => { if (!disposed && event instanceof ErrorEvent) flags.windowErrorObserved = true; };
+  const unhandled = () => { if (!disposed) flags.unhandledRejectionObserved = true; };
+  const listeners: [EventTarget, string, EventListener][] = [
+    [root, "click", click], [control, "click", targetClick],
+    [root, "pointerdown", pointerDown], [root, "pointerup", pointerUp], [root, "invalid", invalid],
+  ];
+  const view = control.ownerDocument.defaultView;
+  if (view !== null) listeners.push([view, "error", error], [view, "unhandledrejection", unhandled]);
+  const dispose = () => {
+    disposed = true;
+    lastClick = undefined;
+    for (const [target, type, listener] of listeners) target.removeEventListener(type, listener, true);
+  };
+  try {
+    for (const [target, type, listener] of listeners) target.addEventListener(type, listener, { capture: true, passive: true });
+  } catch (error) { dispose(); throw error; }
+  return { read: () => ({ ...flags,
+    // Read after dispatch: native-event listener checkpoints can run microtasks
+    // before a later target/bubble handler prevents the default.
+    clickDefaultPrevented: flags.clickDefaultPrevented || lastClick?.defaultPrevented === true,
+    nativeInvalidBeforeCount, ...nativeCounts() }), dispose };
+}
+
+function navigationActionFailure(error: unknown): Record<string, string | boolean> {
+  const message = error instanceof Error ? error.message : "";
+  const activationTimeout = error instanceof Error && error.name === "TimeoutError";
+  const elementDetached = /(?:not attached|detached)/iu.test(message);
+  const closed = /(?:target|page|browser|context).{0,32}closed/iu.test(message);
+  return {
+    errorClass: activationTimeout ? "timeout" : elementDetached ? "detached" : closed ? "closed" : "other",
+    activationTimeout,
+    pointerIntercepted: /(?:intercepts pointer events|does not receive pointer events)/iu.test(message),
+    elementDetached,
+  };
+}
 function navigationDiagnostic(
   event: string,
   details: Record<string, boolean | number | string | readonly string[]> = {},
@@ -830,6 +979,7 @@ async function readApplicationSnapshot(
     readonly sharedUiTypes: readonly SharedUiType[];
   },
 ): Promise<BrowserApplicationSnapshot | BrowserApplicationAmbiguity> {
+  const documentKey=String(performance.timeOrigin);
   const {
     selectors, checkboxGroupAttribute, checkboxGroupOptionsAttribute,
     checkboxGroupSelectedOptionAttribute, supportedControls,
@@ -1052,14 +1202,14 @@ async function readApplicationSnapshot(
       .includes(declaredValue ?? "")
     ? declaredValue as ApplicationPage
     : undefined;
-  const page: ApplicationPage = declared ?? (
+  let page: ApplicationPage = declared ?? (
     combinedResumeProfile || (profileRoot && resumeInputs.length === 1)
       ? "resume"
       : rootPage === "experience"
         ? "profile"
         : rootPage
   );
-  const lanes: readonly ApplicationHandlerPage[] = page === "pre_review"
+  let lanes: readonly ApplicationHandlerPage[] = page === "pre_review"
     ? []
     : combinedResumeProfile && page === "resume"
       ? ["resume", "profile"]
@@ -1176,15 +1326,18 @@ async function readApplicationSnapshot(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     );
     const fieldLabel = text(field?.querySelector("label, legend")?.textContent);
-    const requiredWorkdayDate = control.matches(
-      '[data-automation-id="dateSection"], [data-automation-id="dateInputWrapper"]',
-    ) && fieldLabel.endsWith("*") &&
+    const labelledRequired = /[✱*]\s*$/u.test(fieldLabel) &&
       !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(fieldLabel);
-    if (requiredWorkdayDate) return true;
+    if (labelledRequired) return true;
     return field !== null && field.querySelector(
-      '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required"]',
+      '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required" i]',
     ) !== null;
   });
+  if (profileRoot && page === "resume" && resumeInputs.length > 0 &&
+      !resumeInputs.some(input => requiredControls.includes(input))) {
+    page = "profile";
+    lanes = ["profile"];
+  }
   const requiredFields: BrowserApplicationSnapshot["requiredFields"][number][] = [];
   const semanticDestinationFields: string[] = [];
   let semanticDestinationComparable = true;
@@ -1278,7 +1431,7 @@ async function readApplicationSnapshot(
     ) || structuredOwners.some((candidate) =>
       candidate.hasAttribute("required") || candidate.getAttribute("aria-required") === "true" ||
       candidate.querySelector(
-        '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+        '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required" i]',
       ) !== null
     );
     const nativeOwner = anchor.form;
@@ -2024,13 +2177,13 @@ async function readApplicationSnapshot(
       const selectedLabelPlaceholder = /^(?:select one|select|choose|choose one)$/u.test(
         selectedLabel.toLocaleLowerCase("en-US"),
       );
-      const value = control instanceof HTMLInputElement
-        ? control.value
-        : declared !== "" && !declaredPlaceholder
-          ? declared
-          : selectedLabel !== "" && !selectedLabelPlaceholder
-            ? selectedLabel
-            : text(control.textContent);
+      // Editable combobox text can be only a search query. A committed value
+      // needs an owned selection declaration/token, not the input's typed value.
+      const value = declared !== "" && !declaredPlaceholder
+        ? declared
+        : selectedLabel !== "" && !selectedLabelPlaceholder
+          ? selectedLabel
+          : control instanceof HTMLInputElement ? "" : text(control.textContent);
       const normalizedValue = text(value).toLocaleLowerCase("en-US");
       const placeholder = /^(?:select one|select|choose|choose one)$/u.test(normalizedValue);
       verified = verified && (
@@ -2263,6 +2416,7 @@ async function readApplicationSnapshot(
     text(activeStep?.textContent),
   ].join("\u0000");
   return {
+    documentKey,
     page,
     lanes,
     rootSelector,

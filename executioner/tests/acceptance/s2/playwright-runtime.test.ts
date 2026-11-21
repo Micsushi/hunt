@@ -289,10 +289,10 @@ test("retained Intermountain long acknowledgement agrees across questionnaire ob
 
     assert.equal(semantic.observation.targets.length, 10);
     assert.equal(semantic.observation.targets.filter(({ required }) => required).length, 10);
-    assert.ok(semantic.observation.targets.some(({ name }) =>
-      name.startsWith("By applying for a position with Intermountain") &&
-      [...name].length <= 512
-    ));
+    const retained = semantic.observation.targets.find(({ rawQuestion }) => rawQuestion === `${acknowledgement}*`);
+    assert.ok(retained);
+    assert.match(retained.name, /^Unclassified question [a-f0-9]{64}$/u);
+    assert.equal(semantic.targets.get(retained.token)?.[0]?.name, `${acknowledgement}*`);
     assert.deepEqual(monitor, {
       fieldCount: 10,
       requiredFieldCount: 10,
@@ -1366,7 +1366,7 @@ test("profile batches external proof once while every field keeps independent re
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>First Name<input required id="name--legalName--firstName"></label><label>Middle Name<input id="name--legalName--middleName"></label><label>Last Name<input required id="name--legalName--lastName"></label><label>Address Line 2<input id="address--addressLine2"></label><label>Postal Code<input id="address--postalCode"></label><div data-automation-id="formField-source"><label for="profile-source">How Did You Hear About Us?</label><button id="profile-source" type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main><script>const source = document.querySelector('#profile-source'); const options = document.querySelector('#source-options'); source?.addEventListener('click', () => { options?.removeAttribute('hidden'); source.setAttribute('aria-expanded', 'true'); }); options?.addEventListener('click', (event) => { const option = event.target instanceof Element ? event.target.closest('[role="option"]') : null; if (option === null) return; source.textContent = option.textContent; source.setAttribute('aria-expanded', 'false'); options.setAttribute('hidden', ''); });</script></body></html>`);
+  await page.setContent(`<!doctype html><html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>First Name<input required id="name--legalName--firstName"></label><label>Middle Name<input required id="name--legalName--middleName"></label><label>Last Name<input required id="name--legalName--lastName"></label><label>Address Line 2<input required id="address--addressLine2"></label><label>Postal Code<input required id="address--postalCode"></label><div data-automation-id="formField-source"><label for="profile-source">How Did You Hear About Us?</label><button id="profile-source" type="button" role="combobox" data-automation-id="sourcePrompt" aria-controls="source-options">Select One</button><div id="source-options" role="listbox" hidden><div role="option">Referral</div></div></div></main><script>const source = document.querySelector('#profile-source'); const options = document.querySelector('#source-options'); source?.addEventListener('click', () => { options?.removeAttribute('hidden'); source.setAttribute('aria-expanded', 'true'); }); options?.addEventListener('click', (event) => { const option = event.target instanceof Element ? event.target.closest('[role="option"]') : null; if (option === null) return; source.textContent = option.textContent; source.setAttribute('aria-expanded', 'false'); options.setAttribute('hidden', ''); });</script></body></html>`);
   let nextOperation = 0;
   const monitored: { readonly moment: string; readonly operationId: string }[] = [];
   await page.locator("#profile-source").evaluate((element) =>
@@ -1868,12 +1868,12 @@ test("questionnaire batches external proof once while every field keeps independ
       input: { attempt: 1, pageId: "page-voluntary" } as never,
     }, new AbortController().signal) as { ok: boolean; error?: { code: string } };
     assert.equal(voluntaryResult.ok, true);
-    assert.equal(await page.locator('button[data-committed="true"]').count(), 4);
+    assert.equal(await page.locator('button[data-committed="true"]').count(), 0);
     assert.deepEqual(await page.locator('button[aria-haspopup="listbox"]').allInnerTexts(), [
-      "Prefer not to answer",
-      "Prefer not to answer",
-      "Prefer not to answer",
-      "Prefer not to answer",
+      "Select One",
+      "Select One",
+      "Select One",
+      "Select One",
     ]);
     assert.deepEqual(
       monitored.filter(({ operationId }) => operationId === voluntaryOperation)
@@ -2325,7 +2325,7 @@ test("application taxonomy reports real numeric structure and rejects validation
   }
 });
 
-test("synthetic phone and extension survive regional length checks and Review expectation recording", async () => {
+test("required synthetic phone survives regional checks while optional fields stay out of Review expectations", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.setContent(`<html data-hunt-page-id="page-profile" data-hunt-submit-activated="false"><body data-hunt-application-page="profile"><main data-automation-id="applyFlowMyInfoPage"><label>Phone Number<input required type="tel" pattern="[0-9]{10}" id="phoneNumber--phoneNumber"></label><label>Phone Extension<input id="phoneNumber--extension"></label></main></body></html>`);
@@ -2366,13 +2366,12 @@ test("synthetic phone and extension survive regional length checks and Review ex
     }, new AbortController().signal);
     assert.equal((result as { ok: boolean }).ok, true);
     assert.match(await page.locator('[id="phoneNumber--phoneNumber"]').inputValue(), /^\d{10}$/u);
-    assert.match(await page.locator('[id="phoneNumber--extension"]').inputValue(), /^\d+$/u);
+    assert.equal(await page.locator('[id="phoneNumber--extension"]').inputValue(), "");
+    assert.equal(await page.locator('[id="name--preferredCheck"]').isChecked(), false);
     const expected = await runtime.run(page as never, request,
       { kind: "review_expectations" } as never, new AbortController().signal) as readonly { fieldId: string; valueSha256: string }[];
     assert.deepEqual(expected.map(({ fieldId }) => fieldId).sort(),
-      ["identity.has_preferred_name", "phone.extension", "phone.number"]);
-    assert.equal(expected.find(({ fieldId }) => fieldId === "identity.has_preferred_name")?.valueSha256,
-      createHash("sha256").update("No").digest("hex"));
+      ["phone.number"]);
   } finally {
     runtime.dispose();
     await browser.close();
@@ -3909,7 +3908,7 @@ test("application authority expiring during ACK permits no reconcile, navigation
       ? '<main data-automation-id="applyFlowApplicationQuestionsPage"><label>Question<textarea required></textarea></label></main>'
       : pageKind === "profile"
       ? '<main data-automation-id="applyFlowMyInfoPage"><label for="name--legalName--firstName">First Name</label><input id="name--legalName--firstName" required></main>'
-      : '<main data-automation-id="applyFlowMyInfoPage"><button id="effect">Next</button><input type="file" data-automation-id="file-upload-input-ref"><textarea></textarea></main>';
+      : '<main data-automation-id="applyFlowMyInfoPage"><button id="effect">Next</button><input required type="file" data-automation-id="file-upload-input-ref"><textarea></textarea></main>';
     await page.setContent(`<!doctype html><html data-hunt-page-id="page-${pageKind}" data-hunt-submit-activated="false"><body data-hunt-application-page="${pageKind}">${review}<script>window.effectCount=0;document.querySelector('#effect')?.addEventListener('click',()=>window.effectCount++);window.addEventListener('beforeunload',()=>window.effectCount++);</script></body></html>`);
     let current = "2026-08-05T12:00:00.000Z";
     const runtime = new OwnedWorkdayApplicationRuntime({

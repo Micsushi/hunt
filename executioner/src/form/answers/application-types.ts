@@ -47,8 +47,30 @@ export function answerLaneAdmitted(
 
 export const applicationTextProfileFactIds = [
   ...textProfileFactIds,
+  "phone_country_code",
+  "current_location",
+  "address_line1",
+  "address_line2",
+  "education_institution",
+  "education_degree",
+  "education_field_of_study",
+  "education_start_year",
+  "education_end_year",
+  "education_gpa",
+  "education_gpa_scale",
+  "languages",
+  "driver_license",
+  "reason_for_leaving",
+  "relocation_preference",
+  "work_arrangements",
+  "employment_types",
+  "acceptable_work_terms",
+
   "application_source",
   "salary_expectations",
+  "linkedin_url",
+  "github_url",
+  "portfolio_url",
   "gender_disclosure",
   "ethnicity_disclosure",
   "veteran_disclosure",
@@ -60,6 +82,25 @@ export const applicationTextProfileFactIds = [
 
 export const applicationBooleanProfileFactIds = [
   ...booleanProfileFactIds,
+  "work_authorization_canada",
+  "sponsorship_required_canada",
+  "official_coop_program",
+  "returning_to_studies",
+  "university_coop_approval",
+  "relocation_assistance_required",
+  "overtime_available",
+  "evenings_available",
+  "weekends_available",
+  "overnights_available",
+  "vehicle_access",
+  "valid_drivers_licence",
+  "background_check_willing",
+  "references_available",
+  "may_contact_employer",
+  "recruiting_texts",
+  "marketing_messages",
+  "talent_community",
+
   "previously_worked_for_organization",
   "associate_referral",
   "current_associate",
@@ -144,6 +185,8 @@ export interface ApplicationProfileQueryRequest {
 }
 
 export interface ApplicationProfileQuery {
+  /** Explicit product-owner policy, separate from saved facts and dictionary aliases. */
+  readonly ownerDefaults?: { readonly employmentRelationship: false; readonly associateReferral: false; readonly applicationSources?: readonly string[] };
   query(
     request: ApplicationProfileQueryRequest,
     signal: AbortSignal,
@@ -170,9 +213,14 @@ export type ApplicationFieldObservation = FieldObservation & {
   readonly constraints?: ApplicationTextConstraints;
   readonly readOnly?: boolean;
   readonly selectionMode?: "single" | "multiple";
+  /** A uniquely owned search input queries choices; its text is never a selection. */
+  readonly queryable?: boolean;
+  readonly searchQuery?: string;
 };
 
 export interface ApplicationAnswerResolutionRequest {
+  /** Names supplied by the selected employer context, never inferred from the question. */
+  readonly employerNames?: readonly string[];
   readonly mode: AnswerExecutionMode;
   readonly answerFallbackPolicy: AnswerFallbackPolicy;
   readonly field: ApplicationFieldObservation;

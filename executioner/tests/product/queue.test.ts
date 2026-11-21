@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, unlinkSync, mkdirSync, rmdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApplicationQueue, type BrowserConnection } from "../../src/product/queue.ts";
-import { applicantProfile } from "../../src/product/sources.ts";
+import { applicantProfile, productSources } from "../../src/product/sources.ts";
+import { disposeResumeArtifact } from '../../src/contracts/index.ts';
 
 test("legacy campaign profile imports without promoting its non-submittable mode", async () => {
   const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-legacy-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
@@ -106,6 +107,40 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test("observed resume requirement survives a failed fill and service restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "c3-resume-observed-"));
+  const url = "https://jobs.lever.co/fixture/11111111-1111-4111-8111-111111111111";
+  const bridge: BrowserConnection = { connected: true,
+    open: async () => ({tabId: 46, page: {url: () => url} as any, browser: {close: async () => {}} as any}),
+    release: async () => {} };
+  const observed = deferred<void>();
+  let receipt: {token:string;selectedSha256:string;filename:string;applicationKey:string};
+  const queue = new ApplicationQueue(root, bridge, async (_page, input) => {
+    input.onResumeObserved!();
+    receipt={token:'11111111-1111-4111-8111-111111111111',selectedSha256:'a'.repeat(64),filename:'Resume.pdf',applicationKey:queue.jobs[0]!.key};
+    input.onResumeUpload!(receipt);
+    assert.equal(JSON.parse(readFileSync(join(root, "jobs.json"), "utf8")).jobs[0].resumeExpected, true);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "jobs.json"), "utf8")).jobs[0].resumeUpload, receipt);
+    observed.resolve();
+    throw new Error("upload removed its input");
+  });
+  queue.configure(applicantProfile({given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid"}), Buffer.from("%PDF-fixture").toString("base64"));
+  const [job] = queue.add([{url}]);
+  await observed.promise;
+  await queue.close();
+  const retried = deferred<{resumeExpected?:boolean;resumeUpload?:unknown}>();
+  const restored = new ApplicationQueue(root, bridge, async (_page, input) => {
+    retried.resolve(input);
+    throw new Error("resume input still missing");
+  });
+  try {
+    await restored.action(job!.id, "retry");
+    const input=await retried.promise;
+    assert.equal(input.resumeExpected, true);assert.deepEqual(input.resumeUpload,receipt!);
+  } finally { await restored.close(); }
+  assert.equal(restored.jobs[0]!.status, "paused");
+});
 
 test("shutdown drains an opening runner and releases its late session without filling", async () => {
   const opening = deferred<Awaited<ReturnType<BrowserConnection["open"]>>>();
@@ -214,4 +249,67 @@ test("shutdown detaches a stalled automation connection and drains the active fi
   finishDisconnect.resolve(); finishFill.resolve();
   await closing;
   assert.equal(job!.status, "paused", "late fill success must not restore Review after shutdown");
+});
+
+
+test("paused admission never opens a connected browser and preserves pause across restart", async () => {
+  const root=mkdtempSync(join(tmpdir(),'c3-paused-import-')); let opens=0;
+  const bridge:BrowserConnection={connected:true,open:async()=>{opens++;throw new Error('unexpected');},release:async()=>{}};
+  let queue=new ApplicationQueue(root,bridge);
+  queue.configure(applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),Buffer.from('%PDF-selected').toString('base64'));
+  const input={url:'https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1'};
+  const [job]=queue.add([input],{paused:true});
+  assert.equal(job!.status,'paused');assert.equal(opens,0);
+  await new Promise(resolve=>setTimeout(resolve,1100));assert.equal(opens,0);
+  assert.equal(queue.add([input],{paused:true})[0]!.id,job!.id);
+  await queue.close();queue=new ApplicationQueue(root,bridge);
+  assert.equal(queue.jobs[0]!.status,'paused');assert.equal(opens,0);
+  queue.jobs[0]!.status='running';
+  assert.throws(()=>queue.add([input],{paused:true}),/already active/);
+  queue.jobs[0]!.status='paused';await queue.close();
+});
+
+test("legacy scalar study plans normalize without modifying saved input and retain edit authority", () => {
+  const values={given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',education_field_of_study:'Computer Science'};
+  const profile=applicantProfile(values) as any;
+  profile.profilePlan.repeatables=[{section:'education',rows:[{rowKey:'education_1',fields:[{fieldId:'education.field_of_study',questionType:'education',answerType:'multi_select',allowedOptions:[],answer:{kind:'answered',value:'Computer Science',provenance:'owner_provided',lane:'live_owner_fact'},optionMapping:{canonicalValue:'Computer Science',visibleOption:'Computer Science',provenance:'visible_option'}}]}]}];
+  const before=JSON.stringify(profile);
+  const sources=productSources(profile,Buffer.from('%PDF-fixture'));
+  const field=sources.profilePlan.repeatables[0]!.rows[0]!.fields[0]!;
+  assert.equal(field.answer.kind==='answered'&&field.answer.value,'["Computer Science"]');
+  assert.equal(JSON.stringify(profile),before);disposeResumeArtifact(sources.resumeIntent.artifact);
+  const normalized={...profile,profilePlan:sources.profilePlan};
+  const edited=applicantProfile({...values,education_field_of_study:'Mathematics'},normalized) as any;
+  const admitted=productSources(edited,Buffer.from('%PDF-fixture'));disposeResumeArtifact(admitted.resumeIntent.artifact);
+  assert.equal(edited.profilePlan.repeatables[0].rows[0].fields[0].answer.value,'["Mathematics"]');
+  assert.throws(()=>applicantProfile({...values,education_field_of_study:''},normalized),/rather than clearing/);
+  const forged=structuredClone(edited);forged.profilePlan.repeatables[0].rows[0].fields[0].answer.value='["Unapproved"]';forged.profilePlan.repeatables[0].rows[0].fields[0].optionMapping.canonicalValue='["Unapproved"]';
+  assert.throws(()=>productSources(forged,Buffer.from('%PDF-fixture')));
+});
+
+
+test("unfamiliar selected resumes require paused admission and cannot become submittable", async()=>{
+  const root=mkdtempSync(join(tmpdir(),'c3-generic-import-'));
+  const bridge:BrowserConnection={connected:false,open:async()=>{throw new Error('must stay paused');},release:async()=>{}};
+  const queue=new ApplicationQueue(root,bridge);
+  try {
+    queue.configure(applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
+    const input={url:'https://fixture.bamboohr.com/careers/123',resumeBase64:Buffer.from('%PDF-selected').toString('base64'),sourceJobId:123,resumeVersion:'17'};
+    assert.throws(()=>queue.add([input]),/paused/);
+    const [job]=queue.add([input],{paused:true});assert.equal(job!.submissionAllowed,false);
+    assert.equal(job!.status,'paused');assert.equal(JSON.parse(readFileSync(join(root,`${job!.id}.input.json`),'utf8')).resume,input.resumeBase64);
+    await queue.close();const restored=new ApplicationQueue(root,bridge);assert.equal(restored.jobs[0]!.status,'paused');assert.equal(restored.jobs[0]!.resumeVersion,'17');await restored.close();
+  }finally{await queue.close();}
+});
+
+
+test("live drafts allow reviewable defaults without changing saved policy",()=>{
+  const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',answer_policy:'test'}) as any;
+  const before=JSON.stringify(profile);const sources=productSources(profile,Buffer.from('%PDF-fixture'));
+  assert.equal(sources.executionPolicy.answerFallbackPolicy,'deterministic_site_valid_editable');
+  assert.equal(sources.executionPolicy.submissionPolicy,'forbidden');
+  assert.equal(JSON.stringify(profile),before);
+  assert.equal(profile.executionPolicy.answerFallbackPolicy,'deterministic_site_valid_editable');
+  disposeResumeArtifact(sources.resumeIntent.artifact);
+  assert.equal((applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}) as any).executionPolicy.answerFallbackPolicy,'owner_facts_only');
 });

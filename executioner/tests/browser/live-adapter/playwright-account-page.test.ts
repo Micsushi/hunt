@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { chromium } from "playwright";
 
 import { PlaywrightAccountPageAdapter } from "../../../src/browser/playwright-live/private/playwright-account-page.ts";
 import {
@@ -382,20 +383,44 @@ test("reports exact cardinality and rejects non-actionable field states", async 
 });
 
 test("fills field bytes through the exact locator without retaining value material", async () => {
-  const locator = new FakeLocator({ count: 1, visible: true, enabled: true, editable: true });
-  const page = new FakePage(locator);
-  const adapter = new PlaywrightAccountPageAdapter();
-  const bytes = Uint8Array.from([65, 0, 66]);
-
-  const result = await adapter.fill(page, "password_confirmation", bytes);
-
-  assert.equal(result, undefined);
-  assert.deepEqual(page.calls, [
-    { method: "locator", selector: '[data-automation-id="verifyPassword"]' },
-  ]);
-  assert.deepEqual(locator.fillArguments, ["A\u0000B"]);
-  assert.deepEqual([...bytes], [65, 0, 66]);
-  assert.deepEqual(Object.keys(adapter), []);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    for (const [field, automationId, type] of [
+      ['email', 'email', 'email'], ['email', 'email', 'text'],
+      ['password', 'password', 'password'], ['password_confirmation', 'verifyPassword', 'password'],
+    ] as const) {
+    await page.setContent(`<input data-automation-id="${automationId}" type="${type}"><script>
+      window.focusCount=0;window.kept='';
+      const input=document.querySelector('input');
+      input.addEventListener('focus',()=>window.focusCount++);
+      input.addEventListener('input',()=>{window.kept=input.value;});
+      input.addEventListener('change',()=>{input.value=window.kept;});
+    </script>`);
+    const adapter = new PlaywrightAccountPageAdapter();
+    const bytes = new TextEncoder().encode('fixture-password');
+    assert.equal(await adapter.fill(page, field, bytes), undefined);
+    assert.equal(await adapter.matches(page, field, bytes), true);
+    assert.equal(await page.evaluate('window.focusCount'), 0);
+    assert.equal(await page.evaluate('window.kept'), 'fixture-password');
+    for (const attribute of ['disabled', 'readonly', 'hidden']) {
+      await page.locator('input').evaluate((e, attribute) => e.setAttribute(attribute, ''), attribute);
+      await assert.rejects(adapter.fill(page, field, bytes), /credential field could not be filled/);
+      await page.locator('input').evaluate((e, attribute) => e.removeAttribute(attribute), attribute);
+    }
+    await page.evaluate(() => { (window as any).originalValueDescriptor=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value'); Object.defineProperty(HTMLInputElement.prototype, 'value', {
+      set(value) { throw new Error(`secret-sentinel:${value}`); }, configurable: true,
+    }); });
+    await assert.rejects(adapter.fill(page, field, bytes), error => {
+      assert.equal(String(error), 'Error: The credential field could not be filled. Check sign-in in the application tab.');
+      assert.equal((error as Error).cause, undefined);
+      return true;
+    });
+    assert.equal(new TextDecoder().decode(bytes), 'fixture-password');
+    assert.deepEqual(Object.keys(adapter), []);
+    await page.evaluate(() => Object.defineProperty(HTMLInputElement.prototype,'value',(window as any).originalValueDescriptor));
+    }
+  } finally { await browser.close(); }
 });
 
 test("matches field bytes exactly without returning or retaining plaintext", async () => {

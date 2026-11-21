@@ -315,14 +315,6 @@
   text-transform: uppercase;
 }
 
-.keywordEmpty {
-  color: var(--muted);
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-sm);
-  padding: 8px;
-  font-size: 0.72rem;
-}
-
 .keywordList {
   display: grid;
   gap: 6px;
@@ -332,10 +324,6 @@
 }
 
 .keywordItem {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--panel-strong);
@@ -363,8 +351,7 @@
 }
 
 .keywordCandidateLabel,
-.keywordCandidate,
-.keywordCandidateHint {
+.keywordCandidate {
   color: var(--muted);
   font-size: 0.68rem;
   line-height: 1.2;
@@ -380,24 +367,6 @@
   background: rgba(89, 169, 106, 0.08);
   color: var(--ink);
   padding: 2px 5px;
-}
-
-.keywordCandidateHint {
-  margin-top: 6px;
-}
-
-.keywordScore {
-  display: grid;
-  justify-items: end;
-  gap: 2px;
-  color: var(--muted);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-}
-
-.keywordScore strong {
-  color: var(--ink);
-  font-size: 0.82rem;
 }
 
 @media (max-width: 980px) {

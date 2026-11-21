@@ -726,7 +726,7 @@ test("rejects a driver success when fresh visible readback does not match", asyn
   assert.equal(port.inspections, 3);
 });
 
-test("continues after an optional tenant widget rejects its configured default", async () => {
+test("skips an optional tenant widget even with a configured answer", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [{
@@ -752,10 +752,10 @@ test("continues after an optional tenant widget rejects its configured default",
   assert.equal(result.kind, "verified", JSON.stringify(result));
   if (result.kind !== "verified") return;
   assert.deepEqual(result.verifiedFields, []);
-  assert.equal(port.commits.length, 1);
+  assert.equal(port.commits.length, 0);
 });
 
-test("preserves an already-populated optional multi-select instead of replacing it", async () => {
+test("preserves a resume-populated optional multi-select", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [{
@@ -780,11 +780,12 @@ test("preserves an already-populated optional multi-select instead of replacing 
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
   if (result.kind !== "verified") return;
-  assert.deepEqual(result.verifiedFields, []);
+  assert.equal(result.verifiedFields.length, 0);
   assert.equal(port.commits.length, 0);
+  assert.equal(port.snapshot.controls[0]!.readback, '["Python"]');
 });
 
-test("continues a repeatable row after an optional tenant widget rejects its default", async () => {
+test("skips optional fields inside a repeatable row", async () => {
   const study = field(
     "education.field_of_study",
     "education",
@@ -820,7 +821,7 @@ test("continues a repeatable row after an optional tenant widget rejects its def
   assert.equal(result.kind, "verified", JSON.stringify(result));
   if (result.kind !== "verified") return;
   assert.deepEqual(result.verifiedFields, []);
-  assert.equal(port.commits.length, 1);
+  assert.equal(port.commits.length, 0);
 });
 
 test("reconciles repeatables without deleting foreign rows or creating duplicates", async () => {
@@ -848,6 +849,7 @@ test("reconciles repeatables without deleting foreign rows or creating duplicate
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [],
+    requiredRepeatableSections: ["skills"],
     rows: [
       row("experience", "foreign-experience", false, experience),
       row("education", "foreign-education", false, education),
@@ -1603,7 +1605,7 @@ test("preflights required repeatable fields before cleaning any owned row", asyn
   assert.equal(port.removed.length, 0);
 });
 
-test("binds heterogeneous repeatable requirements only to each selected row", async () => {
+test("binds heterogeneous rows but stops for unmatched foreign history", async () => {
   const past = [
     field("experience.company", "experience", "text", "Past Company", "resume_verified"),
     field("experience.title", "experience", "text", "Engineer", "resume_verified"),
@@ -1640,7 +1642,8 @@ test("binds heterogeneous repeatable requirements only to each selected row", as
     }],
   }, port, AbortSignal.any([]));
 
-  assert.equal(result.kind, "verified");
+  assert.equal(result.kind, "blocked");
+  if(result.kind === "blocked") assert.equal(result.code,"profile_row_unverified");
   assert.equal(port.commits.length, 0);
   assert.equal(port.added.length, 0);
   assert.equal(port.removed.length, 0);
@@ -1686,7 +1689,7 @@ test("reuses one semantic job when the tenant omits an optional subfield", async
   assert.equal(port.commits.length, 0);
 });
 
-test("checks a current role and does not invent an end date after Workday removes it", async () => {
+test("checks a required current-role control and does not invent an end date after Workday removes it", async () => {
   const desired = [
     field("experience.company", "employment", "text", "Current Company", "resume_verified"),
     field("experience.title", "employment", "text", "Engineer", "resume_verified"),
@@ -1712,7 +1715,7 @@ test("checks a current role and does not invent an end date after Workday remove
             "false",
             "workday_checkbox_v2",
           ),
-          required: false,
+          required: true,
         },
         control("experience.end_month", "month", "11"),
         control("experience.end_year", "year", "2025"),
@@ -1785,6 +1788,7 @@ test("rechecks required controls revealed by a repeatable add before filling the
     pageType: "profile",
     controls: [],
     rows: [],
+    requiredRepeatableSections: ["experience"],
   }, {
     rowTemplates: { experience: desired },
     afterAdd: () => {
@@ -1851,7 +1855,7 @@ test("fills the tenant-provided blank first repeatable row before adding another
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
   assert.equal(port.added.length, 0);
-  assert.equal(port.inspections, 7);
+  assert.equal(port.inspections, 8);
   assert.deepEqual(port.commits.map(({ value }) => value), [
     "INVIDI Technologies",
     "Software Developer",
@@ -1915,7 +1919,7 @@ test("accepts an unpadded Workday month readback for a zero-padded plan month", 
   assert.equal(port.commits.length, 0);
 });
 
-test("routes dedicated social URLs before deduplicated generic website rows", async () => {
+test("routes required dedicated social URLs before a required website row", async () => {
   const linkedin = field(
     "social.linkedin",
     "social_network",
@@ -1938,10 +1942,11 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
     pageType: "profile",
     controls: [{
       ...control("social.linkedin", "text", null, "workday_text_v2"),
-      required: false,
+      required: true,
     }],
     rows: [],
     repeatableSections: ["websites"],
+    requiredRepeatableSections: ["websites"],
   }, { rowTemplates: { websites: [portfolio] } });
 
   const result = await completeWorkdayProfilePage({
@@ -1966,7 +1971,7 @@ test("routes dedicated social URLs before deduplicated generic website rows", as
 });
 
 test("synthetic postal fallback uses the planned or observed Canadian country without replacing owner facts", async () => {
-  for (const source of ["planned", "observed", "owner"] as const) {
+  for (const source of ["planned", "observed", "owner", "owner_compact"] as const) {
     const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
       { ...control("address.country", "search_select", source === "planned" ? "United States" : "Canada"),
         allowedOptions: ["Canada", "United States"] },
@@ -1976,13 +1981,13 @@ test("synthetic postal fallback uses the planned or observed Canadian country wi
       mode: "synthetic_test_non_submittable", pageType: "profile", repeatables: [],
       fields: [
         ...(source === "planned" ? [field("address.country", "address", "option", "CA", "owner_provided", "Canada")] : []),
-        ...(source === "owner" ? [field("address.postal_code", "address", "text", "T2P 1J9")] : []),
+        ...(source === "owner" || source === "owner_compact" ? [field("address.postal_code", "address", "text", source === "owner_compact" ? "t2p1j9" : "T2P 1J9")] : []),
       ],
     }, port, AbortSignal.any([]));
     assert.equal(result.kind, "verified", JSON.stringify(result));
     const postal = port.commits.find(({ controlId }) => controlId === "control-address.postal_code");
     assert.match(postal?.value ?? "", /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTVWXYZ] \d[ABCEGHJ-NPRSTVWXYZ]\d$/u);
-    if (source === "owner") assert.equal(postal?.value, "T2P 1J9");
+    if (source === "owner" || source === "owner_compact") assert.equal(postal?.value, "T2P 1J9");
     else if (result.kind === "verified") assert.equal(result.verifiedFields.find(({ fieldId }) => fieldId === "address.postal_code")?.lane, "synthetic_test_default");
   }
 });
@@ -2009,7 +2014,7 @@ test("synthetic Canadian postal defaults follow the planned, observed, or genera
   }
 });
 
-test("leaves optional unknown checkbox consent and workflow controls untouched unless answered by owner", async () => {
+test("leaves optional unknown checkbox consent and workflow controls untouched even with saved owner answers", async () => {
   for (const initial of ["false", "true"]) {
     for (const explicit of [false, true]) {
       const port = new MemoryProfilePage({ pageType: "profile", rows: [], controls: [
@@ -2020,17 +2025,17 @@ test("leaves optional unknown checkbox consent and workflow controls untouched u
         fields: explicit ? [field("unknown.optional.1", "unknown", "boolean", "false")] : [],
       }, port, AbortSignal.any([]));
       assert.equal(result.kind, "verified", JSON.stringify(result));
-      assert.equal(port.snapshot.controls[0]?.readback, explicit ? "false" : initial);
+      assert.equal(port.snapshot.controls[0]?.readback, initial);
       if (result.kind !== "verified") continue;
-      assert.equal(result.verifiedFields.length, explicit ? 1 : 0);
+      assert.equal(result.verifiedFields.length, 0);
       assert.equal(result.committedFields.length, 0);
-      if (!explicit) assert.equal(port.commits.length, 0);
-      else assert.equal(result.verifiedFields[0]?.provenance, "owner_provided");
+      assert.ok(result.committedFields.every(({ synthetic }) => !synthetic));
+      assert.equal(port.commits.length, 0);
     }
   }
 });
 
-test("fills recognized unplanned optional controls with explicit test fallbacks", async () => {
+test("does not generate fallbacks for recognized optional controls", async () => {
   const port = new MemoryProfilePage({
     pageType: "profile",
     controls: [
@@ -2049,18 +2054,12 @@ test("fills recognized unplanned optional controls with explicit test fallbacks"
   }, port, AbortSignal.any([]));
 
   assert.equal(result.kind, "verified", JSON.stringify(result));
-  assert.deepEqual(port.commits.map(({ value }) => value), [
-    "https://www.linkedin.com/in/hunt-test-owner-review",
-    "https://www.facebook.com/hunt.test.owner.review",
-    "https://twitter.com/hunt_test_26",
-  ]);
+  assert.deepEqual(port.commits, []);
   if (result.kind !== "verified") return;
-  assert.equal(result.committedFields.length, 3);
-  assert.ok(result.committedFields.every(({ synthetic }) => synthetic));
-  assert.ok(result.verifiedFields.every(({ provenance, lane }) =>
-    provenance === "generated_default" && lane === "synthetic_test_default"
-  ));
+  assert.deepEqual(result.committedFields, []);
+  assert.deepEqual(result.verifiedFields, []);
 });
+
 
 test("canonicalizes a bare LinkedIn host for Workday URL validation", async () => {
   const linkedin = field(
@@ -2073,7 +2072,7 @@ test("canonicalizes a bare LinkedIn host for Workday URL validation", async () =
     pageType: "profile",
     controls: [{
       ...control("social.linkedin", "text", null, "workday_text_v2"),
-      required: false,
+      required: true,
     }],
     rows: [],
   });
@@ -2091,7 +2090,7 @@ test("canonicalizes a bare LinkedIn host for Workday URL validation", async () =
   ]);
 });
 
-test("falls back from an absent dedicated social control to a generic website row", async () => {
+test("falls back from an absent dedicated social control to a required website row", async () => {
   const linkedin = field(
     "social.linkedin",
     "social_network",
@@ -2109,6 +2108,7 @@ test("falls back from an absent dedicated social control to a generic website ro
     controls: [],
     rows: [],
     repeatableSections: ["websites"],
+    requiredRepeatableSections: ["websites"],
   }, { rowTemplates: { websites: [generic] } });
 
   const result = await completeWorkdayProfilePage({
@@ -2260,3 +2260,36 @@ class BackinglessMemoryProfilePage extends MemoryProfilePage {
     } as const;
   }
 }
+
+
+test("a populated foreign employment row blocks review without deleting it", async () => {
+  const desired = [field("experience.company", "experience", "text", "Saved company", "resume_verified")];
+  const foreign = [field("experience.company", "experience", "text", "Resume inferred company", "resume_verified")];
+  const port = new MemoryProfilePage({pageType:"profile",controls:[],rows:[row("experience","foreign",false,foreign)]}, {rowTemplates:{experience:desired}});
+  const result = await completeWorkdayProfilePage({mode:"live",pageType:"profile",fields:[],repeatables:[{section:"experience",rows:[{rowKey:"saved",fields:desired}]}]},port,AbortSignal.any([]));
+  assert.equal(result.kind,"blocked");
+  if(result.kind === "blocked") assert.equal(result.code,"profile_row_unverified");
+  assert.equal(port.removed.length,0);
+  assert.ok(port.snapshot.rows.some(row=>row.rowId === "foreign"));
+});
+
+
+test("an unplanned resume-populated section requires review without deleting history", async()=>{
+  const foreign=[field("experience.company","experience","text","Parsed company","resume_verified")];
+  const port=new MemoryProfilePage({pageType:"profile",controls:[],rows:[row("experience","foreign",false,foreign)]});
+  const result=await completeWorkdayProfilePage({mode:"live",pageType:"profile",fields:[],repeatables:[]},port,AbortSignal.any([]));
+  assert.equal(result.kind,"blocked");if(result.kind==="blocked")assert.equal(result.code,"profile_row_unverified");
+  assert.equal(port.removed.length,0);assert.equal(port.commits.length,0);
+});
+
+
+test("preserves an existing optional employment description without claiming it verified",async()=>{
+  const desired=[field("experience.company","experience","text","Saved company","resume_verified"),field("experience.title","experience","text","Engineer","resume_verified")];
+  const foreign=row("experience","foreign",false,desired);
+  const port=new MemoryProfilePage({pageType:"profile",controls:[],rows:[{...foreign,controls:[...foreign.controls,{...control("experience.description","text","Invented resume responsibility"),required:false}]}]});
+  const result=await completeWorkdayProfilePage({mode:"live",pageType:"profile",fields:[],repeatables:[{section:"experience",rows:[{rowKey:"saved",fields:desired}]}]},port,AbortSignal.any([]));
+  assert.equal(result.kind,"verified");
+  if(result.kind==="verified")assert.ok(result.verifiedFields.every(field=>field.fieldId!=="experience.description"));
+  assert.equal(port.snapshot.rows[0]?.controls.at(-1)?.readback,"Invented resume responsibility");
+  assert.equal(port.removed.length,0);assert.equal(port.commits.length,0);
+});

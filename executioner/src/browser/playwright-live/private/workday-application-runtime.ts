@@ -1,3 +1,4 @@
+import { observeWorkdayPage } from '../../../ats/workday/page-observation.ts';
 import { createHash, randomBytes } from "node:crypto";
 
 import type { Page } from "playwright";
@@ -434,6 +435,13 @@ export class OwnedWorkdayApplicationRuntime {
     if (request === undefined || session === undefined || signal.aborted) {
       throw new TypeError("application runtime revoked");
     }
+    if (['next','reconcile_profile','reconcile_resume','reconcile_questionnaire','capture_review','monitor_auth_state'].includes(operation.kind)) {
+      const observation=await observeWorkdayPage(page);
+      this.#trace?.('workday_page_observed', observation);
+      if (['capture_review','monitor_auth_state'].includes(operation.kind)) {
+        if (operation.kind === 'capture_review' ? observation.kind !== 'review' : !['application','review'].includes(observation.kind)) throw new TypeError('application page observation not ready');
+      } else if (observation.kind !== 'application') return {ok:false,error:{code:'browser_target_ambiguous',classifier:'workday_page',primitive:'page_observation',unknownLayer:'page_type'}};
+    }
     switch (operation.kind) {
       case "observe":
         return new PlaywrightWorkdayApplicationPage(page, {
@@ -458,6 +466,9 @@ export class OwnedWorkdayApplicationRuntime {
         return observed;
       }
       case "next": {
+        const traceNavigation = (event: string, details?: object) => {
+          if (event === "application_navigation_stage") this.#trace?.(event, details);
+        };
         const input = operation.input as Parameters<PlaywrightWorkdayApplicationPage["next"]>[0];
         const prepareQuestionnaireSnapshot = async (innerSignal: AbortSignal) => {
           await prepareNavigationQuestionnaireSnapshot(
@@ -480,7 +491,7 @@ export class OwnedWorkdayApplicationRuntime {
         this.#assertAuthorized(signal);
         const navigationSource = await new PlaywrightWorkdayApplicationPage(
           page,
-          { timeoutMs: this.#timeoutMs, prepareQuestionnaireSnapshot },
+          { timeoutMs: this.#timeoutMs, prepareQuestionnaireSnapshot, trace: traceNavigation },
         ).observe(signal);
         if (
           !navigationSource.ok || navigationSource.value.page !== input.from ||
@@ -494,6 +505,7 @@ export class OwnedWorkdayApplicationRuntime {
           timeoutMs: this.#timeoutMs,
           navigationSettleTimeoutMs: Math.max(this.#timeoutMs, 90_000),
           prepareQuestionnaireSnapshot,
+          trace: traceNavigation,
         }).next(
           input, signal,
         );
@@ -692,6 +704,11 @@ export class OwnedWorkdayApplicationRuntime {
         const profilePage: WorkdayProfilePagePort = {
           inspect: async (innerSignal, inspectInteractiveOptions) => {
             const snapshot = await playwrightProfilePage.inspect(innerSignal, inspectInteractiveOptions);
+            for (const fieldId of ["phone.device_type", "address.country"]) {
+              const controls = snapshot.controls.filter(control => control.fieldId === fieldId);
+              this.#trace?.("profile_control_observed", { fieldId,
+                code: `matches_${controls.length}_readbacks_${controls.filter(control => control.readback !== null).length}_options_${controls.reduce((sum, control) => sum + (control.allowedOptions?.length ?? 0), 0)}` });
+            }
             if (request.owner === undefined) for (const question of observedPendingProfileQuestions(snapshot, input.pageId)) {
               observedPending.set(JSON.stringify([question.rowKey, question.fieldId, question.exactQuestion, question.options]), question);
             }
@@ -786,8 +803,8 @@ export class OwnedWorkdayApplicationRuntime {
             request.ownerSources.executionPolicy?.answerFallbackPolicy ??
               "deterministic_site_valid_editable",
           );
-          if (result.kind === "verified" && result.committedFields.length > 0) {
-            syntheticFields = Object.freeze(result.committedFields.map((field) =>
+          if (result.kind === "verified" && result.committedFields.some(({ synthetic }) => synthetic)) {
+            syntheticFields = Object.freeze(result.committedFields.filter(({ synthetic }) => synthetic).map((field) =>
               profileSyntheticFieldEvidence(input.pageId, field)
             ));
             learning.bindSyntheticFields(syntheticFields);
@@ -930,12 +947,9 @@ export class OwnedWorkdayApplicationRuntime {
               });
             }
           },
-          recordReviewExpectations: async () => {
-            const readback = result.verifiedFields.some(field => field.answerType === "multi_select" && field.rowKey === undefined)
-              ? await playwrightProfilePage.inspect(signal, false) : undefined;
-            this.#recordProfileReviewExpectations(result.effectivePlan, result.verifiedFields,
-              `${input.pageId}:${physicalProfilePage || monitorPageName}`,
-              new Map(readback?.controls.map(control => [control.fieldId, control.readback])));
+          recordReviewExpectations: () => {
+            this.#recordProfileReviewExpectations(result.committedFields,
+              `${input.pageId}:${physicalProfilePage || monitorPageName}`);
           },
           verifyStablePage: async () =>
             await this.#monitorPageForLane(page, "profile", signal) === monitorPageName,
@@ -1496,6 +1510,7 @@ export class OwnedWorkdayApplicationRuntime {
           const resolution = await activeBatch.answerResolver.resolve({
             ...resolutionRequest,
             committedReadback: readback,
+            employerNames:[new URL(page.url()).hostname.split('.')[0]!],
           }, innerSignal);
           if (resolution.ok && resolution.value.kind === "resolved" &&
               resolution.value.syntheticReplacementReason !== undefined) {
@@ -1789,56 +1804,28 @@ export class OwnedWorkdayApplicationRuntime {
   }
 
   #recordProfileReviewExpectations(
-    plan: NonNullable<Stage2ApplicationWalkRuntimeBindingRequest["ownerSources"]["profilePlan"]>,
-    verifiedFields: readonly {
-      readonly fieldId: string;
-      readonly provenance: string;
-      readonly uiBehavior: string;
-      readonly rowKey?: string;
-    }[],
+    fields: readonly CommittedProfileField[],
     pageId: string,
-    committedReadbacks: ReadonlyMap<string, string | null>,
   ): void {
-    const scalarPlans = plan.fields;
-    const repeatablePlans = plan.repeatables.flatMap(({ rows }) =>
-      rows.map(({ rowKey, fields }) => ({ rowKey, fields }))
-    );
-    for (const verifiedField of verifiedFields) {
-      if (isWorkdayReviewOmittedProfileField(verifiedField.fieldId)) continue;
-      const candidates = verifiedField.rowKey === undefined
-        ? scalarPlans.filter(({ fieldId }) => fieldId === verifiedField.fieldId)
-        : repeatablePlans
-          .filter(({ rowKey }) => rowKey === verifiedField.rowKey)
-          .flatMap(({ fields }) => fields)
-          .filter(({ fieldId }) => fieldId === verifiedField.fieldId);
-      if (candidates.length !== 1 || candidates[0]?.answer.kind !== "answered") {
-        throw new TypeError("profile review truth unavailable");
-      }
-      const plan = candidates[0];
-      if (plan.answer.kind !== "answered") throw new TypeError("profile review truth unavailable");
-      const reviewFieldId = verifiedField.rowKey === undefined
-          ? verifiedField.fieldId.startsWith("unknown.")
-            ? unknownProfileReviewFieldId(pageId, verifiedField.fieldId)
-            : verifiedField.fieldId
-          : repeatableReviewFieldId(verifiedField.rowKey, verifiedField.fieldId);
-      if (plan.answerType === "multi_select") {
-        // The picker has independently verified the employer's selected labels.
-        // Review renders those labels, which can differ from requested aliases.
-        const readback = verifiedField.rowKey === undefined ? committedReadbacks.get(verifiedField.fieldId) : plan.answer.value;
-        if (readback == null) throw new TypeError("profile review selection readback unavailable");
+    for (const field of fields) {
+      if (isWorkdayReviewOmittedProfileField(field.fieldId)) continue;
+      const reviewFieldId = field.rowKey === undefined
+        ? field.fieldId.startsWith("unknown.")
+          ? unknownProfileReviewFieldId(pageId, field.fieldId)
+          : field.fieldId
+        : repeatableReviewFieldId(field.rowKey, field.fieldId);
+      // Carry independently verified employer labels, including each repeatable row.
+      const readback = field.committedReadback;
+      if (field.uiBehavior === "multi_select") {
         const values: unknown = readback.trim().startsWith("[") ? JSON.parse(readback) : [readback];
         if (!Array.isArray(values) || values.length === 0 || values.some(value => typeof value !== "string" || value.trim() === "")) {
           throw new TypeError("profile review selection unavailable");
         }
-        values.forEach((value, index) => this.#recordReviewExpectation(`${reviewFieldId}.selection.${index}`, verifiedField.provenance, value));
+        values.forEach((value, index) => this.#recordReviewExpectation(`${reviewFieldId}.selection.${index}`, field.provenance, value));
         continue;
       }
-      this.#recordReviewExpectation(
-        reviewFieldId,
-        verifiedField.provenance,
-        profileReviewDisplayValue(plan.answerType, verifiedField.uiBehavior,
-          plan.optionMapping?.visibleOption ?? plan.answer.value),
-      );
+      this.#recordReviewExpectation(reviewFieldId, field.provenance,
+        profileReviewDisplayValue(field.answerType, field.uiBehavior, readback));
     }
   }
 
@@ -3029,13 +3016,19 @@ async function verifyWorkdayReviewSummary(
   expected: ReadonlyMap<string, ReviewExpectedField>,
   trace?: (event: string, details?: object) => void,
 ): Promise<void> {
-  const answers = await page.locator(workdayReviewSignatures.reviewRoot).evaluate((root) => {
+  const repeatable = new Map([...expected].filter(([id]) => id.startsWith("repeatable.")));
+  const repeatableContainers = repeatable.size === 0 ? [] : await verifyWorkdayReviewRepeatables(page, repeatable, trace);
+  const scalarExpected = new Map([...expected].filter(([id]) => !repeatable.has(id)));
+  const answers = await page.locator(workdayReviewSignatures.reviewRoot).evaluate((root, excludedIndexes) => {
+    const containers = [...root.querySelectorAll('[data-automation-id^="formField-"]')];
+    const excluded = excludedIndexes.map(index => containers[index]).filter(Boolean);
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const answers: string[] = [];
     while (walker.nextNode()) {
       const element = walker.currentNode.parentElement;
       if (element === null || element.getClientRects().length === 0 ||
-          element.closest('button, [role="button"]') !== null) continue;
+          element.closest('button, [role="button"]') !== null ||
+          excluded.some(container => container!.contains(element))) continue;
       const style = getComputedStyle(element);
       if (style.visibility !== "visible" ||
           !(style.fontWeight === "normal" || Number.parseInt(style.fontWeight, 10) < 600)) continue;
@@ -3048,7 +3041,7 @@ async function verifyWorkdayReviewSummary(
       }
     }
     return answers;
-  });
+  }, repeatableContainers);
   const observed = new Map<string, number>();
   for (const answer of answers) {
     for (const candidate of reviewAnswerCandidates(answer)) {
@@ -3057,11 +3050,11 @@ async function verifyWorkdayReviewSummary(
     }
   }
   const required = new Map<string, number>();
-  expected.forEach(({ valueSha256 }) =>
+  scalarExpected.forEach(({ valueSha256 }) =>
     required.set(valueSha256, (required.get(valueSha256) ?? 0) + 1)
   );
   const missing = [...required].filter(([digest, count]) => (observed.get(digest) ?? 0) < count);
-  for (const [fieldId, { valueSha256 }] of expected) {
+  for (const [fieldId, { valueSha256 }] of scalarExpected) {
     if (missing.some(([digest]) => digest === valueSha256)) {
       trace?.("review_summary_field_missing", { fieldId });
     }
@@ -3085,6 +3078,161 @@ async function verifyWorkdayReviewSummary(
     const missingFieldIds = [...expected].filter(([, { valueSha256 }]) => missingDigests.has(valueSha256)).map(([fieldId]) => fieldId);
     throw new TypeError(`Review field mismatch: ${JSON.stringify({ missingFieldIds })}`);
   }
+}
+
+// Summary values have no stable field ids. Keep each labelled field inside its
+// employer/school row before matching; global text presence cannot prove ownership.
+async function verifyWorkdayReviewRepeatables(
+  page: Page,
+  expected: ReadonlyMap<string, ReviewExpectedField>,
+  trace?: (event: string, details?: object) => void,
+): Promise<readonly number[]> {
+  const rows = await page.locator(workdayReviewSignatures.reviewRoot).evaluate(root => {
+    const normalize = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim();
+    const visible = (element: Element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible";
+    const headingSelector = 'h1, h2, h3, h4, h5, h6, [role="heading"]';
+    const headings = [...root.querySelectorAll(headingSelector)].filter(visible);
+    const identity = (text: string) => /^(education|work experience|employment|website|skill)s?\s*#?\s*\d+$/iu.exec(normalize(text));
+    const sectionName = (name: string) => /education/iu.test(name) ? "education" : /website/iu.test(name) ? "website" : /skill/iu.test(name) ? "skills" : "experience";
+    const rows = new Map<Element, { section: string; explicit: boolean; containers: number[]; fields: { container: number; label: string; values: string[] }[] }>();
+    const containers = [...root.querySelectorAll('[data-automation-id^="formField-"]')];
+    for (const [index, container] of containers.entries()) {
+      if (!visible(container) || container.querySelector('[data-automation-id^="formField-"]')) continue;
+      const explicitRow = container.closest('[data-row-id], [data-automation-id^="education-"], [data-automation-id^="workExperience-"], [data-automation-id^="website-"], [data-automation-id^="websites-"], [data-automation-id^="skills-"]');
+      const explicitId = explicitRow?.getAttribute("data-automation-id") ?? "";
+      const section = explicitRow?.closest('[data-automation-id="educationSection"], [data-automation-id="workExperienceSection"], [data-automation-id="websitesSection"], [data-automation-id="websiteSection"], [data-automation-id="skillsSection"]');
+      const preceding = headings.filter(heading => (heading.compareDocumentPosition(container) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).at(-1);
+      const headingMatch = preceding === undefined ? null : identity(preceding.textContent ?? "");
+      const explicitSection = /^(education|workExperience|websites?|skills)-\d+$/u.exec(explicitId)?.[1] ??
+        (explicitRow?.hasAttribute("data-row-id") ? section?.getAttribute("data-automation-id") : undefined);
+      const owner = explicitSection ? explicitRow : headingMatch ? preceding : undefined;
+      const ownerSection = explicitSection ?? headingMatch?.[1];
+      if (!owner || !ownerSection || !root.contains(owner)) continue;
+      const row = rows.get(owner) ?? { section: sectionName(ownerSection), explicit: explicitSection !== undefined, containers: [], fields: [] };
+      row.containers.push(index);
+      const labelCandidates = [...container.querySelectorAll('label, dt, [data-automation-id="formLabel"], b, strong')]
+        .filter(visible);
+      const labels = labelCandidates.filter(candidate => !labelCandidates.some(other =>
+        other !== candidate && other.contains(candidate)));
+      // Workday review labels can be plain divs styled bold.
+      if (labels.length === 0) labels.push(...[...container.querySelectorAll('*')].filter(element =>
+        element.children.length === 0 && visible(element) && Number.parseInt(getComputedStyle(element).fontWeight, 10) >= 600));
+      const label = labels.map(element => normalize(element.textContent ?? "")).filter(Boolean);
+      if (label.length === 1) {
+        const values: string[] = [];
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const element = walker.currentNode.parentElement;
+          if (!element || !visible(element) || element.closest('button, [role="button"]') ||
+              labels.some(label => label.contains(element)) || element.closest(headingSelector)) continue;
+          const value = normalize(walker.currentNode.textContent ?? "");
+          if (value) values.push(value);
+        }
+        row.fields.push({ container: index, label: label[0]!, values });
+      }
+      rows.set(owner, row);
+    }
+    for (const skill of root.querySelectorAll('[data-automation-id="skills"] li')) {
+      if (!visible(skill) || [...rows.keys()].some(owner => owner.contains(skill))) continue;
+      const container = containers.indexOf(skill.closest('[data-automation-id^="formField-"]')!);
+      if (container < 0) continue;
+      rows.set(skill, { section: "skills", explicit: true, containers: [container],
+        fields: [{ container, label: "Skill", values: [normalize(skill.textContent ?? "")] }] });
+    }
+    return [...rows.values()];
+  });
+  const expectedRows = new Map<string, { section: string; facts: { field: string; fact: ReviewExpectedField }[] }>();
+  for (const [id, fact] of expected) {
+    const match = /^repeatable\.([a-f0-9]{16})\.(education|experience|website|skills)\.(.+?)(?:\.selection\.\d+)?$/u.exec(id);
+    if (!match) throw new TypeError("Review row attribution unavailable");
+    const key = `${match[2]}.${match[1]}`;
+    const row = expectedRows.get(key) ?? { section: match[2]!, facts: [] };
+    row.facts.push({ field: match[3]!, fact });
+    expectedRows.set(key, row);
+  }
+  const aliases: Readonly<Record<string, readonly string[]>> = {
+    school: ["school", "school or university", "university", "institution"],
+    degree: ["degree"], field_of_study: ["field of study", "major"], gpa: ["overall result gpa", "gpa", "grade average"],
+    company: ["company", "company name", "employer"], title: ["job title", "title"], location: ["location"],
+    current: ["i currently work here", "currently work here"], description: ["role description", "description"],
+    start_month: ["from", "start date"], start_year: ["from", "start date", "first year attended"], start_date: ["from", "start date"],
+    end_month: ["to", "end date"], end_year: ["to", "end date", "last year attended"], end_date: ["to", "end date"],
+    url: ["website", "url", "website url"],
+    name: ["skill", "skills", "name"],
+  };
+  const normalizeLabel = (label: string) => label.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const matches = [...expectedRows.values()].map(expectedRow => {
+    const unaliased = expectedRow.facts.filter(({ field }) => !aliases[field]).map(({ fact }) => fact.fieldId);
+    if (unaliased.length > 0) {
+      trace?.("review_row_attribution_unavailable", { section: expectedRow.section, fieldIds: unaliased });
+      throw new TypeError("Review row attribution unavailable");
+    }
+    const unavailable = new Set<string>();
+    const candidates = rows.flatMap((row, index) => {
+      if (row.section !== expectedRow.section) return [];
+      const valid = expectedRow.facts.every(({ field, fact }) => {
+        const fields = row.fields.filter(observed => aliases[field]?.includes(normalizeLabel(observed.label)));
+        if (field === "current" && fields.length === 0) unavailable.add(fact.fieldId);
+        if (fields.length !== 1) return false;
+        const values = fields[0]!.values;
+        const occurrences = expectedRow.facts.filter(other => other.field === field && other.fact.valueSha256 === fact.valueSha256).length;
+        if (occurrences > 1 && values.filter(value =>
+          createHash("sha256").update(normalizeReviewValue(value), "utf8").digest("hex") === fact.valueSha256
+        ).length < occurrences) return false;
+        const candidates = new Set([...values, values.join(" ")].map(normalizeReviewValue));
+        if (field === "url") for (const value of values) candidates.add(canonicalReviewUrl(value));
+        if (field.endsWith("_date")) for (const value of values) {
+          candidates.add(normalizeReviewExpectedValue(field, value));
+          if (/^\d{1,2}\/\d{4}$/u.test(value)) unavailable.add(fact.fieldId);
+        }
+        if (/(?:month|year)$/u.test(field)) for (const value of values) {
+          // A From/To date may summarize separate committed month/year controls.
+          const date = /^(\d{1,2})\/(?:\d{1,2}\/)?(\d{4})$/u.exec(value);
+          if (date) candidates.add(field.endsWith("month") ? date[1]!.padStart(2, "0") : date[2]!);
+        }
+        return [...candidates].some(value => createHash("sha256").update(value, "utf8").digest("hex") === fact.valueSha256);
+      });
+      return valid ? [index] : [];
+    });
+    if (candidates.length === 0 && unavailable.size > 0) {
+      trace?.("review_row_attribution_unavailable", { section: expectedRow.section, fieldIds: [...unavailable] });
+      throw new TypeError("Review row attribution unavailable");
+    }
+    if (!rows.some(row => row.section === expectedRow.section && row.fields.length > 0)) {
+      trace?.("review_row_attribution_unavailable", { section: expectedRow.section });
+      throw new TypeError("Review row attribution unavailable");
+    }
+    return candidates;
+  });
+  // One-to-one assignment also handles identical rows and rows with different
+  // optional fields omitted. A greedy first match can consume the wrong row.
+  const assigned = new Map<number, number>();
+  const assign = (expectedIndex: number, visited: Set<number>): boolean => {
+    for (const observedIndex of matches[expectedIndex]!) {
+      if (visited.has(observedIndex)) continue;
+      visited.add(observedIndex);
+      const previous = assigned.get(observedIndex);
+      if (previous === undefined || assign(previous, visited)) {
+        assigned.set(observedIndex, expectedIndex);
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!matches.every((_candidates, index) => assign(index, new Set()))) {
+    trace?.("review_repeatable_row_mismatch", { expectedRows: expectedRows.size, observedRows: rows.length });
+    throw new TypeError("Review field mismatch: repeatable row");
+  }
+  const sectionFields: Readonly<Record<string, readonly string[]>> = {
+    education: ["school", "degree", "field_of_study", "gpa", "start_year", "end_year", "start_date", "end_date"],
+    experience: ["company", "title", "location", "current", "description", "start_month", "start_year", "end_month", "end_year", "start_date", "end_date"],
+    skills: ["name"], website: ["url"],
+  };
+  // A numbered heading scopes only that section's labelled fields. It does not
+  // turn a following standalone scalar into part of the preceding history row.
+  return rows.flatMap(row => row.explicit ? row.containers : row.fields.filter(field =>
+    sectionFields[row.section]?.some(key => aliases[key]?.includes(normalizeLabel(field.label)))
+  ).map(field => field.container));
 }
 
 export function reviewAnswerCandidates(value: string): ReadonlySet<string> {

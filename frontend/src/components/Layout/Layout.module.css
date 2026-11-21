@@ -13,6 +13,8 @@
   position: sticky;
   top: 10px;
   z-index: 10;
+  background: var(--bg);
+  border-radius: var(--radius-md);
 }
 
 .nav {
@@ -157,33 +159,36 @@
 
 @media (max-width: 760px) {
   .header {
-    position: relative;
-    top: 0;
-    align-items: stretch;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
     position: static;
   }
 
   .nav {
-    width: 100%;
-    flex-direction: column;
-    gap: 4px;
-    padding: 8px;
+    display: contents;
   }
 
   .navGroup {
+    grid-column: 1 / -1;
+    grid-row: 2;
     width: 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 8px;
   }
 
   .navLink {
-    flex-shrink: 0;
     min-height: 44px;
+    padding: 6px 8px;
   }
 
   .navSecondary {
-    width: 100%;
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    max-width: 210px;
     justify-content: flex-end;
   }
 
