@@ -263,7 +263,7 @@ test("Canadian authorization and sponsorship use only their scoped saved answers
 });
 
 
-test("only approved recruitment terms use saved consent; required unknown declarations use authorized provisional fallback", async () => {
+test("only scoped recruitment terms use saved consent across controls and fallback policies", async () => {
   const privacy = "Please confirm that you have read and agree to Canonical's Recruitment Privacy Notice and Privacy Policy.";
   const acknowledgement = {id: optionId("acknowledgement"), label: boundedText("Acknowledge/Confirm")};
   const observedSelect = field(privacy, "select", [
@@ -287,10 +287,17 @@ test("only approved recruitment terms use saved consent; required unknown declar
     const {resolver, profile} = resolverWith({
       kind: "answered", provenance: "owner_provided", lane: "live_owner_fact", value: true,
     });
-    const mixed = {...observedSelect, label: boundedText(label)};
-    for (const answerFallbackPolicy of ["owner_facts_only", "deterministic_site_valid_editable"] as const) {
-      const answer = await resolver.resolve({...request(mixed), answerFallbackPolicy}, signal);
-      assert.ok(!answer.ok || answer.value.kind !== "resolved", label);
+    for (const behavior of ["checkbox", "radio", "select", "listbox"] as const) {
+      const options = [acknowledgement, {id:optionId("yes"), label:boundedText("Yes")}];
+      for (const option of options) {
+        const mixed = field(label, behavior, behavior === "checkbox" ? [] : [option]);
+        for (const answerFallbackPolicy of ["owner_facts_only", "deterministic_site_valid_editable"] as const) {
+          for (const rawOptions of [undefined, mixed.options.map(choice => String(choice.label))]) {
+            const answer = await resolver.resolve({...request(mixed), field:{...mixed, rawQuestion:label, rawOptions}, answerFallbackPolicy}, signal);
+            assert.ok(!answer.ok && answer.error.code === "protected_answer_denied", label);
+          }
+        }
+      }
     }
     assert.equal(profile.calls.length, 0);
   }
@@ -304,8 +311,22 @@ test("only approved recruitment terms use saved consent; required unknown declar
   }
   const denied = await ownerConsent(false).resolve(request(observedSelect), signal);
   assert.ok(!denied.ok || denied.value.kind !== "resolved");
-  const approvedLabels = new Set(['Yes, I have read and consent to the terms and conditions*','Applicant Privacy Notice','Privacy Policy','Terms','Terms & Conditions','Accept terms','I have read the terms']);
-  for (const label of ["Yes, I have read and consent to the terms and conditions*", "I Agree",
+  const informativeNotice = "Applicant Privacy Policy. " + "We process your application information for recruitment purposes. ".repeat(9);
+  const limitedRetention = "I consent to the processing of my personal data for recruitment purposes. Your personal data will be retained for up to 12 months.";
+  for (const text of [informativeNotice, limitedRetention, "I have read and understood the Recruitment Privacy Notice", "Acme Corp Privacy Notice", "Applicant Privacy Statement"]) {
+    const included = field("Privacy notice", "checkbox");
+    const answer = await ownerConsent(true).resolve({...request(included), field:{...included, rawQuestion:text}}, signal);
+    assert.ok(answer.ok && answer.value.kind === "resolved" && answer.value.lane === "live_owner_fact", text);
+  }
+  for (const raw of [undefined, [String(acknowledgement.label)]]) {
+    const actual = {...observedSelect, rawOptions:raw};
+    const missing = resolverWith({kind:"profile_answer_missing"});
+    const result = await missing.resolver.resolve({...request(actual), answerFallbackPolicy:"deterministic_site_valid_editable"}, signal);
+    assert.ok(!result.ok && result.error.code === "protected_answer_denied");
+  }
+  const declinedNotice = "I agree to the Recruitment Privacy Notice. If you do not consent, we cannot process your application.";
+  const approvedLabels = new Set([declinedNotice,'Yes, I have read and consent to the terms and conditions*','Applicant Privacy Notice','Privacy Policy','Terms','Terms & Conditions','Accept terms','I have read the terms']);
+  for (const label of [declinedNotice, "Yes, I have read and consent to the terms and conditions*", "I Agree",
     "Applicant Privacy Notice", "Privacy Policy", "Terms", "Terms & Conditions", "Accept terms", "I have read the terms", "I have read and understood",
     "I agree to disclose my gender", "I consent to disclose my veteran status", "I agree that I am authorized to work in Canada"]) {
     for (const stored of [{ kind: "profile_answer_missing" } as const,
@@ -324,9 +345,6 @@ test("only approved recruitment terms use saved consent; required unknown declar
               assert.equal(answer.value.intent.kind,'toggle');
               if(answer.value.intent.kind==='toggle') assert.equal(answer.value.intent.checked,true);
             }
-          } else if (mode === "synthetic_test_non_submittable" || answerFallbackPolicy === "deterministic_site_valid_editable") {
-            assert.ok(answer.ok && answer.value.kind === "resolved");
-            if (answer.ok && answer.value.kind === "resolved") assert.equal(answer.value.lane, "synthetic_test_default");
           } else assert.deepEqual(answer, {
             ok: false, error: { code: "protected_answer_denied", retryable: false },
           });

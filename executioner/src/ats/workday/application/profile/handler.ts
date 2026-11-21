@@ -28,7 +28,7 @@ import { answerLaneAdmitted } from "../../../../form/answers/application-types.t
 import { testingQuestionSemanticType } from "../../../../form/answers/testing-policy.ts";
 import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-value.ts";
 import { boundedText } from "../../../../contracts/index.ts";
-import { protectedQuestionCategory, isRecruitmentTermsConsent } from "../questions/protected.ts";
+import { protectedQuestionCategory } from "../questions/protected.ts";
 import type { AnswerFallbackPolicy } from
   "../../../../contracts/application-execution-policy.ts";
 import { boundedOptionalSkillFacts } from "./site-answer-routing.ts";
@@ -675,7 +675,7 @@ function syntheticProfileField(
   // Optional consent and workflow toggles are observed UI, not inferred answers.
   if (!control.required) return undefined;
   // A draft fallback is not consent to employer terms or a legal attestation.
-  if (control.label && protectedQuestionCategory(boundedText(control.label), undefined) === 'consent' && !isRecruitmentTermsConsent(control.label)) return undefined;
+  if (control.label && protectedQuestionCategory(control.label, undefined) === 'consent') return undefined;
   const unknown = /^unknown\.(?:required|optional)\./u.test(control.fieldId);
   if (!unknown && (template === undefined ||
       template.answer.kind !== "profile_answer_missing")) return undefined;

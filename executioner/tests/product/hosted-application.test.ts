@@ -339,9 +339,8 @@ test('hosted fill answers owned radio groups and never submits; edits invalidate
     await p.locator('[name=email]').fill('');await assert.rejects(reviewDigest(p),/Required/);
     await p.locator('legend').evaluate(e=>{e.textContent='Background checks may be required. '.repeat(20)+'By submitting my application, I confirm that I have read and understood this information.';});
     await p.locator('input[type=radio]').evaluateAll(es=>es.forEach(e=>(e as HTMLInputElement).checked=false));
-    const provisionalConsent=await fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
-    assert.equal(provisionalConsent.needsOwnerReview,true);
-    assert.equal(await p.locator('input[type=radio]:checked').count(),1);
+    await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{}),/requires a consent decision/);
+    assert.equal(await p.locator('input[type=radio]:checked').count(),0);
     await p.locator('fieldset').evaluate(e=>{e.innerHTML='<input role="combobox" aria-label="Applicant Privacy Notice" aria-required="true" onclick="window.consentClicks=(window.consentClicks||0)+1">';});
     await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{}),/dropdown did not expose its choices/i);
     assert.ok(await p.evaluate('window.consentClicks>0'));

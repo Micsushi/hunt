@@ -93,7 +93,8 @@ export function createPageAnswerPlanner(
     const longQuestion = isLong(row.question);
     const longOptions = row.options.some(isLong);
     const unbounded = longQuestion || longOptions;
-    if (!unbounded && row.widget === 'province-menu') {
+    const consent = protectedQuestionCategory(row.question, undefined, row.options) === "consent";
+    if (!unbounded && !consent && row.widget === 'province-menu') {
       const country = facts.find(fact => fact.factId === 'country')?.value;
       const region = facts.find(fact => fact.factId === 'region')?.value;
       const applicable = typeof country === 'string' && normalizeCatalogText(country) === 'canada' &&
@@ -101,7 +102,7 @@ export function createPageAnswerPlanner(
       return {...binding, answer: applicable ? region : null, provisional: !applicable,
         reason: applicable ? 'profile_answer' : 'province_requires_review'};
     }
-    if (!unbounded && row.widget === 'international-phone') {
+    if (!unbounded && !consent && row.widget === 'international-phone') {
       const savedPhoneCountry = facts.find(fact => fact.factId === 'phone_country_code')?.value;
       const residence = facts.find(fact => fact.factId === 'country')?.value;
       const numericDial = typeof savedPhoneCountry === 'string' && /^\+\d{1,3}$/.test(savedPhoneCountry.trim()) ? savedPhoneCountry.trim().slice(1) : undefined;
@@ -140,7 +141,7 @@ export function createPageAnswerPlanner(
       resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,
       employerNames:employerNames},signal);
     const resolved=resolution.ok&&resolution.value.kind==='resolved'?resolution.value:undefined;
-    if (unbounded) {
+    if (unbounded || consent) {
       const intent = resolved?.intent;
       const answer = intent?.kind === 'choice'
         ? row.options[field.options.findIndex(option => option.id === intent.optionId)] ?? null
@@ -189,6 +190,7 @@ export function createPageAnswerPlanner(
   return async (row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal) => {
     try {
       const plan = await planAnswer(row, observations, signal);
+      if (plan.reason === 'protected_answer_denied') return plan;
       if (row.widget === 'native-multiple' && row.required && !row.selected && plan.provisional && typeof plan.answer === 'string') {
         const question = resolveQuestion(row.question, employerNames);
         const sensitive = protectedQuestionCategory(row.question, question.kind === 'resolved' ? question.id : undefined) ||

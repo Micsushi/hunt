@@ -228,7 +228,8 @@ test("an injected owner answer can resolve an observed unknown question", async 
 
 test("preserved consent skips mutations and unknown consent cannot become an injected owner fact", async () => {
   for (const label of ["Yes, I have read and consent to the terms and conditions*",
-    "Applicant Privacy Notice", "Privacy Policy", "I have read and understood"]) {
+    "Applicant Privacy Notice", "Privacy Policy", "I have read and understood",
+    "I agree to the Recruitment Privacy Notice and confirm that no AI tools were used."]) {
     for (const mode of ["live", "synthetic_test_non_submittable"] as const) {
       for (const answerFallbackPolicy of ["owner_facts_only", "deterministic_site_valid_editable"] as const) {
         for (const [state, required, expected] of [

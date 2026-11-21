@@ -23,7 +23,7 @@ import type {
   ApplicationAnswerResolver,
 } from "./application-types.ts";
 import { isEmptyCatalogMessage } from "../options/catalog.ts";
-import { mapVisibleOption } from "../options/mapper.ts";
+import { consentOption, mapVisibleOption } from "../options/mapper.ts";
 import {
   generatedLearningDefaultFor,
   inspectQuestionMatch,
@@ -35,7 +35,6 @@ import { normalizeCatalogText } from "../questions/normalize.ts";
 import { employmentQuestion, referralQuestion, sameEmployer } from '../questions/matching.ts';
 import {
   contractApprovedPrivacyChoices,
-  isPrivacyDocumentAcknowledgment,
   isRecruitmentTermsConsent,
   protectedQuestionCategory,
 } from "../questions/protected.ts";
@@ -467,27 +466,25 @@ export function createApplicationAnswerResolver(
       const questionText = field.rawQuestion ?? field.label;
       const questionResolution = resolveQuestion(questionText, request.employerNames);
       const protectedCategory = protectedQuestionCategory(questionText,
-        questionResolution.kind === 'resolved' ? questionResolution.id : undefined);
+        questionResolution.kind === 'resolved' ? questionResolution.id : undefined, field.rawOptions ?? field.options.map(option => option.label));
       if ((field.rawQuestion !== undefined || field.rawOptions !== undefined) && field.behavior === 'file_upload') {
         return unsupported(field);
       }
       if (protectedCategory === "consent") {
         if (field.state === "populated") return success({kind:'readback_only',fieldId:field.fieldId});
-        const choices = field.behavior === "select" ? field.options.filter(({label}) =>
-          label.trim() && !placeholderOption.test(normalizeCatalogText(label)) && !isEmptyCatalogMessage(label)) : [];
-        const acknowledgment = choices.length === 1 && normalizeCatalogText(choices[0]!.label) === "acknowledge confirm"
-          ? choices[0]!.label : undefined;
-        if (acknowledgment && !isPrivacyDocumentAcknowledgment(questionText)) return failure("protected_answer_denied");
-        if (isRecruitmentTermsConsent(questionText)) {
-          const consent = await query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal);
-          if (!consent.ok) return consent;
-          if (consent.value.kind==='answered' && consent.value.provenance==='owner_provided' && typeof consent.value.value==='boolean') {
-            const answer = consent.value.value && acknowledgment ? acknowledgment : consent.value.value;
-            return success(intentFor(field, undefined, answer, consent.value.provenance, 'live_owner_fact'));
-          }
+        if (!isRecruitmentTermsConsent(questionText)) return failure("protected_answer_denied");
+        const consent = await query({profileId:request.profileId, profileRevision:request.profileRevision, factId:"terms_consent"}, signal);
+        if (!consent.ok) return consent;
+        if (consent.value.kind !== "answered" || consent.value.provenance !== "owner_provided" ||
+            consent.value.lane !== "live_owner_fact" || typeof consent.value.value !== "boolean") return failure("protected_answer_denied");
+        const value = consent.value.value;
+        if (field.behavior === "select" || field.behavior === "radio" || field.behavior === "listbox") {
+          const choice = consentOption(value, field.options, field.rawOptions);
+          if (!choice) return failure("protected_answer_denied");
+          return resolved({kind:"choice", behavior:field.behavior, fieldId:field.fieldId, target:field.target,
+            optionId:choice.id, expectedOption:choice.label, provenance:"owner_provided"}, "live_owner_fact");
         }
-        if (acknowledgment) return failure("protected_answer_denied");
-        if (!field.rawOptions) return provisionalAnswer();
+        return success(intentFor(field, undefined, value, "owner_provided", "live_owner_fact"));
       }
       if (field.rawOptions !== undefined) {
         if (!fallbackAllowed) return failure('protected_answer_denied');

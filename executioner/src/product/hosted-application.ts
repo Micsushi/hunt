@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { Page } from 'playwright';
 import { disposeResumeArtifact } from '../contracts/index.ts';
 import { createPageAnswerPlanner, matchLocationOption, type PageQuestion } from './page-answer-planner.ts';
-import { isRecruitmentTermsConsent } from '../form/questions/protected.ts';
+import { isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
 import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
@@ -139,10 +139,10 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           options:f.options,required:f.required,outcome:'observed',constraints:{inputType:f.inputType,
             min:f.min,max:f.max,step:f.step,minLength:f.minLength,maxLength:f.maxLength,pattern:f.pattern,readOnly:f.readOnly}};
         matching.record(matchObservation);
-        if (!isRecruitmentTermsConsent(f.label) && (/\b(?:consent|terms and conditions|terms of use|privacy policy|privacy notice)\b|^terms$|\bI confirm that I have read and understood\b/i.test(f.label) || f.options.some(option=>/\b(?:consent|authorize|agree)\b/i.test(option)))) {
+        if (protectedQuestionCategory(f.label, undefined, f.options) === 'consent' && !isRecruitmentTermsConsent(f.label)) {
           const answered = f.kind==='checkbox' ? f.checked : !!f.value.trim();
           if(answered || !f.required){known.set(identity,answered?'existing':'optional');continue;}
-          if(sources.executionPolicy.answerFallbackPolicy!=='deterministic_site_valid_editable')throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');
+          throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');
         }
         if (!f.required) { known.set(identity,'optional'); continue; }
         if (f.buttonConflict) throw new ApplicationPause('The employer shows an inconsistent choice. Inspect it before retrying.');
