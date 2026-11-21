@@ -1,6 +1,7 @@
 import { applicationAttachmentControls } from '../../extension/page-adapters/document.js';
 import { observeFormDocument } from '../../extension/form-page.js';
 import { createHash } from 'node:crypto';
+import { chooseLeverLocation, verifyAshbyAutocomplete } from './hosted-autocomplete.ts';
 import { inspectHostedFields } from './hosted-field-observation.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -152,6 +153,11 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         if (f.kind === 'location' || f.kind === 'combobox' && (/location.*city|^(?:current )?location$/i.test(f.label) || await loc.evaluate(e=>e.closest('[data-field-path="_systemfield_location"]')!==null))) {
           const city = fact('city');
           if (typeof city !== 'string') throw new ApplicationPause('Add your location to the profile.');
+          if (f.valid && f.value && (f.kind === 'combobox' || await loc.evaluate(e =>
+            location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]')))) {
+            known.set(identity, `existing:${f.value}`);
+            continue;
+          }
           let searchText = city;
           await loc.fill('');if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city);
           const choiceOwner = await loc.getAttribute('aria-controls');
@@ -224,7 +230,9 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
               if (placement === 'changed') throw new ApplicationPause('The location menu changed. Inspect the selected location before retrying.');
               if (placement === 'blocked') throw new Error('Another element intercepts pointer events on the location choice.');
               assertTarget();
-              await target.click({timeout:3000});
+              if (exact >= 0 && await loc.evaluate(e => location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]'))) {
+                await chooseLeverLocation(loc, labels, index, searchText);
+              } else await target.click({timeout:3000});
             } finally { await target.dispose(); }
           }
           catch(error) {
@@ -247,6 +255,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
             await (await ownedChoice()).click({timeout:3000});
           }
           await loc.blur();
+          if (target.ats === 'ashby') await verifyAshbyAutocomplete(loc, expected);
           if((await inspectHostedFields(page)).find(x=>x.key===f.key)?.value!==expected)throw new ApplicationPause('The location selection did not persist.');
           if(f.kind==='location' && !await page.locator('#selected-location').inputValue())throw new ApplicationPause('Location backing value is missing.');
           known.set(identity,expected);changed=true;continue;
@@ -313,7 +322,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         else if(f.kind==='multicheck'){const index=options.indexOf(String(expected));if(index<0)throw new ApplicationPause('Checkbox group answer is missing.');const boxes=loc.locator('input[type=checkbox]');const box=boxes.nth(index);if(await box.getAttribute('aria-hidden')==='true')await box.locator('xpath=ancestor::*[@role="checkbox"][1]').click();else await box.setChecked(true);if(!await box.evaluate((e:HTMLInputElement)=>e.closest('[role=checkbox]')?e.closest('[role=checkbox]')!.getAttribute('aria-checked')==='true':e.checked))throw new ApplicationPause('Checkbox group answer did not persist.');}
         else if(f.kind==='buttons') { await loc.getByRole('button',{name:String(expected),exact:true}).click(); if((await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label)?.value!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
         else if(f.kind==='select') { await loc.selectOption({label:String(expected)}); if(await loc.locator('option:checked').textContent()!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
-        else if(f.kind==='combobox') { const choice=popup!.filter({hasText:new RegExp('^'+String(expected).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$')});if(await choice.count()!==1)throw new ApplicationPause('Dropdown choice is ambiguous.');await choice.click();await loc.blur();const after=(await inspectHostedFields(page)).find(x=>x.key===f.key);if(after?.value!==expected){await loc.click();const selected=popup!.locator('xpath=self::*[@aria-selected="true"]');if(await selected.count()!==1||(await selected.innerText()).trim()!==expected)throw new ApplicationPause('The selected dropdown answer could not be verified.');await loc.press('Escape');await loc.blur();} }
+        else if(f.kind==='combobox') { const choice=popup!.filter({hasText:new RegExp('^'+String(expected).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$')});if(await choice.count()!==1)throw new ApplicationPause('Dropdown choice is ambiguous.');await choice.click();await loc.blur();if(target.ats==='ashby')await verifyAshbyAutocomplete(loc,String(expected));const after=(await inspectHostedFields(page)).find(x=>x.key===f.key);if(after?.value!==expected){await loc.click();const selected=popup!.locator('xpath=self::*[@aria-selected="true"]');if(await selected.count()!==1||(await selected.innerText()).trim()!==expected)throw new ApplicationPause('The selected dropdown answer could not be verified.');await loc.press('Escape');await loc.blur();} }
         else if(f.kind==='checkbox') { await loc.setChecked(expected===true);if(await loc.isChecked()!==(expected===true))throw new ApplicationPause('The checkbox answer did not persist.'); }
         else if(f.kind==='date' && f.inputType==='date') {await loc.fill(String(expected));await loc.blur();if(await loc.inputValue()!==expected)throw new ApplicationPause('The selected date did not persist.');}
         else if(f.kind==='date') {const [year,month,day]=String(expected).split('-');const display=`${month}/${day}/${year}`;await loc.fill('');await loc.pressSequentially(`${month}${day}${year}`);await loc.blur();if(await loc.inputValue()!==display)throw new ApplicationPause('The selected date did not persist.');}

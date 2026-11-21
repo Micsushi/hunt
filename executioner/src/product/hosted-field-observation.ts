@@ -19,6 +19,10 @@ export async function inspectHostedFields(page: Page) {
     };
     const labelText = (e: Element) => clean(labelContent(e));
     const committedChoice = (e: HTMLInputElement) => {
+      if (location.hostname === 'jobs.ashbyhq.com' && e.matches('.ashby-application-form-input-autocomplete[aria-autocomplete=list]')) {
+        const restored = (e as HTMLInputElement & { huntRestoredChoice?: string }).huntRestoredChoice;
+        return restored && restored === e.value && e !== document.activeElement && e.getAttribute('aria-expanded') === 'false' ? restored : '';
+      }
       const control=e.closest('.select__control');
       const pill=control?.querySelector('[class*=single-value]')?.textContent?.trim() ||
         [...control?.querySelectorAll('.select__multi-value__label')??[]].map(node=>node.textContent?.trim()).join('; ');
@@ -160,7 +164,14 @@ export async function inspectHostedFields(page: Page) {
         }
         buttonConflict = !buttonValue && (pressed.length > 0 || [...backers].some(input=>input.checked));
       }
-      const value = kind==='select'?[...(raw as HTMLSelectElement).selectedOptions].filter(o=>!o.disabled&&o.value).map(o=>o.textContent?.trim()??'').join('; '):kind==='multicheck'?multiChecks.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join('; '):kind==='radio'?radios.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join(''):kind === 'buttons' ? buttonValue : kind === 'combobox' ? committedChoice(e) : e.value ?? '';
+      let value = kind==='select'?[...(raw as HTMLSelectElement).selectedOptions].filter(o=>!o.disabled&&o.value).map(o=>o.textContent?.trim()??'').join('; '):kind==='multicheck'?multiChecks.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join('; '):kind==='radio'?radios.filter(selected).map(r=>[...r.labels??[]].map(labelText).join(' ')).join(''):kind === 'buttons' ? buttonValue : kind === 'combobox' ? committedChoice(e) : e.value ?? '';
+      if (kind === 'location' && location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]')) {
+        const backing = e.closest('.application-field')?.querySelectorAll<HTMLInputElement>('input#selected-location[type=hidden][name=selectedLocation]');
+        try {
+          const selected = backing?.length === 1 && JSON.parse(backing[0]!.value);
+          value = typeof selected?.name === 'string' && selected.name === e.value ? e.value : '';
+        } catch { value = ''; }
+      }
       const owner = e.form ?? (e.hasAttribute('form') ? null : e.closest('form,[role=form]'));
       const formId = owner ? forms.indexOf(owner) : -1;
       out.push({ key, ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,

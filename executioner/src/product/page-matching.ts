@@ -63,7 +63,8 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
           ...(observed.componentFailure && {componentFailure: observed.componentFailure}),
           canUndo: observed.canUndo,
           canRedo: observed.canRedo,
-          incomplete: observed.incomplete === true || result.incomplete === true &&
+          incomplete: observed.matching?.some(row => row.required && row.valid === false) === true ||
+            observed.incomplete === true || result.incomplete === true &&
             (!result.frames?.some(frame => frame.status === 'unavailable') || !!result.componentFailure),
         };
         break;
