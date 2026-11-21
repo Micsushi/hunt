@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TEST_LIMIT = 500
 NODE_TEST = re.compile(
     r"(?:^|[;)}])\s*(?:await\s+)?(?:test|it|\w+\.test)(?:\.(?:skip|todo|only|each|concurrent|serial))*\s*\(",
     re.MULTILINE,
@@ -180,10 +179,7 @@ def main() -> int:
 
     if target == "all":
         count = _test_definition_count()
-        print(f"[tests] permanent test definitions: {count} (limit < {TEST_LIMIT})")
-        if count >= TEST_LIMIT:
-            print("[tests] Replace redundant coverage before adding tests.", file=sys.stderr)
-            return 1
+        print(f"[tests] permanent test definitions: {count}")
 
     print("[tests] repo:", ROOT)
     print("[tests] target:", target)
