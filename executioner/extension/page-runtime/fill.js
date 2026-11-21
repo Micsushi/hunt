@@ -551,8 +551,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     fields = collectFields();
     applicationRegions = identifyApplicationRegions(fields);
     if (separateAccountForm) fields = fields.filter(field => applicationRegions.includes(field.region));
+    const phoneDigits = value => value.replace(/[\s().-]/g, '');
     const sameText = (element, label, expected) => element.value === expected ||
-      (/phone|téléphone/i.test(label) && /\d/.test(element.value) && element.value.replace(/\D/g, '') === expected.replace(/\D/g, ''));
+      (/phone|téléphone/i.test(label) && /^\+?\d+$/.test(phoneDigits(element.value)) &&
+        phoneDigits(element.value) === phoneDigits(expected));
     const existingMatchReason = element => element.validity.valid && element.getAttribute('aria-invalid')!=='true'
       ? 'saved_value_already_present' : 'value_not_accepted';
     const reportExisting = (row, plan, same, skip) => {
@@ -723,7 +725,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const change={element:e,identity:identity(e),controlIdentity:controlIdentity(e),boundLabels:[...e.labels??[]],region:f.region,before:read(e),label:row.question};
         write(e,value);const immediate=currentElement(change),written=read(immediate??e);await new Promise(resolve=>setTimeout(resolve,100));
         e=currentElement(change);
-        if (!e || !editable(e) || !unchanged(e,value) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
+        const formattedPhone = e?.type === 'tel' && row.control === 'text' && sameText(e,row.question,value);
+        if (!e || !editable(e) || !(unchanged(e,value) || formattedPhone) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
           if(e && editable(e) && unchanged(e,e.type==='select-multiple' ? value : written)) {
             write(e,change.before);await new Promise(resolve=>setTimeout(resolve,100));e=currentElement(change);
           }

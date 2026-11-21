@@ -10,6 +10,41 @@ const facts = [
   { factId: 'country', value: 'Canada' },
   { factId: 'phone_number', value: '6135550100' },
 ];
+
+test('a native phone field can reformat the planned number without losing the entry', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route(url, route => route.fulfill({ contentType: 'text/html', body:
+      '<main><h1>Job application</h1><form><label for="first">First Name</label><input id="first" required><label for="email">Email</label><input id="email" type=email required>' +
+      '<label for="phone">Phone number</label><input id="phone" type=tel required><label>Resume<input type=file></label></form></main>' }));
+    for (const outcome of ['format', 'different-digit', 'invalid']) {
+      await page.goto(url);
+      await page.locator('[type=tel]').evaluate((field: HTMLInputElement, outcome) => {
+        field.addEventListener('input', () => {
+          if (!field.value) { field.setCustomValidity(''); return; }
+          field.value = outcome === 'different-digit' ? '613 555 0199' : '613 555 0100';
+          if (outcome === 'invalid') field.setCustomValidity('Rejected');
+        });
+      }, outcome);
+      const inspection = await page.evaluate(fillVisibleFields, { facts, action: 'status' as const });
+      const row = inspection.matching?.find(field => field.question === 'Phone number');
+      assert.ok(row, JSON.stringify(inspection.matching?.map(field => field.question)));
+      const result = await page.evaluate(fillVisibleFields, { facts, matchingPlans: [{
+        fieldId: row.fieldId, signature: row.signature, provisional: false, reason: 'test_fact', answer: '(613) 555-0100',
+      }] });
+      const field = page.locator('[type=tel]');
+      assert.equal(result.filled.includes('Phone number'), outcome === 'format');
+      assert.equal(await field.inputValue(), outcome === 'format' ? '613 555 0100' : '');
+      if (outcome === 'format') {
+        await page.evaluate(fillVisibleFields, { action: 'undo' as const });
+        assert.equal(await field.inputValue(), '');
+        await page.evaluate(fillVisibleFields, { action: 'redo' as const });
+        assert.equal(await field.inputValue(), '613 555 0100');
+      }
+    }
+  } finally { await browser.close(); }
+});
 const widget = (options = '', phone = '') => `<!doctype html>
 <form>
   <label>First Name<input name="first"></label>
