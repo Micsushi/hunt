@@ -1,3 +1,4 @@
+import { verifiedScreeningTransition } from './extension-bridge.ts';
 import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 import type { Page } from 'playwright';
 import type { ComponentFailure } from './component-diagnostics.ts';
@@ -48,6 +49,7 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
   try {
     await handle.scrollIntoViewIfNeeded({timeout:2000});
     signal.throwIfAborted();
+    const allowScreening = verifiedScreeningTransition(page,url);
     clicked = await handle.evaluate((node,url) => {
       const button = node as HTMLButtonElement;
       const host = (button.getRootNode() as ShadowRoot).host as HTMLElement | undefined;
@@ -75,6 +77,7 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
       button.click();
       return true;
     }, url);
+    if (clicked) await allowScreening();
   } finally { await handle.dispose(); }
   if (!clicked) return;
   const deadline = Date.now() + 4000;

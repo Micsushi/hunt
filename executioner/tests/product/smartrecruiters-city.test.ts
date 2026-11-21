@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { parseApplicationProfile } from '../../src/profile/application-profile.ts';
 import { chromium } from 'playwright';
 import { prepareCurrentPage } from '../../src/product/current-page-workflow.ts';
 import { advanceSmartRecruiters } from '../../src/product/smartrecruiters-workflow.ts';
@@ -196,12 +197,38 @@ test('queued screening choices require independent backing and the popup preserv
     assert.deepEqual(consent.filled,['Employer privacy notice']);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.equal(await page.locator('input[type=checkbox]').isChecked(),false);
+    await page.evaluate(fillVisibleFields,{action:'redo' as const});
+    await page.locator('spl-checkbox').evaluate(host=>{
+      host.querySelector('[slot=label-content]')!.textContent='You declare that you have read and agree to the privacy notice of Fixture.';
+      (globalThis as any).consentUpdates=0;
+      host.shadowRoot!.querySelector('input')!.addEventListener('change',()=>{(globalThis as any).consentUpdates++;});
+    });
+    const checked=(await snapshot()).find(row=>row.control==='checkbox')!;
+    for (const granted of [true,false]) {
+      const base=applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid'}) as {profile: ReturnType<typeof parseApplicationProfile>};
+      const profile={...base,profile:{...base.profile,unsetFactIds:base.profile.unsetFactIds.filter(id=>id!=='terms_consent'),facts:[...base.profile.facts,{factId:'terms_consent',value:granted,provenance:'owner_provided',lane:'live_owner_fact'}]}};
+      const sources=productSources(profile,Buffer.from('%PDF-fixture'));
+      try {
+        const planner=createPageAnswerPlanner(sources,effectiveProfileFacts(profile),'Fixture');
+        const compare=await planner(checked,[checked],new AbortController().signal);
+        assert.equal(compare.answer,granted);
+        const result=await page.evaluate(fillVisibleFields,{matchingPlans:[compare]});
+        assert.ok(result.skipped.some(row=>row.label===checked.question && row.reason===(granted?'saved_value_already_present':'saved_value_conflict')));
+        assert.equal(await page.locator('input[type=checkbox]').isChecked(),true);
+        assert.equal(await page.evaluate(()=>(globalThis as any).consentUpdates),0);
+      } finally {disposeResumeArtifact(sources.resumeIntent.artifact);}
+    }
+    const untouched=await page.evaluate(fillVisibleFields,{matchingPlans:[]});
+    const observation=untouched.matching?.find(row=>row.fieldId===checked.fieldId);
+    assert.ok(observation);
+    assert.equal(Object.hasOwn(observation,'chosenAnswer'),false);
+    assert.equal(Object.hasOwn(observation,'reason'),false);
     await page.locator('spl-autocomplete').evaluate((host:any)=>{host.value=undefined;});
     assert.equal((await snapshot()).find(row=>row.control==='listbox')?.selected,'');
     await page.locator('spl-radio-group').evaluate(group=>{
       group.setAttribute('value','');
       for(const radio of group.querySelectorAll('spl-radio')) radio.setAttribute('aria-checked','false');
-      group.querySelector('span')!.textContent='Vérification d’emploi | If advanced to an offer, you consent to respecting the employment verification and background check process.';
+      group.querySelector('span')!.textContent='VÃ©rification dâ€™emploi | If advanced to an offer, you consent to respecting the employment verification and background check process.';
     });
     const profile=applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'fixture@example.invalid'});
     await assert.rejects(prepareCurrentPage(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(10000),()=>{}),

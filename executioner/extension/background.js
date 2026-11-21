@@ -144,8 +144,17 @@ async function executeCommand(method, params, connection) {
       const documentId=genericUrl?(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame?.loaderId:undefined;
       if(genericUrl&&!documentId)throw new Error('The application document could not be verified.');
       if(params.selectedDocument && (!params.existingOnly || !genericUrl || documentId!==params.selectedDocument)) throw new Error('The selected application document changed. Inspect it again.');
-      attached.set(tabId, { targetId: target.id, host: new URL(params.url).hostname, genericUrl, documentId, connection, restoreViewport, viewportOwner });
-      return { tabId, targetId: target.id, ...(params.selectedDocument && {selectedDocument:documentId}) };
+      let screening;
+      if (genericUrl) {
+        const url = new URL(genericUrl);
+        const base = url.pathname.match(/^\/oneclick-ui\/company\/([\w-]+)\/publication\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/?$/i);
+        if (url.origin==='https://jobs.smartrecruiters.com' && base && url.searchParams.getAll('dcr_ci').every(company=>company===base[1])) {
+          url.pathname=url.pathname.replace(/\/$/,'')+'/screening';
+          screening={url:url.href,binding:crypto.randomUUID(),expires:0};
+        }
+      }
+      attached.set(tabId, { targetId: target.id, host: new URL(params.url).hostname, genericUrl, documentId, connection, restoreViewport, viewportOwner, screening });
+      return { tabId, targetId: target.id, ...(screening && {screeningBinding:screening.binding}), ...(params.selectedDocument && {selectedDocument:documentId}) };
     } catch (error) {
       let cleanupFailed=false;
       await restoreViewport().catch(() => {cleanupFailed=true;});
@@ -166,7 +175,24 @@ async function executeCommand(method, params, connection) {
   }
   const tab = await chrome.tabs.get(tabId);
   if (owned.genericUrl) {
-    if(exactGenericUrl(tab.url)!==owned.genericUrl||(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame?.loaderId!==owned.documentId)throw new Error('The application document changed. Inspect it before retrying.');
+    const url=exactGenericUrl(tab.url), frame=(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame;
+    if (frame?.loaderId!==owned.documentId || attached.get(tabId)!==owned || owned.connection!==connection) throw new Error('The application document changed. Inspect it before retrying.');
+    if (method==='screeningTransition') {
+      const transition=owned.screening;
+      if (!transition?.binding || params.binding!==transition.binding || params.url!==owned.genericUrl ||
+          ![owned.genericUrl,transition.url].includes(url) || exactGenericUrl(frame.url)!==url) throw new Error('The screening transition does not belong to this application.');
+      transition.binding=null;
+      transition.expires=Date.now()+4000;
+    }
+    if (url!==owned.genericUrl) {
+      const transition=owned.screening;
+      if (!transition?.expires || Date.now()>transition.expires || url!==transition.url || exactGenericUrl(frame.url)!==url) {
+        throw new Error('The application document changed. Inspect it before retrying.');
+      }
+      owned.genericUrl=url;
+      delete owned.screening;
+    }
+    if (method==='screeningTransition') return {};
     if(method==='cdp'&&['Page.navigate','Page.reload','Page.navigateToHistoryEntry'].includes(params.method))throw new Error('Unfamiliar applications must stay on the current page.');
   } else if (!supported(tab.url) || new URL(tab.url).hostname !== owned.host) throw new Error('The selected tab left its supported job site.');
   if (method === 'info') return { targetId: owned.targetId, browserContextId: 'c3-default', type: 'page', title: tab.title || '', url: tab.url, attached: true, canAccessOpener: false };

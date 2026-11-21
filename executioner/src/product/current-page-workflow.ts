@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import { advanceJobviteScreening } from './jobvite-workflow.ts';
+import { advanceJobviteScreening, isJobviteAttachmentWarning } from './jobvite-workflow.ts';
 import { advanceSmartRecruiters } from './smartrecruiters-workflow.ts';
 import { fillGenericApplication } from './generic-application.ts';
 import { ApplicationPause, type ProductInput } from './application-contract.ts';
@@ -47,7 +47,7 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     const reasons:Record<string,string>={saved_value_conflict:'saved profile differs',value_changed_after_fill:'site changed the filled value',existing_attachment_preserved:'existing attachment needs review',resume_attachment_not_verified:'attachment could not be verified',choice_requires_mapping:'no matching saved option',no_stored_mapping:'no saved answer',value_not_accepted:'site rejected the value',ambiguous_duplicate:'more than one matching field'};
     Object.assign(reasons,{
       protected_answer_denied:'choose your answer on the employer page',
-      screening_choice_not_confirmed:'check the employer’s selected answer',
+      screening_choice_not_confirmed:'check the selected answer on the employer page',
       screening_choice_requires_queue:'choose the answer on the employer page',
       uploaded_attachment_requires_review:'check the uploaded attachment on the page',
       resume_filename_visible_contents_unverified:'the employer shows the matching filename. PDF contents unverified',
@@ -81,12 +81,14 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
           /\bemployment verification and background check\b/i.test(text)) return 'Employment verification and background check consent';
       return text.trim().slice(0,70) || 'Field';
     };
-    const unresolved=report.skipped.filter(item=>!['saved_value_already_present','selected_resume_already_present','optional_field'].includes(item.reason));
+    const unresolved=report.skipped.filter(item=>!['saved_value_already_present','selected_resume_already_present','optional_field'].includes(item.reason)
+      && !(jobvite==='screening' && isJobviteAttachmentWarning(item)));
     const prioritized=[...unresolved].sort((a,b)=>Number(b.reason==='protected_answer_denied')-Number(a.reason==='protected_answer_denied'));
     const warnings=prioritized.slice(0,4).map(item=>`${label(item.label,item.reason)}: ${reasons[item.reason] ?? 'needs review'}`);
     if (unresolved.length > 4) warnings.push(`${unresolved.length - 4} more fields need review`);
-    const resumeVerified=report.resume === 'verified';
-    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeVerified ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.'}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? (advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.')}`);
+    const resumeStatus=jobvite==='screening' ? 'Jobvite acknowledged the selected resume. The employer PDF contents remain unverified.'
+      : report.resume==='verified' ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.';
+    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeStatus}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? (advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.')}`);
     if (report.componentFailure) {
       recordComponentFailure(paused, report.componentFailure.component, report.componentFailure.operation);
     }

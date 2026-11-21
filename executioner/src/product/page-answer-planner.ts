@@ -2,7 +2,7 @@ import { boundedText, browserTargetToken, fieldId, optionId, MAX_BROWSER_READBAC
 import { createApplicationAnswerResolver } from '../form/answers/resolver.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
 import { inspectQuestionMatch, resolveQuestion } from '../form/questions/catalog.ts';
-import { contractApprovedPrivacyChoices, protectedQuestionCategory } from '../form/questions/protected.ts';
+import { contractApprovedPrivacyChoices, isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import { normalizeCatalogText } from '../form/questions/normalize.ts';
 import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equivalence.ts';
 import { canonicalCanadianRegion } from '../composition/private/s2-derived-profile-country.ts';
@@ -94,6 +94,11 @@ export function createPageAnswerPlanner(
     const longOptions = row.options.some(isLong);
     const unbounded = longQuestion || longOptions;
     const consent = protectedQuestionCategory(row.question, undefined, row.options) === "consent";
+    // Compare an already checked declaration to the owner's decision. The browser preserves a conflict.
+    if (row.control==='checkbox' && row.selected===true && row.valid && consent && isRecruitmentTermsConsent(row.question,employerNames)) {
+      const saved=ownerFact('terms_consent');
+      if (typeof saved==='boolean') return {...binding,answer:saved,provisional:false,reason:'owner_consent_readback',lane:'live_owner_fact'};
+    }
     if (!unbounded && !consent && row.widget === 'province-menu') {
       const country = facts.find(fact => fact.factId === 'country')?.value;
       const region = facts.find(fact => fact.factId === 'region')?.value;

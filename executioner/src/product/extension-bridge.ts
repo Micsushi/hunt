@@ -5,10 +5,24 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { Server } from "node:http";
 import { chromium, type Browser, type Page } from "playwright";
 import { productApplicationTarget } from './target.ts';
-import { verifySmartRecruitersApplication } from './smartrecruiters-target.ts';
+import { smartRecruitersPublication, verifySmartRecruitersApplication } from './smartrecruiters-target.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; sessionId?: string; result?: unknown; error?: { message: string } };
+
+const screeningTransitions = new WeakMap<Page, {url:string; allow:()=>Promise<void>} | null>();
+
+export function verifiedScreeningTransition(page:Page, url:string) {
+  // Standalone Playwright pages have no extension transport to rebind.
+  if (!screeningTransitions.has(page)) return async () => {};
+  const transition = screeningTransitions.get(page);
+  if (!transition || transition.url !== url || page.url() !== url) throw new Error('Reopen this application from its verified SmartRecruiters posting.');
+  return async () => {
+    if (screeningTransitions.get(page) !== transition) throw new Error('The screening transition is no longer available.');
+    screeningTransitions.set(page,null);
+    await transition.allow();
+  };
+}
 
 /** Bounded local transport evidence. Never record arbitrary CDP arguments. */
 function transportEvent(event: string, tabId?: number, details: Record<string,boolean|number|string> = {}) {
@@ -225,7 +239,9 @@ export class ExtensionBridge {
     });
   }
   async open(url: string, existingTabId?: number, existingOnly = false, selectedDocument?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
-    let target = await this.existingTarget(productApplicationTarget(url), existingTabId);
+    const posting = productApplicationTarget(url);
+    let target = await this.existingTarget(posting, existingTabId);
+    let boundTabId = existingTabId;
     if (selectedDocument && target.url!==url) throw new Error('The selected application address changed. Inspect the draft again.');
     const reportRedirect = existingTabId === undefined && !existingOnly && target.ats === 'generic' &&
       target.host === 'jobs.smartrecruiters.com' && !target.posting.startsWith('/oneclick-ui/');
@@ -238,6 +254,7 @@ export class ExtensionBridge {
         const redirected = result.redirectedTabId;
         if (!reportRedirect || !Number.isSafeInteger(redirected) || redirected < 1) throw new Error('The selected tab does not match this job.');
         target = await this.existingTarget(target,redirected,true);
+        boundTabId = redirected;
         result = await this.call('attach',{url:target.url,tabId:redirected,existingOnly:true,generic:true});
       }
     }
@@ -259,6 +276,17 @@ export class ExtensionBridge {
       }
       const page = browser.contexts()[0]?.pages()[0];
       if (!page) { await browser.close(); throw new Error("The selected job tab is unavailable."); }
+      const publication = smartRecruitersPublication(new URL(target.url));
+      // existingTarget checks the employer's posting API before accepting a different publication key.
+      const binding = result.screeningBinding;
+      screeningTransitions.set(page, publication && !publication.screening && posting.key !== target.key &&
+        boundTabId === tabId && typeof binding === 'string' && binding ? {
+          url:target.url,
+          allow:async () => {
+            if (this.tabs.get(tabId) !== tab) throw new Error('The selected application tab changed.');
+            await this.call('screeningTransition',{tabId,binding,url:target.url});
+          },
+        } : null);
       return { tabId, page, browser, ...(target.ats==='generic'?{applicationUrl:target.url}:{}) };
     } catch (error) {
       tab.resolveFrame();

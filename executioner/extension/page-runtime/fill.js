@@ -461,8 +461,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if(result.matching.some(row=>row.required && row.reason==='button_choice_interaction_unsupported'))result.incomplete=true;
       return result;
     }
-    const reportMatch = (row, plan, outcome, reason, observedAnswer) => result.matching.push({...row,
-      chosenAnswer:plan?.answer??null,provisional:plan?.provisional??true,outcome,reason,observedAnswer});
+    const reportMatch = (row, plan, outcome, reason, observedAnswer) => {
+      if (!plan && outcome==='observed') result.matching.push({...row,outcome});
+      else result.matching.push({...row,chosenAnswer:plan?.answer??null,provisional:plan?.provisional??true,outcome,reason,observedAnswer});
+    };
 
     let uploadReceipt = state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
     let parserPending = false;

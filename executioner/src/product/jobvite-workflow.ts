@@ -7,6 +7,10 @@ import type { MatchedPageResult } from './page-matching.ts';
 const ordinarySkips = new Set(['saved_value_already_present','selected_resume_already_present','optional_field']);
 const attachmentSkips = new Set(['uploaded_attachment_requires_review','resume_upload_already_attempted_review_attachment']);
 
+export function isJobviteAttachmentWarning(row:{label:string;reason:string}) {
+  return row.label==='Resume' && attachmentSkips.has(row.reason);
+}
+
 async function clickOwnedControl(page:Page, url:string, hash:string, disclosure:boolean, verifiedFields:Record<string,string>, signal:AbortSignal) {
   signal.throwIfAborted();
   const started=Date.now();
@@ -34,10 +38,10 @@ async function clickOwnedControl(page:Page, url:string, hash:string, disclosure:
 
 export async function advanceJobviteScreening(page:Page, url:string, resume:Buffer, report:MatchedPageResult, signal:AbortSignal):Promise<'screening'|'expanded'|undefined> {
   if (new URL(url).hostname !== 'jobs.jobvite.com' || page.url() !== url) return;
-  const attachment = report.resume === 'unverified' && report.skipped.some(row=>row.label==='Resume' && attachmentSkips.has(row.reason));
+  const attachment = report.resume === 'unverified' && report.skipped.some(isJobviteAttachmentWarning);
   if (report.resume !== 'verified' && !attachment ||
       report.componentFailure && !(attachment && report.componentFailure.component==='uploads' && report.componentFailure.operation==='verify_attachment') ||
-      report.skipped.some(row=>!ordinarySkips.has(row.reason) && !(attachment && row.label==='Resume' && attachmentSkips.has(row.reason)))) return;
+      report.skipped.some(row=>!ordinarySkips.has(row.reason) && !(attachment && isJobviteAttachmentWarning(row)))) return;
   const verified:Record<string,string> = {};
   for (const row of report.matching ?? []) {
     if (row.required && row.outcome==='verified' && typeof row.observedAnswer==='string') verified[row.fieldId]=row.observedAnswer;
