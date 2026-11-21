@@ -1,9 +1,9 @@
 import type { Locator, Page } from 'playwright';
-import { ApplicationPause, type ResumeUploadReceipt } from '../application-contract.ts';
+import { ApplicationPause, type ResumeUploadReceipt, type WorkableReviewAttempt } from '../application-contract.ts';
 import { recordComponentFailure } from '../component-diagnostics.ts';
 import { selectClientResume, verifiedClientResume } from '../client-resume.ts';
 import { uploadGreenhouseResume, verifiedGreenhouseResume } from '../greenhouse-resume.ts';
-import { uploadWorkableResume, verifiedWorkableResume, unverifiedWorkablePreview, recheckWorkablePreview, type WorkableReviewAttempt } from '../workable-resume.ts';
+import { uploadWorkableResume, verifiedWorkableResume, unverifiedWorkablePreview, recheckWorkablePreview } from '../workable-resume.ts';
 import { applicationTarget } from '../target.ts';
 
 interface UploadField {

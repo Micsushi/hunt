@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import type { AccountEvent } from "./account-journal.ts";
 
+export interface WorkableReviewAttempt { selectedSize: number; rechecked: boolean }
 export interface ResumeUploadReceipt { token: string; selectedSha256: string; filename: string; applicationKey: string }
 export interface ProductInput {
   url: string;

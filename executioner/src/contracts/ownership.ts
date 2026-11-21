@@ -504,6 +504,7 @@ export const productBoundary = {
       "src/product/workday-sign-in.ts",
     ],
     page_state: [
+      "extension/page-adapters/jobvite-screening.js",
       "extension/page-adapters/document.js",
       "extension/form-page.js",
       "extension/workday-page.js",
@@ -586,6 +587,7 @@ export const productBoundary = {
   },
   sourceImports: {
     "extension/page-runtime/serialize.js": [
+      "extension/page-adapters/jobvite-screening.js",
       "extension/page-adapters/upload-status.js",
       "extension/jobvite-resume.js",
       "extension/page-adapters/client-attachment.js",      "extension/form-page.js",

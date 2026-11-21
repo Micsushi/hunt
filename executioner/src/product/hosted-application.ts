@@ -13,9 +13,8 @@ import type { ApplicationFieldObservation } from '../form/answers/application-ty
 import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
 import { applicationTarget } from './target.ts';
-import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt } from './application-contract.ts';
+import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt, type WorkableReviewAttempt } from './application-contract.ts';
 import { hasHostedResume, prepareHostedResume, verifyHostedAttachments } from './uploads/hosted.ts';
-import type { WorkableReviewAttempt } from './workable-resume.ts';
 import { createMatchingBacklog, type MatchingObservation } from './matching-backlog.ts';
 
 export { inspectHostedFields };

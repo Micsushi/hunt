@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ElementHandle, Page, Locator } from 'playwright';
-import { ApplicationPause, AttachmentPreviewUnavailable, type ResumeUploadReceipt } from './application-contract.ts';
+import { ApplicationPause, AttachmentPreviewUnavailable, type ResumeUploadReceipt, type WorkableReviewAttempt } from './application-contract.ts';
 import { recordComponentFailure } from './component-diagnostics.ts';
 import { applicationTarget } from './target.ts';
 
 type PreviewRead = { digest: string } | { failure: `http_${number}` | 'unsupported_path' | 'unsupported_type' |
   'missing_body' | 'empty_body' | 'html' | 'transport_rejected' | 'size_mismatch' };
-export interface WorkableReviewAttempt { selectedSize: number; rechecked: boolean }
 
 // Installed on the browser's attachment witness, so every phase checks the same dropzone.
 function watchUploadProgress(group: Element) {
