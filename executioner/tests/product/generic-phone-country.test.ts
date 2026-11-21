@@ -53,7 +53,8 @@ test('the SmartRecruiters phone validates on blur and preserves focus in another
     await page.route(app, route => route.fulfill({ contentType: 'text/html', body:
       '<main><oc-oneclick-form><h2>Personal information</h2><label>First name<input id="first"></label><label>Email<input type=email></label>' +
       '<spl-phone-field></spl-phone-field><oc-resume-upload><spl-dropzone data-test=resume-upload><label>Resume<input type=file></label></spl-dropzone></oc-resume-upload></oc-oneclick-form></main>' }));
-    for (const focusedElsewhere of [false, true]) {
+    for (const scenario of ['ordinary', 'focused elsewhere', 'deadline expires']) {
+      const focusedElsewhere = scenario === 'focused elsewhere';
       await page.goto(app);
       await page.evaluate(() => {
         const root = document.querySelector('spl-phone-field')!.attachShadow({ mode: 'open' });
@@ -74,9 +75,20 @@ test('the SmartRecruiters phone validates on blur and preserves focus in another
       const status = await page.evaluate(fillVisibleFields, { facts, action: 'status' as const });
       const phone = status.matching?.find(field => field.question === 'Phone number');
       assert.ok(phone);
-      const result = await page.evaluate(fillVisibleFields, { facts, matchingPlans: [{
-        fieldId: phone.fieldId, signature: phone.signature, provisional: false, reason: 'test_fact', answer: '6135550100',
-      }] });
+      const plan = { fieldId: phone.fieldId, signature: phone.signature, provisional: false, reason: 'test_fact', answer: '6135550100' };
+      if (scenario === 'deadline expires') {
+        const expiresAt = await page.locator('input[type=tel]').evaluate(el => {
+          const deadline = Date.now() + 60000;
+          el.addEventListener('input', () => { Date.now = () => deadline + 1; }, {once:true});
+          return deadline;
+        });
+        await assert.rejects(page.evaluate(fillVisibleFields, { facts, expiresAt, matchingPlans: [plan] }), /expired/);
+        assert.equal(await page.locator('input[type=tel]').inputValue(), plan.answer);
+        await page.evaluate(fillVisibleFields, { action: 'undo' as const });
+        assert.equal(await page.locator('input[type=tel]').inputValue(), '');
+        continue;
+      }
+      const result = await page.evaluate(fillVisibleFields, { facts, matchingPlans: [plan] });
       assert.equal(result.filled.includes('Phone number'), !focusedElsewhere, JSON.stringify(result.skipped));
       const field = page.locator('input[type=tel]');
       if (focusedElsewhere) {

@@ -59,10 +59,11 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
   const writePhone = (element, value, write) => {
     if (element.type !== 'tel' || document.activeElement !== document.body ||
         !composedClosest(element, 'spl-phone-field') || !current() || region(element) !== owner) return false;
+    const before = element.value;
     element.focus({preventScroll:true});
     try {
       if (!current() || region(element) !== owner || !element.isConnected ||
-          element.getRootNode().activeElement !== element || element.disabled || element.readOnly) {
+          element.getRootNode().activeElement !== element || element.disabled || element.readOnly || element.value !== before) {
         throw new Error('The phone field changed before the edit.');
       }
       write(element,value);
