@@ -1,0 +1,27 @@
+# Used only when activating a server release through deploy.py.
+x-release-build: &release-build
+  context: https://github.com/Micsushi/hunt.git#${HUNT_RELEASE_REVISION:?}
+  labels:
+    org.opencontainers.image.revision: ${HUNT_RELEASE_REVISION}
+
+services:
+  review:
+    build: *release-build
+    image: ${COMPOSE_PROJECT_NAME}-review:${HUNT_RELEASE_REVISION}
+    pull_policy: never
+  frontend:
+    build: *release-build
+    image: ${COMPOSE_PROJECT_NAME}-frontend:${HUNT_RELEASE_REVISION}
+    pull_policy: never
+  hunter:
+    build: *release-build
+    image: ${COMPOSE_PROJECT_NAME}-hunter:${HUNT_RELEASE_REVISION}
+    pull_policy: never
+  hunter-scheduler:
+    build: *release-build
+    image: ${COMPOSE_PROJECT_NAME}-hunter-scheduler:${HUNT_RELEASE_REVISION}
+    pull_policy: never
+  fletcher:
+    build: *release-build
+    image: ${COMPOSE_PROJECT_NAME}-fletcher:${HUNT_RELEASE_REVISION}
+    pull_policy: never

@@ -167,7 +167,7 @@ numeric guardrail keys.
 - Local C1 browser/auth/headful/Xvfb/Windows runbook: `docs/C1_LOCAL_RUNBOOK.md`
 - Server2 deploy runbook: `docs/SERVER2_DEPLOY.md`
 - One-command local smoke runner: `python smoke.py`
-- Windows deploy wrapper for server2: `.\scripts\deploy_server2.ps1 -Stages 6`
+- Windows deploy wrapper for server2: `.\scripts\deploy_server2.ps1 -Stages 6,7`
 - Public `server2` access still relies on Cloudflare Tunnel and Cloudflare Access around the Hunt runtime
 - Component smokes: `python smoke.py c0`, `python smoke.py c1`, `python smoke.py c2`
 - Short test groups: `python test.py c0`, `python test.py c1`, `python test.py c2`

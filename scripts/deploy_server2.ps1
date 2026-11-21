@@ -2,82 +2,45 @@ param(
   [Parameter(Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string[]]$Stages,
-
   [switch]$Check,
   [switch]$PrintOnly,
-  [string]$AnsibleRepo = ""
+  [string]$AnsibleRepo = "",
+  [string]$ReleaseRef = ""
 )
 
 $ErrorActionPreference = "Stop"
-
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$NormalizedStages = @($Stages -split "," | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+if ($NormalizedStages.Count -eq 0 -or @($NormalizedStages | Where-Object { $_ -notin @("6", "7") }).Count) {
+  throw "Unsupported Hunt stage. Active stages are 6 and 7 only."
+}
 
 if (-not $AnsibleRepo) {
-  $AnsibleRepo = Join-Path $RepoRoot "..\ansible_homelab"
+  $AnsibleRepo = Join-Path $RepoRoot "..\server_ansible_setup"
 }
+$AnsibleScript = Join-Path $AnsibleRepo "ansible.ps1"
+$Playbook = "playbooks/apps/hunt.yml"
+if (-not (Test-Path $AnsibleScript -PathType Leaf) -or -not (Test-Path (Join-Path $AnsibleRepo $Playbook) -PathType Leaf)) {
+  throw "Missing Hunt application playbook or ansible.ps1 in '$AnsibleRepo'. Pass -AnsibleRepo with its location."
+}
+if (-not $ReleaseRef) {
+  $ReleaseRef = git -C $RepoRoot rev-parse HEAD
+  if ($LASTEXITCODE -ne 0) { throw "Cannot identify the Hunt release." }
+}
+if ($ReleaseRef -cnotmatch '^[0-9a-f]{40}$') { throw "Pass a full Hunt commit SHA." }
 
-try {
-  $AnsibleRepo = (Resolve-Path $AnsibleRepo).Path
-} catch {
-  throw "Ansible repo not found at '$AnsibleRepo'. Clone ansible_homelab next to hunt or pass -AnsibleRepo."
-}
+# The qualified application-only playbook accepts only the combined c1c2 target.
+$Target = if ($NormalizedStages.Count -eq 2) { "c1c2" } elseif ($NormalizedStages[0] -eq "6") { "c1" } else { "c2" }
+$AppOnly = if ($Target -eq "c1c2") { "true" } else { "false" }
+$PlayArgs = @("--limit", "server2", "-e", "hunt_release_ref=$ReleaseRef",
+              "-e", "hunt_deploy_target=$Target", "-e", "hunt_app_only=$AppOnly")
+if ($Check) { $PlayArgs += "--check" }
+Write-Host "Hunt server2 deploy: $Playbook $($PlayArgs -join ' ')"
+if ($PrintOnly) { return }
 
-$DeployScript = Join-Path $AnsibleRepo "deploy.ps1"
-if (-not (Test-Path $DeployScript)) {
-  throw "Expected deploy helper at '$DeployScript'."
+if (-not $Check) {
+  & python (Join-Path $PSScriptRoot "verify_release_ci.py") $ReleaseRef
+  if ($LASTEXITCODE -ne 0) { throw "The Hunt release has not passed hosted CI." }
 }
-
-$NormalizedStages = @($Stages | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-if ($NormalizedStages.Count -eq 0) {
-  throw "Pass at least one Hunt stage, for example -Stages 6 or -Stages 6,7."
-}
-$AllowedStages = @("6", "7")
-$UnsupportedStages = @($NormalizedStages | Where-Object { $_ -notin $AllowedStages })
-if ($UnsupportedStages.Count -gt 0) {
-  throw "Unsupported Hunt stage(s): $($UnsupportedStages -join ', '). Active stages are 6 and 7 only; C3 is planned and C4 is on hold."
-}
-
-$DeployParams = @{
-  Target = "job_agent"
-}
-if ($NormalizedStages.Count -eq 1) {
-  $DeployParams.Stage = $NormalizedStages[0]
-} else {
-  $DeployParams.Tags = (($NormalizedStages | ForEach-Object { "stage$_" }) -join ",")
-}
-if ($Check) {
-  $DeployParams.DryRun = $true
-}
-
-$RenderedArgs = @(
-  "-Target",
-  $DeployParams.Target
-)
-if ($DeployParams.ContainsKey("Stage")) {
-  $RenderedArgs += @("-Stage", $DeployParams.Stage)
-}
-if ($DeployParams.ContainsKey("Tags")) {
-  $RenderedArgs += @("-Tags", $DeployParams.Tags)
-}
-if ($DeployParams.ContainsKey("DryRun")) {
-  $RenderedArgs += "-DryRun"
-}
-
-$RenderedCommand = @(
-  "powershell",
-  "-ExecutionPolicy",
-  "Bypass",
-  "-File",
-  ('"{0}"' -f $DeployScript)
-) + $RenderedArgs
-
-Write-Host "Hunt server2 deploy"
-Write-Host "Ansible repo: $AnsibleRepo"
-Write-Host "Stages     : $($NormalizedStages -join ', ')"
-Write-Host "Command    : $($RenderedCommand -join ' ')"
-
-if ($PrintOnly) {
-  return
-}
-
-& $DeployScript @DeployParams
+& $AnsibleScript -Playbook $Playbook -ExtraArgs $PlayArgs
+exit $LASTEXITCODE
