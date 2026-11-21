@@ -85,6 +85,12 @@ export async function fillApplication(page: Page, input: ProductInput, signal: A
               ![...prompt.querySelectorAll('[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]')].some(visible);
           });
         }, sourceCommitFailed));
+      if (sourceCommitFailed && busyCatalog) {
+        const stopped = new ApplicationPause("Workday is still loading referral source choices. Keep the draft open and retry when the menu has choices.");
+        const boundary = componentFailure(error);
+        if (boundary) recordComponentFailure(stopped, boundary.component, boundary.operation);
+        throw stopped;
+      }
       if (!siteError && !busyCatalog) throw error;
       if (siteError && siteRecoveries >= 3 && !siteReopened) {
         // Reloading can preserve a broken Workday route. Reopen the original

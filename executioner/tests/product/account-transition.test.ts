@@ -47,10 +47,11 @@ test("missing answers reload only a bound required empty busy catalog and only o
           throw new ApplicationPause("Application paused: profile_answer_missing.");
         }
       });
-      if (scenario === "recovers" || scenario === "source-commit") assert.match((await fill).reviewDigest, /^[a-f0-9]{64}$/);
+      if (scenario === "recovers") assert.match((await fill).reviewDigest, /^[a-f0-9]{64}$/);
+      else if (scenario === "source-commit") await assert.rejects(fill, /still loading referral source choices/);
       else if (scenario === "other-busy-widget") await assert.rejects(fill, /profile_port_unavailable/);
       else await assert.rejects(fill, scenario === "persistent" ? /still loading required choices/ : /profile_answer_missing/);
-      const recoveryExpected = ["recovers", "persistent", "source-commit"].includes(scenario);
+      const recoveryExpected = scenario === "recovers" || scenario === "persistent";
       assert.equal(loads, recoveryExpected ? 2 : 1);
       assert.equal(stages.filter(stage => stage === "Recovering employer page").length, recoveryExpected ? 1 : 0);
       assert.equal(await page.evaluate("submits"), 0);
