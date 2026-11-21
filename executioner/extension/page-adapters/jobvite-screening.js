@@ -105,10 +105,10 @@ export function watchJobviteScreening(receipt, binding, state) {
   first.addEventListener('click', event => {
     if (attachment && event.target.closest?.('[ng-click="removeResume()"],[jv-add-attachment][attachment-label="Resume"]')) invalidate();
   },options);
-  let queuedClick = false, queuedAttempted = false;
+  let queuedAttempts = 0, lastValues, rejectionSeen = false;
   next.addEventListener('click', event => {
     observe(observer.takeRecords());
-    if (!(event.isTrusted || queuedClick) || state.busy || controller.signal.aborted || !attachment || !accepted() || !active() ||
+    if (!event.isTrusted || state.busy || controller.signal.aborted || !attachment || !accepted() || !active() ||
         next.disabled || next.type !== 'button' || next.form !== form || next.getAttribute('ng-click') !== 'nextStep()' ||
         (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() !== 'next' ||
         !first.matches(firstSelector) || form.querySelectorAll(firstSelector).length !== 1 ||
@@ -127,21 +127,46 @@ export function watchJobviteScreening(receipt, binding, state) {
     const current = jobviteResumeAcknowledgment(owner,receipt.file.name);
     return current?.label === attachment.label && current.remove === attachment.remove ? first : null;
   };
-  // Only queued preparation asks this receipt to advance its original, acknowledged first step.
-  receipt.advanceJobviteScreening = selectedHash => {
-    if (queuedAttempted || pending || state.busy || selectedHash !== receipt.fileSha256 ||
-        receipt.acknowledgedPanel() !== first || next.form !== form || !form.contains(next) ||
-        form.querySelectorAll('button[ng-click="nextStep()"]').length !== 1 ||
-        next.type !== 'button' || next.getAttribute('ng-click') !== 'nextStep()' ||
-        next.hasAttribute('formaction') || next.disabled || next.getAttribute('aria-disabled') === 'true' ||
-        (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() !== 'next') return false;
-    const visible = el => el.getClientRects().length && getComputedStyle(el).visibility === 'visible' &&
-      !el.closest('[hidden],[inert],[aria-hidden=true]');
-    if (!visible(next) || [...document.querySelectorAll('[role=dialog],dialog[open]')].some(visible) ||
-        [...first.querySelectorAll('input:invalid,select:invalid,textarea:invalid,[aria-invalid=true],[aria-busy=true]')].some(visible) ||
-        [...form.querySelectorAll('button[type=submit],input[type=submit]')].some(visible)) return false;
-    queuedAttempted = queuedClick = true;
-    try { next.click(); } finally { queuedClick = false; }
+  const visible = el => el.getClientRects().length && getComputedStyle(el).visibility === 'visible' &&
+    !el.closest('[hidden],[inert],[aria-hidden=true]');
+  const disclosure = () => {
+    const links = [...form.querySelectorAll('.jv-apply-form-actions .jv-apply-error a[ng-click="showAllFields = true"]')].filter(visible);
+    return links.length === 1 && links[0].closest('form') === form && links[0].getAttribute('href') === '' &&
+      links[0].textContent.trim().toLowerCase() === 'view full application form' && receipt.acknowledgedPanel() === first;
+  };
+  receipt.jobviteRejected = () => {
+    if (!queuedAttempts || !disclosure()) return false;
+    rejectionSeen = true;
+    pending = false;
+    clearTimeout(timer);
     return true;
+  };
+  const fieldValues = () => [...first.querySelectorAll('input:not([type=hidden]):not([type=file]),textarea,select')].map(e=>
+    [e.name,e.type,e.type==='checkbox'||e.type==='radio' ? e.checked : e.value]);
+  receipt.claimJobviteNext = selectedHash => {
+    const ready = () => !pending && !state.busy && selectedHash === receipt.fileSha256 &&
+      receipt.acknowledgedPanel() === first && next.form === form && form.contains(next) &&
+      form.querySelectorAll('button[ng-click="nextStep()"]').length === 1 &&
+      next.type === 'button' && next.getAttribute('ng-click') === 'nextStep()' && !next.hasAttribute('formaction') &&
+      !next.disabled && next.getAttribute('aria-disabled') !== 'true' &&
+      (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() === 'next' && visible(next) &&
+      ![...document.querySelectorAll('[role=dialog],dialog[open]')].some(visible) &&
+      ![...first.querySelectorAll('input:invalid,select:invalid,textarea:invalid,[aria-invalid=true],[aria-busy=true]')].some(visible) &&
+      ![...form.querySelectorAll('button[type=submit],input[type=submit]')].some(visible);
+    if (!ready() || disclosure() || queuedAttempts >= 2) return null;
+    const values = JSON.stringify(fieldValues());
+    if (queuedAttempts && (!rejectionSeen || values === lastValues)) return null;
+    const guard = new AbortController();
+    const opts = {capture:true,signal:guard.signal};
+    let clicked = false;
+    const stop = event => {event.preventDefault();event.stopImmediatePropagation();};
+    window.addEventListener('click',event=>{
+      if (clicked || !event.isTrusted || !event.composedPath().includes(next) || !ready() ||
+          JSON.stringify(fieldValues()) !== values) { stop(event); return; }
+      clicked = true; queuedAttempts++; lastValues = values; rejectionSeen = false;
+    },opts);
+    window.addEventListener('submit',stop,opts);
+    const timeout=setTimeout(()=>guard.abort(),3500);
+    return {button:next,clicked:()=>clicked,release:()=>{clearTimeout(timeout);guard.abort();}};
   };
 }

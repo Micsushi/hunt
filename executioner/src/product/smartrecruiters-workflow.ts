@@ -1,22 +1,25 @@
+import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 import type { Page } from 'playwright';
 import type { ComponentFailure } from './component-diagnostics.ts';
 import { ApplicationPause } from './application-contract.ts';
 import { pause } from './application-wait.ts';
 
-const oneClickPath = /^\/oneclick-ui\/company\/[\w-]+\/publication\/[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}\/?$/i;
 const firstFooter = 'oc-nav-first-page footer[data-test=footer]';
 const safeSkips = new Set(['optional_field','saved_value_already_present','selected_resume_already_present',
   'resume_filename_visible_contents_unverified']);
 
 export async function advanceSmartRecruiters(page:Page, url:string, report:{
   skipped:{reason:string}[]; resume?:string; componentFailure?:ComponentFailure;
-}, signal:AbortSignal): Promise<string | undefined> {
+}, signal:AbortSignal): Promise<string | {screeningUrl:string} | undefined> {
   const target = new URL(url);
-  if (target.origin !== 'https://jobs.smartrecruiters.com' || !oneClickPath.test(target.pathname) || page.url() !== url) return;
-  const owner = page.locator('main oc-oneclick-form');
+  const publication = smartRecruitersPublication(target);
+  if (!publication || page.url() !== url) return;
+  const owner = page.locator(publication.screening ? 'main oc-screening-questions' : 'main oc-oneclick-form');
   if (await owner.count() !== 1) return;
   const footer = owner.locator(firstFooter);
-  const submit = owner.getByRole('button',{name:/^(?:submit(?: application)?|send application)$/i});
+  const submit = publication.screening
+    ? owner.locator('oc-nav-screening-questions oc-button[data-test=footer-submit] spl-button').filter({hasText:/^\s*Submit(?: application)?\s*$/i}).locator('button')
+    : owner.getByRole('button',{name:/^(?:submit(?: application)?|send application)$/i});
   const terminal = async () => {
     if (page.url() !== url || await submit.count() !== 1 || !await submit.isVisible()) return;
     const review = owner.getByRole('heading',{name:/^review(?: your application)?$/i});
@@ -26,6 +29,7 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
   };
   const end = await terminal();
   if (end) return end;
+  if (publication.screening) return;
   const filenameOnly = report.resume === 'unverified' && report.skipped.some(item => item.reason === 'resume_filename_visible_contents_unverified');
   const failure = report.componentFailure;
   if (failure && !(filenameOnly && failure.component === 'uploads' && failure.operation === 'verify_attachment')) return;
@@ -76,7 +80,11 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
   const deadline = Date.now() + 4000;
   do {
     await pause(signal);
-    if (page.url() !== url) break;
+    if (page.url() !== url) {
+      const current = new URL(page.url()), next = smartRecruitersPublication(current);
+      if (next?.screening && next.base === publication.base && current.search === target.search) return {screeningUrl:current.href};
+      break;
+    }
     const end = await terminal();
     if (end) return end;
   } while (Date.now() < deadline);

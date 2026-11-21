@@ -1,7 +1,6 @@
 import type { Page } from 'playwright';
-import { createHash } from 'node:crypto';
+import { advanceJobviteScreening } from './jobvite-workflow.ts';
 import { advanceSmartRecruiters } from './smartrecruiters-workflow.ts';
-import { pause } from './application-wait.ts';
 import { fillGenericApplication } from './generic-application.ts';
 import { ApplicationPause, type ProductInput } from './application-contract.ts';
 import { componentFailure, recordComponentFailure } from './component-diagnostics.ts';
@@ -14,28 +13,27 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     const url = page.url();
     let report = await fill();
     signal.throwIfAborted();
-    const smartRecruitersStop = await advanceSmartRecruiters(page,url,report,signal);
-    if (smartRecruitersStop) {
-      const resume = report.resume === 'verified' ? 'Selected résumé verified.' : 'Selected résumé contents unverified.';
-      throw new ApplicationPause(smartRecruitersStop+' '+resume);
+    const smartStep = await advanceSmartRecruiters(page,url,report,signal);
+    let smartStop = typeof smartStep === 'string' ? smartStep : undefined;
+    if (smartStep && typeof smartStep !== 'string') {
+      advanced = true;
+      signal.throwIfAborted();
+      if (page.url() !== smartStep.screeningUrl) throw new ApplicationPause('The employer screening page changed before filling.');
+      progress('Filling the SmartRecruiters screening step');
+      const screening = await fill();
+      const terminal = await advanceSmartRecruiters(page,smartStep.screeningUrl,screening,signal);
+      smartStop = typeof terminal === 'string' ? terminal : 'The employer screening step is open. Review the remaining questions.';
+      report = {...screening, filled:[...new Set([...report.filled,...screening.filled])], skipped:[...report.skipped,...screening.skipped],
+        resume:report.resume, componentFailure:screening.componentFailure ?? report.componentFailure};
     }
-    if (new URL(url).hostname === 'jobs.jobvite.com' && page.url() === url && report.componentFailure?.component !== 'page_state') {
-      const hash = createHash('sha256').update(input.resume).digest('hex');
-      advanced = await page.evaluate(({url,hash}) => location.href === url &&
-        (globalThis as any).__huntC3PartialFill?.resumeAttempt?.advanceJobviteScreening?.(hash) === true, {url,hash});
-      if (advanced) {
-        progress('Checking the Jobvite screening step');
-        const deadline = Date.now() + 3000;
-        let confirmed = false;
-        do {
-          signal.throwIfAborted();
-          confirmed = await page.evaluate(url => location.href === url &&
-            (globalThis as any).__huntC3PartialFill?.resumeAttempt?.acknowledgedPanel?.()?.matches('[ng-form="scopeData.step2"]') === true, url);
-          if (!confirmed) await pause(signal);
-        } while (!confirmed && Date.now() < deadline && page.url() === url);
-        if (!confirmed) throw new ApplicationPause('C3 clicked Next once. The employer screening step could not be confirmed. Inspect the draft before retrying.');
-        report = await fill();
-      }
+    advanced = await advanceJobviteScreening(page, url, input.resume, report, signal);
+    if (advanced) {
+      progress('Filling the Jobvite screening step');
+      const next = await fill();
+      const skips = new Map([...report.skipped,...next.skipped].map(row=>[JSON.stringify(row),row]));
+      report = {...next,filled:[...report.filled,...next.filled],skipped:[...skips.values()],
+        componentFailure:report.componentFailure ?? next.componentFailure,
+        resume:report.resume==='unverified' ? 'unverified' : next.resume};
     }
     const reasons:Record<string,string>={saved_value_conflict:'saved profile differs',value_changed_after_fill:'site changed the filled value',existing_attachment_preserved:'existing attachment needs review',resume_attachment_not_verified:'attachment could not be verified',choice_requires_mapping:'no matching saved option',no_stored_mapping:'no saved answer',value_not_accepted:'site rejected the value',ambiguous_duplicate:'more than one matching field'};
     Object.assign(reasons,{
@@ -71,7 +69,7 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     const warnings=unresolved.slice(0,4).map(item=>`${label(item.label)}: ${reasons[item.reason] ?? 'needs review'}`);
     if (unresolved.length > 4) warnings.push(`${unresolved.length - 4} more fields need review`);
     const resumeVerified=report.resume === 'verified';
-    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeVerified ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.'}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.'}`);
+    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeVerified ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.'}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? (advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.')}`);
     if (report.componentFailure) {
       recordComponentFailure(paused, report.componentFailure.component, report.componentFailure.operation);
     }

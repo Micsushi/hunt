@@ -99,11 +99,15 @@ test('only the queued OneClick personal footer advances and the final action rem
     await page.evaluate(() => {
       const host = document.querySelector('spl-button')!;
       host.attachShadow({mode:'open'}).innerHTML = '<button type=button><slot></slot></button>';
-      (globalThis as any).__huntC3PartialFill = {busy:false};
+      (globalThis as any).__huntC3PartialFill = {busy:false,undo:[],redo:[]};
       (globalThis as any).submissions = 0;
       host.addEventListener('click', () => {
-        document.querySelector('oc-oneclick-form')!.innerHTML = '<h2>Review your application</h2><button type=submit>Submit application</button>';
-        document.querySelector('button')!.onclick = () => { (globalThis as any).submissions++; };
+        history.pushState({},'',location.pathname+'/screening');
+        document.querySelector('main')!.innerHTML = '<oc-screening-questions><h2>Preliminary questions</h2><oc-screening-questions-form>' +
+          '<label>Years of experience<input required></label></oc-screening-questions-form><oc-nav-screening-questions>' +
+          '<oc-button data-test=footer-submit><spl-button>Submit</spl-button></oc-button></oc-nav-screening-questions></oc-screening-questions>';
+        document.querySelector('spl-button')!.attachShadow({mode:'open'}).innerHTML='<button type=button><slot></slot></button>';
+        document.querySelector('spl-button')!.shadowRoot!.querySelector('button')!.onclick = () => { (globalThis as any).submissions++; };
       });
     });
     const report = {skipped:[{reason:'resume_filename_visible_contents_unverified'}],resume:'unverified',
@@ -116,8 +120,13 @@ test('only the queued OneClick personal footer advances and the final action rem
     assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[{reason:'value_not_accepted'}]},signal),undefined);
     assert.equal(await advanceSmartRecruiters(page,url,{...report,componentFailure:{component:'uploads',operation:'upload'}},signal),undefined);
     assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[...report.skipped,{reason:'value_not_accepted'}]},signal),undefined);
-    assert.match(await advanceSmartRecruiters(page,url,report,signal)??'',/employer Review screen/);
-    assert.match(await advanceSmartRecruiters(page,url,report,signal)??'',/employer Review screen/);
+    assert.deepEqual(await advanceSmartRecruiters(page,url,report,signal),{screeningUrl:url+'/screening'});
+    const field = (await page.evaluate(fillVisibleFields,{action:'status' as const})).matching?.find(row=>row.question==='Years of experience');
+    assert.ok(field);
+    const result=await page.evaluate(fillVisibleFields,{matchingPlans:[{fieldId:field.fieldId,signature:field.signature,answer:'3',provisional:false,reason:'test_fact'}]});
+    assert.deepEqual(result.filled,['Years of experience']);
+    assert.equal(result.resume,'unverified');
+    assert.match(String(await advanceSmartRecruiters(page,page.url(),report,signal)??''),/final submission button/);
     assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
   } finally { await browser.close(); }
 });

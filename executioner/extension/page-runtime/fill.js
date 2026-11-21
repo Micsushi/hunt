@@ -56,7 +56,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     result.frameScope = 'document';
     if (customForm.owner) checkedForm = customForm;
   }
-  const regionFor = e => verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
+  const regionFor = e => checkedForm?.screening ? checkedForm.region(e) ?? e.getRootNode() : verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
   const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
     regionFor, norm, state, deepQuery, visible, editable, checkDeadline
   });
@@ -400,6 +400,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     // A newsletter or account form must not receive application data.
     const identifyApplicationRegions = fields => {
       if (applicationStep) return [applicationStep.closest('form')];
+      if (checkedForm?.screening && checkedForm.current()) return [checkedForm.owner];
       const regions = new Set(fields.filter(f => /name|prénom|nom de famille/i.test(f.label) && f.expected !== undefined).map(f => f.region));
       return [...regions].filter(region => {
       if (customForm && region !== customForm.owner) return false;
@@ -455,7 +456,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const acknowledged = receipt => !!receipt?.customUpload && checkedForm?.owner===receipt.region && receipt.selectedFileAccepted &&
       !!receipt.fileSha256 && state.fileEvents?.get(receipt.element)===receipt.file &&
       !parserBusy() && receipt.customUpload.acknowledged(receipt.file.name);
-    if (validResume) {
+    if (checkedForm?.screening) result.resume = 'unverified';
+    else if (validResume) {
       const resumeFields = deepQuery(document, 'input[type=file]').filter(e =>
         applicationRegions.includes(regionFor(e)) && fileBinding(e));
       const targets = resumeFields.filter(isRequired);

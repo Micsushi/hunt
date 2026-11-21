@@ -18,26 +18,27 @@ test('Rippling location commits a matched suggestion, reverses it and preserves 
       <form><label>First name<input></label><label>Email<input type=email></label>
         <span id="city-label">Location</span><div data-testid="location">
           <input id="city" aria-required="true" aria-labelledby="city-label" aria-label="textbox" aria-autocomplete="list" aria-haspopup="listbox">
-        </div><label>Resume<input type=file></label></form>`}));
+        </div><input type=hidden data-testid=input-externalPlaceId><label>Resume<input type=file></label></form>`}));
     const answer='Example, ON, Canada';
     for(const scenario of ['', 'Example', answer, 'open city search']){
       const original=scenario==='open city search'?'Example':scenario;
       await page.goto(url);
       await page.evaluate(({original,answer})=>{
         const input=document.querySelector<HTMLInputElement>('#city')!, owner=input.parentElement!;
+        const place=document.querySelector<HTMLInputElement>('[data-testid=input-externalPlaceId]')!;
         const close=()=>{owner.querySelector('ul')?.remove();input.setAttribute('aria-controls','city-list');};
         close();
         input.value=original;
         input.onkeydown=e=>{if(e.key==='Escape')close();};
         input.oninput=()=>{
-          close();if(!input.value)return;
+          close();place.value='';if(!input.value)return;
           const menu=document.createElement('ul');
           menu.id='city-list';menu.dataset.testid='menuList';menu.setAttribute('role','listbox');menu.setAttribute('aria-labelledby','city-label');
           input.setAttribute('aria-controls',menu.id);owner.append(menu);
           for(const text of ['Example, TX, United States',answer]){
             const option=document.createElement('li');option.dataset.selectable='true';option.setAttribute('role','option');
             option.innerHTML='<div data-testid="menuListLabel"></div>';option.firstChild!.textContent=text;menu.append(option);
-            option.onclick=()=>{input.value=text;close();};
+            option.onclick=()=>{input.value=text;place.value='place-'+text;close();};
           }
         };
       },{original,answer});
@@ -57,8 +58,10 @@ test('Rippling location commits a matched suggestion, reverses it and preserves 
       if(scenario!=='open city search')await apply();
       const selected=await apply();
       assert.ok(selected.filled.includes('Location'),JSON.stringify(selected.skipped));assert.equal((await status()).selected,answer);
+      assert.ok(await page.locator('[data-testid=input-externalPlaceId]').inputValue());
       await page.evaluate(fillVisibleFields,{action:'undo' as const});
       assert.equal(await page.locator('#city').inputValue(),original);
+      assert.equal(await page.locator('[data-testid=input-externalPlaceId]').inputValue(),'');
       await page.evaluate(fillVisibleFields,{action:'redo' as const});assert.equal((await status()).selected,answer);
       await page.locator('#city').fill('Owner edit');await page.locator('#city').fill(answer);
       assert.equal((await status()).selected,'');

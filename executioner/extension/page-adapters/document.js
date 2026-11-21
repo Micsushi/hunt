@@ -8,7 +8,9 @@ export const applicationAttachmentControls = 'input[type=file],[role=group][aria
 export function smartRecruitersForm(deepQuery, composedClosest, visible) {
   if (location.origin !== 'https://jobs.smartrecruiters.com' ||
       !/^\/oneclick-ui\/company\/[\w-]+\/publication\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/?$/i.test(location.pathname.replace(/\/screening\/?$/, ''))) return;
-  const activeForms = () => deepQuery(document,'oc-oneclick-form').filter(form => composedClosest(form,'main') &&
+  const screening = /\/screening\/?$/.test(location.pathname);
+  const formSelector = screening ? 'oc-screening-questions' : 'oc-oneclick-form';
+  const activeForms = () => deepQuery(document,formSelector).filter(form => composedClosest(form,'main') &&
     !composedClosest(form,'[hidden],[inert],[aria-hidden=true]'));
   const forms = activeForms();
   const owner = forms.length === 1 ? forms[0] : null;
@@ -16,12 +18,15 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
   const current = () => {
     if (location.href!==originalUrl || !owner?.isConnected) return false;
     const forms = activeForms();
-    return forms.length === 1 && forms[0] === owner && !deepQuery(document,'input[type=password]').some(visible);
+    return forms.length === 1 && forms[0] === owner && !deepQuery(document,'input[type=password]').some(visible) &&
+      (!screening || deepQuery(owner,'oc-screening-questions-form').length === 1 && deepQuery(owner,'oc-nav-screening-questions').length === 1);
   };
   if (!current()) return {owner:null, region:()=>null};
   const region = element => {
-    if (!owner.isConnected || element.hasAttribute('form') || composedClosest(element,'oc-oneclick-form') !== owner ||
+    if (!owner.isConnected || element.hasAttribute('form') || composedClosest(element,formSelector) !== owner ||
         composedClosest(element,'oc-easy-apply,oc-apply-with-resume')) return null;
+    if (screening) return element.type !== 'file' &&
+      composedClosest(element,'oc-screening-questions-form,oc-consent-decisions') ? owner : null;
     if (element.type === 'file') {
       const uploads = deepQuery(owner,'oc-resume-upload');
       if (uploads.length !== 1 || composedClosest(element,'oc-resume-upload') !== uploads[0] ||
@@ -76,7 +81,7 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
     }
     return true;
   };
-  return {owner, region, current, upload, writePhone};
+  return {owner, region, current, upload, writePhone, screening};
 }
 
 export function observeCurrentDocument() {

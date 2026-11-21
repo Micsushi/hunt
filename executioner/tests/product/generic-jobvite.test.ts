@@ -111,7 +111,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
   const profile = applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'});
   const input = {url, profile, resume:Buffer.from(resume.base64,'base64')};
   try {
-    for (const mode of ['advance','invalid','submit','stall']) {
+    for (const mode of ['advance','invalid','submit','stall','conflict','rejected']) {
       const page = await browser.newPage();
       await fixture(page,true);
       await page.evaluate(mode => {
@@ -132,11 +132,19 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
         file.addEventListener('change',()=>owner.insertAdjacentHTML('beforeend',
           '<ul><li ng-if="resumeName"><span jv-focus-on="resumeName" ng-click="editOrPreviewResume()">Resume.pdf</span> <a href="" ng-click="removeResume()">Remove</a></li></ul>'));
         if (mode==='invalid') first.insertAdjacentHTML('beforeend','<input required value="" aria-invalid=true>');
+        if (mode==='conflict') first.querySelector<HTMLInputElement>('[name=first]')!.value='Other';
         const next=document.createElement('button');
         next.type=mode==='submit'?'submit':'button';next.textContent='Next';next.setAttribute('ng-click','nextStep()');
         form.append(next);(window as any).advances=0;
-        next.onclick=()=>{
+        next.onclick=event=>{
+          if (!event.isTrusted) throw new Error('Expected trusted browser input');
           (window as any).advances++;
+          if (mode==='rejected' && (window as any).advances===1) {
+            form.insertAdjacentHTML('beforeend','<div class="jv-apply-form-actions"><p class="jv-apply-error"><a href="" ng-click="showAllFields = true">View Full Application Form</a></p></div>');
+            const link=form.querySelector<HTMLAnchorElement>('a[ng-click="showAllFields = true"]')!;
+            link.onclick=e=>{e.preventDefault();link.hidden=true;};
+            return;
+          }
           if(mode==='stall')return;
           first.remove();next.remove();
           form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
@@ -145,11 +153,19 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
       const inspection=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
       assert.equal((inspection as {jobviteFirstStep?:boolean}).jobviteFirstStep===true,mode!=='submit');
       const attempt=()=>fillApplication(page,input,AbortSignal.timeout(15000),()=>{});
-      const stop = mode==='advance'?/Review the screening step/:mode==='stall'?/clicked Next once/:/has not advanced/;
+      const stop = mode==='advance'?/Review the screening step/:mode==='stall'?/clicked Next once/:mode==='conflict'?/saved profile differs/:mode==='rejected'?/stayed on the first step/:/has not advanced/;
       await assert.rejects(attempt(),stop);
       if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
       if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
-      assert.deepEqual(await page.evaluate('([advances,submits,uploads])'),[mode==='advance'||mode==='stall'?1:0,0,1]);
+      if (mode==='rejected') {
+        await assert.rejects(attempt(),/has not advanced/);
+        await page.getByText('View Full Application Form').click();
+        await assert.rejects(attempt(),/has not advanced/);
+        await page.locator('section').evaluate(e=>e.insertAdjacentHTML('beforeend','<label>Optional note<input value="Corrected"></label>'));
+        await assert.rejects(attempt(),/Review the screening step/);
+      }
+      const count=mode==='rejected'?2:mode==='advance'||mode==='stall'?1:0;
+      assert.deepEqual(await page.evaluate('([advances,submits,uploads])'),[count,0,1]);
       await page.close();
     }
   } finally { await browser.close(); }

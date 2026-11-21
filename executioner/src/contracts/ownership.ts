@@ -566,6 +566,7 @@ export const productBoundary = {
       "src/product/application-wait.ts",
       "src/product/current-page-workflow.ts",
       "src/product/smartrecruiters-workflow.ts",
+      "src/product/jobvite-workflow.ts",
       "src/product/engine.ts",
       "src/product/generic-application.ts",
       "src/product/bamboo-application-entry.ts",
@@ -716,6 +717,7 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/target.ts",
     ],
+    "src/product/jobvite-workflow.ts": ["src/product/page-matching.ts"],
     "src/product/smartrecruiters-workflow.ts": [
       "src/product/component-diagnostics.ts",
     ],

@@ -12,6 +12,12 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
         labelId !== input.id+'-label' || label.textContent.trim().replace(/\s*\*$/, '') !== 'Location') {
       return {...result,reason:'ambiguous_location_widget'};
     }
+    const form=input.form;
+    const placeIds=form?.querySelectorAll('input[type=hidden][data-testid=input-externalPlaceId]');
+    if (!form || form.querySelectorAll(selector).length!==1 || placeIds.length!==1 || placeIds[0].form!==form) {
+      return {...result,reason:'ambiguous_location_backing'};
+    }
+    const placeId=placeIds[0];result.backingControl=placeId;
     const menuId = input.getAttribute('aria-controls');
     const lists = menuId ? root.querySelectorAll('[id="'+CSS.escape(menuId)+'"]') : [];
     if (widget.querySelectorAll('[role=listbox]').length > lists.length || lists.length > 1) return {...result,reason:'ambiguous_location_menu'};
@@ -28,25 +34,26 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
       }
     }
     const receipt=receipts.get(input);
-    if (receipt && receipt.widget===widget && receipt.value===input.value) {
-      result.labels=[receipt.value];result.query='';result.empty=false;
-      result.clear = write => write(input,'');
+    if (placeId.value) {
+      if (!input.value.trim() || result.popup) return {...result,reason:'location_selection_unconfirmed'};
+      result.labels=[input.value];result.query='';result.empty=false;
+      if (receipt?.widget===widget && receipt.value===input.value && receipt.placeId===placeId.value) {
+        result.clear = write => write(input,'');
+      }
     }
     result.confirmClick = async (value, pause) => {
-      // Rippling exposes no persisted selected-row marker. Require the actual option click, the closed menu and blur.
-      for(let attempt=0;attempt<20;attempt++) {
-        await pause();
-        if (!input.isConnected || regionFor(input)!==owner || input.closest('[data-testid=location]')!==widget) return;
-        const current=locationChoice(input);
-        if (input.value===value && current?.valid && !current.popup) break;
-      }
-      const clicked=locationChoice(input);
-      if(input.value!==value || !clicked?.valid || clicked.popup)return;
+      // Rippling writes the chosen identifier into a separate field owned by the application form.
+      const selected = () => {
+        const current=input.isConnected && locationChoice(input);
+        return current?.valid && current.owner===owner && current.widget===widget && current.backingControl===placeId &&
+          current.labels[0]===value && input.validity.valid && input.getAttribute('aria-invalid')!=='true';
+      };
+      for(let attempt=0;attempt<20 && !selected();attempt++) await pause();
+      if (!selected())return;
       if(root.activeElement===input)input.blur();
       await pause();
-      if(!input.isConnected || input.closest('[data-testid=location]')!==widget || regionFor(input)!==owner ||
-          input.value!==value || !locationChoice(input)?.valid || locationChoice(input)?.popup || input.getAttribute('aria-invalid')==='true' || !input.validity.valid)return;
-      receipts.set(input,{widget,value});
+      if (!selected())return;
+      receipts.set(input,{widget,value,placeId:placeId.value});
       input.addEventListener('input',()=>receipts.delete(input),{once:true});
     };
     return {...result,valid:true};
@@ -58,7 +65,7 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
       const old=change.choiceWidget;
       if(old.kind!=='rippling_location')return fallback.boundChoice(change);
       const current=old.input.isConnected && locationChoice(old.input);
-      return current?.valid && current.widget===old.widget && current.owner===change.region ? current : null;
+      return current?.valid && current.widget===old.widget && current.backingControl===old.backingControl && current.owner===change.region ? current : null;
     },
   };
 }
