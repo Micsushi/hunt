@@ -9,52 +9,33 @@ const OUTPUT = Buffer.from("HARD\x01", "binary");
 
 const EXACT_RECORD_ACL_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-$source = @'
-using System;
-using System.IO;
-using System.Security.AccessControl;
-using System.Security.Principal;
-using System.Text;
-
-public static class HuntExactRecordAclProtector
-{
-    public static void Run()
-    {
-        BinaryReader reader = new BinaryReader(Console.OpenStandardInput());
-        byte[] magic = reader.ReadBytes(4);
-        if (magic.Length != 4 || magic[0] != 72 || magic[1] != 65 || magic[2] != 82 || magic[3] != 80)
-            throw new InvalidDataException();
-        if (reader.ReadByte() != 1) throw new InvalidDataException();
-        int length = reader.ReadInt32();
-        if (length < 1 || length > 32768) throw new InvalidDataException();
-        byte[] pathBytes = reader.ReadBytes(length);
-        if (pathBytes.Length != length || reader.BaseStream.ReadByte() != -1)
-            throw new InvalidDataException();
-        string path = new UTF8Encoding(false, true).GetString(pathBytes);
-        Array.Clear(pathBytes, 0, pathBytes.Length);
-        Array.Clear(magic, 0, magic.Length);
-
-        FileAttributes attributes = File.GetAttributes(path);
-        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-            throw new InvalidDataException();
-        SecurityIdentifier current = WindowsIdentity.GetCurrent().User;
-        SecurityIdentifier system = new SecurityIdentifier("S-1-5-18");
-        FileSecurity acl = new FileSecurity();
-        acl.SetOwner(current);
-        acl.SetAccessRuleProtection(true, false);
-        acl.AddAccessRule(new FileSystemAccessRule(current, FileSystemRights.FullControl, AccessControlType.Allow));
-        acl.AddAccessRule(new FileSystemAccessRule(system, FileSystemRights.FullControl, AccessControlType.Allow));
-        File.SetAccessControl(path, acl);
-
-        Stream output = Console.OpenStandardOutput();
-        output.Write(new byte[] { 72, 65, 82, 68, 1 }, 0, 5);
-        output.Flush();
-        path = null;
-    }
+$reader = [IO.BinaryReader]::new([Console]::OpenStandardInput())
+if ([Text.Encoding]::ASCII.GetString($reader.ReadBytes(4)) -cne 'HARP' -or $reader.ReadByte() -ne 1) {
+  throw 'Invalid record request'
 }
-'@
-Add-Type -TypeDefinition $source
-[HuntExactRecordAclProtector]::Run()
+$length = $reader.ReadInt32()
+if ($length -lt 1 -or $length -gt 32768) { throw 'Invalid record length' }
+$bytes = $reader.ReadBytes($length)
+if ($bytes.Length -ne $length -or $reader.BaseStream.ReadByte() -ne -1) { throw 'Invalid record frame' }
+try { $path = [Text.UTF8Encoding]::new($false, $true).GetString($bytes) }
+finally { [Array]::Clear($bytes, 0, $bytes.Length) }
+
+$attributes = [IO.File]::GetAttributes($path)
+if ($attributes -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) {
+  throw 'Invalid record file'
+}
+$current = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$acl = [Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($current)
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in $current, $system) {
+  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
+}
+[IO.File]::SetAccessControl($path, $acl)
+$outputStream = [Console]::OpenStandardOutput()
+$outputStream.Write([byte[]](72,65,82,68,1), 0, 5)
+$outputStream.Flush()
 `;
 
 export interface ExactRecordAclProtector {
