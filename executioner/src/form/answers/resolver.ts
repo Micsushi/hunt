@@ -35,6 +35,7 @@ import { normalizeCatalogText } from "../questions/normalize.ts";
 import { employmentQuestion, referralQuestion, sameEmployer } from '../questions/matching.ts';
 import {
   contractApprovedPrivacyChoices,
+  isPrivacyDocumentAcknowledgment,
   isRecruitmentTermsConsent,
   protectedQuestionCategory,
 } from "../questions/protected.ts";
@@ -472,21 +473,20 @@ export function createApplicationAnswerResolver(
       }
       if (protectedCategory === "consent") {
         if (field.state === "populated") return success({kind:'readback_only',fieldId:field.fieldId});
+        const choices = field.behavior === "select" ? field.options.filter(({label}) =>
+          label.trim() && !placeholderOption.test(normalizeCatalogText(label)) && !isEmptyCatalogMessage(label)) : [];
+        const acknowledgment = choices.length === 1 && normalizeCatalogText(choices[0]!.label) === "acknowledge confirm"
+          ? choices[0]!.label : undefined;
+        if (acknowledgment && !isPrivacyDocumentAcknowledgment(questionText)) return failure("protected_answer_denied");
         if (isRecruitmentTermsConsent(questionText)) {
           const consent = await query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal);
           if (!consent.ok) return consent;
           if (consent.value.kind==='answered' && consent.value.provenance==='owner_provided' && typeof consent.value.value==='boolean') {
-            let answer: boolean | string = consent.value.value;
-            if (answer && field.behavior === "select") {
-              const choices = field.options.filter(({label}) =>
-                label.trim() && !placeholderOption.test(normalizeCatalogText(label)) && !isEmptyCatalogMessage(label));
-              if (choices.length === 1 && normalizeCatalogText(choices[0]!.label) === "acknowledge confirm") {
-                answer = choices[0]!.label;
-              }
-            }
+            const answer = consent.value.value && acknowledgment ? acknowledgment : consent.value.value;
             return success(intentFor(field, undefined, answer, consent.value.provenance, 'live_owner_fact'));
           }
         }
+        if (acknowledgment) return failure("protected_answer_denied");
         if (!field.rawOptions) return provisionalAnswer();
       }
       if (field.rawOptions !== undefined) {

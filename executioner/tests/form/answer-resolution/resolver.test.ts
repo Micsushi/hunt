@@ -279,6 +279,21 @@ test("only approved recruitment terms use saved consent; required unknown declar
   assert.equal(select.value.intent.optionId, acknowledgement.id);
   assert.equal(select.value.intent.expectedOption, acknowledgement.label);
   assert.equal(select.value.intent.provenance, "owner_provided");
+  for (const label of [
+    "I agree to the Recruitment Privacy Notice and confirm that no AI tools were used to prepare this application.",
+    "I agree to the Recruitment Privacy Notice and agree to use only my own words during this application process.",
+    "I agree to the Recruitment Privacy Notice and the stated compensation.",
+  ]) {
+    const {resolver, profile} = resolverWith({
+      kind: "answered", provenance: "owner_provided", lane: "live_owner_fact", value: true,
+    });
+    const mixed = {...observedSelect, label: boundedText(label)};
+    for (const answerFallbackPolicy of ["owner_facts_only", "deterministic_site_valid_editable"] as const) {
+      const answer = await resolver.resolve({...request(mixed), answerFallbackPolicy}, signal);
+      assert.ok(!answer.ok || answer.value.kind !== "resolved", label);
+    }
+    assert.equal(profile.calls.length, 0);
+  }
   for (const other of [
     {...observedSelect, options: [...observedSelect.options, {id:optionId("other"), label:boundedText("Other")}]},
     {...observedSelect, required:false},

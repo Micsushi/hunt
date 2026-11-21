@@ -5,6 +5,16 @@ import { normalizeCatalogText } from "./normalize.ts";
 
 export type ProtectedQuestionCategory = "authorization" | "legal" | "consent";
 
+// An affirmative-only acknowledgment has no "No" option. Require every object
+// of the declaration to name a privacy document before using saved consent.
+export function isPrivacyDocumentAcknowledgment(label: string): boolean {
+  const documents = normalizeCatalogText(label)
+    .replace(/^(?:please )?(?:confirm|acknowledge) (?:that )?/u, "")
+    .replace(/^(?:(?:yes )?(?:you|i|we) )?(?:have )?(?:read and )?(?:agree to|consent to|accept|acknowledge|read) /u, "");
+  return documents.split(" and ").every(document =>
+    /^(?:(?:the|our|your) )?(?:(?:[\p{L}\p{N}]+ ){1,3}s )?(?:(?:recruitment|applicant|candidate|data) )?privacy (?:notice|policy|statement)$/u.test(document));
+}
+
 export function isRecruitmentTermsConsent(label: string): boolean {
   const text = normalizeCatalogText(label);
   // The owner's recruitment/privacy decision does not cover the opposite statement
