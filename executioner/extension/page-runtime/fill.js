@@ -725,6 +725,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const change={element:e,identity:identity(e),controlIdentity:controlIdentity(e),boundLabels:[...e.labels??[]],region:f.region,before:read(e),label:row.question};
         write(e,value);const immediate=currentElement(change),written=read(immediate??e);await new Promise(resolve=>setTimeout(resolve,100));
         e=currentElement(change);
+        // The employer may publish phone validity after it formats the number and handles blur.
+        for (let attempt = 0; attempt < 8 && checkedForm && e?.type === 'tel' &&
+          e.getAttribute('aria-invalid') === 'true' && e.validity.valid && sameText(e,row.question,value); attempt++) {
+          checkDeadline();
+          await new Promise(resolve => setTimeout(resolve, 50));
+          e = currentElement(change);
+        }
         const formattedPhone = e?.type === 'tel' && row.control === 'text' && sameText(e,row.question,value);
         if (!e || !editable(e) || !(unchanged(e,value) || formattedPhone) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
           if(e && editable(e) && unchanged(e,e.type==='select-multiple' ? value : written)) {

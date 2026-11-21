@@ -62,7 +62,12 @@ test('the SmartRecruiters phone validates on blur and preserves focus in another
         let original = '';
         phone.onfocus = () => { original = phone.value; };
         phone.onblur = () => {
-          if (phone.value !== original) phone.setAttribute('aria-invalid', String(!phone.value));
+          if (phone.value !== original) {
+            const value = phone.value;
+            setTimeout(() => {
+              if (phone.value === value) phone.setAttribute('aria-invalid', String(!value));
+            }, 165);
+          }
         };
       });
       if (focusedElsewhere) await page.locator('#first').focus();
@@ -81,9 +86,9 @@ test('the SmartRecruiters phone validates on blur and preserves focus in another
         assert.equal(await field.getAttribute('aria-invalid'), 'false');
         await page.evaluate(fillVisibleFields, { action: 'undo' as const });
         assert.equal(await field.inputValue(), '');
-        assert.equal(await field.getAttribute('aria-invalid'), 'true');
+        await page.waitForFunction(() => document.querySelector('spl-phone-field')?.shadowRoot?.querySelector('input')?.getAttribute('aria-invalid') === 'true');
         await page.evaluate(fillVisibleFields, { action: 'redo' as const });
-        assert.equal(await field.getAttribute('aria-invalid'), 'false');
+        await page.waitForFunction(() => document.querySelector('spl-phone-field')?.shadowRoot?.querySelector('input')?.getAttribute('aria-invalid') === 'false');
       }
     }
   } finally { await browser.close(); }
