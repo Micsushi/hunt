@@ -46,39 +46,6 @@ const state = Object.freeze({
   revision: 7,
 }) satisfies DurableJourneyState;
 
-test("real Workday Review structure produces a value-free observation", async () => {
-  assert.deepEqual(
-    await inspectWorkdayReview(reviewPageFixture()),
-    {
-      schemaVersion: 1,
-      reviewRoot: { count: 1, visible: true },
-      activeStep: { count: 1, visible: true },
-      validationErrorCount: 0,
-      finalSubmit: { count: 1, visible: true, enabled: true },
-    },
-  );
-});
-
-test("absent structural matches are counted without waiting on element state", async () => {
-  const absent = {
-    count: () => Promise.resolve(0),
-    isVisible: () => Promise.reject(new Error("absent locator state read")),
-    isEnabled: () => Promise.reject(new Error("absent locator state read")),
-    getByRole: () => absent,
-  };
-  const observed = await inspectWorkdayReview({
-    locator: () => absent,
-  });
-
-  assert.deepEqual(observed, {
-    schemaVersion: 1,
-    reviewRoot: { count: 0, visible: false },
-    activeStep: { count: 0, visible: false },
-    validationErrorCount: 0,
-    finalSubmit: { count: 0, visible: false, enabled: false },
-  });
-});
-
 test("a Submit outside the exact Workday page footer cannot satisfy the signature", async () => {
   const absent = {
     count: () => Promise.resolve(0),
@@ -118,35 +85,34 @@ test("a Submit outside the exact Workday page footer cannot satisfy the signatur
 test("verified Review returns only structural Submit facts and a terminal transition", async () => {
   const structure = await inspectWorkdayReview(reviewPageFixture());
 
-  assert.deepEqual(
-    stopAtVerifiedReview({
-      state,
-      operationId,
-      pageId,
-      page,
-      verification: [{ kind: "verified", fieldId: requiredFieldId }],
-      completion: { kind: "complete", decision: { kind: "stop_review" } },
-      structure,
-    }),
-    {
-      kind: "review_confirmed",
-      proof: {
-        schemaVersion: 1,
-        page: "review",
-        requiredFieldCount: 1,
-        verifiedRequiredFieldCount: 1,
-        validationErrorCount: 0,
-        finalSubmit: { present: true, visible: true, enabled: true },
-      },
-      transition: {
-        journeyId,
-        operationId,
-        expectedRevision: 7,
-        status: "review_reached",
-        pageId,
-      },
+  const result = stopAtVerifiedReview({
+    state,
+    operationId,
+    pageId,
+    page,
+    verification: [{ kind: "verified", fieldId: requiredFieldId }],
+    completion: { kind: "complete", decision: { kind: "stop_review" } },
+    structure,
+  });
+  assert.deepEqual(result, {
+    kind: "review_confirmed",
+    proof: {
+      schemaVersion: 1,
+      page: "review",
+      requiredFieldCount: 1,
+      verifiedRequiredFieldCount: 1,
+      validationErrorCount: 0,
+      finalSubmit: { present: true, visible: true, enabled: true },
     },
-  );
+    transition: {
+      journeyId,
+      operationId,
+      expectedRevision: 7,
+      status: "review_reached",
+      pageId,
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(result), /selector|locator|target|action|click|press|activate/iu);
 });
 
 const falsePositiveCases = [

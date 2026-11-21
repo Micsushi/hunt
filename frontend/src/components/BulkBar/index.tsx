@@ -4,9 +4,14 @@ import { bulkSelection } from '@/api/jobs'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './BulkBar.module.css'
 import { ApiError, post } from '@/api/client'
+import { downloadApplicationHandoff, sendApplicationsToBrowser } from '@/api/c3'
+import { usesBrowserC3 } from '@/api/browserC3'
 import { Link, useNavigate } from 'react-router-dom'
 
-type HandoffOutcome = { sourceJobId: number; status: 'confirmed' | 'unconfirmed' | 'not_sent' }
+type HandoffOutcome = {
+  sourceJobId: number
+  status: 'confirmed' | 'unconfirmed' | 'not_sent' | 'rejected'
+}
 type HandoffResult = { selection: Set<number>; outcomes: HandoffOutcome[]; message: string }
 
 const STATUS_CHOICES = [
@@ -30,6 +35,16 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
   const pending = useRef(false)
   const [applicationBatch, setApplicationBatch] = useState<number[]>([])
   const [result, setResult] = useState<HandoffResult | null>(null)
+  const runButton = useRef<HTMLButtonElement>(null)
+  const recoveryButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (
+      result &&
+      (document.activeElement === runButton.current || document.activeElement === document.body)
+    ) {
+      recoveryButton.current?.focus()
+    }
+  }, [result])
   useEffect(() => {
     active.current = true
     return () => {
@@ -48,7 +63,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
 
   async function run() {
     if (disabled || pending.current || awaitingReview || n === 0) return
-    if (action === 'apply' && n > 30) {
+    if (['apply', 'download-applications'].includes(action) && n > 30) {
       showToast('Select up to 30 jobs for one application batch', 'error')
       return
     }
@@ -64,7 +79,28 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
     setApplicationBatch(action === 'apply' ? ids : [])
     if (action === 'apply') setResult(null)
     try {
+      if (action === 'download-applications') {
+        await downloadApplicationHandoff(ids)
+        if (active.current)
+          showToast(
+            'Download started. In your local C3 workspace, open Applications and import this file.',
+          )
+        return
+      }
       if (action === 'apply') {
+        if (usesBrowserC3()) {
+          const transferred = await sendApplicationsToBrowser(ids)
+          if (active.current) {
+            setResult({
+              selection: selectedIds,
+              outcomes: ids.map((sourceJobId) => ({ sourceJobId, status: 'confirmed' })),
+              message: transferred.workspaceOpened
+                ? 'Applications added paused. Continue in the local C3 workspace.'
+                : 'Applications added paused. In Hunt C3, choose Open workspace.',
+            })
+          }
+          return
+        }
         await post('/api/c3/handoff', { job_ids: ids })
         if (active.current) {
           if (useUiStore.getState().selectedIds === selectedIds) {
@@ -107,7 +143,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
                 outcomes.filter(
                   (item) =>
                     item?.sourceJobId === id &&
-                    ['confirmed', 'unconfirmed', 'not_sent'].includes(item.status),
+                    ['confirmed', 'unconfirmed', 'not_sent', 'rejected'].includes(item.status),
                 ).length === 1,
             )
           setResult({
@@ -141,10 +177,13 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
           className={styles.select}
         >
           <option value="">Choose…</option>
-          <option value="requeue">Requeue for enrichment</option>
-          <option value="apply">Fill applications with selected resumes</option>
-          <option value="set_status">Set enrichment status…</option>
-          <option value="delete">Delete rows…</option>
+          <option value="requeue">Requeue enrichment</option>
+          <option value="apply">
+            {usesBrowserC3() ? 'Send to local C3' : 'Fill applications'}
+          </option>
+          <option value="download-applications">Download application file</option>
+          <option value="set_status">Set enrichment status</option>
+          <option value="delete">Delete jobs</option>
         </select>
       </label>
 
@@ -167,15 +206,15 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
       )}
 
       <button
+        ref={runButton}
         className={styles.runBtn}
         onClick={run}
         disabled={disabled || loading || !action || n === 0 || awaitingReview}
-        title="Apply the selected action to all checked rows"
       >
         {loading ? 'Working…' : 'Run action'}
       </button>
 
-      <button className={styles.clearBtn} onClick={clearSelection} title="Deselect all rows">
+      <button className={styles.clearBtn} onClick={clearSelection} aria-label="Clear selected jobs">
         Clear
       </button>
       {loading && applicationBatch.length > 0 && (
@@ -196,13 +235,18 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
                       confirmed: 'Confirmed in Applications',
                       unconfirmed: 'Not confirmed. Check Applications.',
                       not_sent: 'Not sent',
+                      rejected: 'Rejected. Open the job to resolve the issue.',
                     }[item.status]
                   }
                 </span>
               </li>
             ))}
           </ul>
-          <button className={styles.clearBtn} onClick={() => navigate('/executioner')}>
+          <button
+            ref={recoveryButton}
+            className={styles.clearBtn}
+            onClick={() => navigate('/executioner')}
+          >
             View Applications
           </button>
           {unsent.length > 0 && (

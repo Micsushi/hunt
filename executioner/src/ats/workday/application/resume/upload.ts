@@ -24,7 +24,7 @@ import type {
 const selectors = Object.freeze({
   input: 'input[type="file"][data-automation-id="file-upload-input-ref"]',
   item: '[data-automation-id="file-upload-item"]',
-  success: '[data-automation-id="file-upload-success"], [data-automation-id="file-upload-item"][data-upload-state="success"]',
+  success: '[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"], [data-automation-id="file-upload-item"][data-upload-state="success"]',
   remove: '[data-automation-id="file-upload-item"] [data-automation-id="delete-file"], [data-automation-id="file-upload-item"] button[aria-label^="Delete"]',
   confirm: '[data-automation-id="confirmDeleteFile"]',
   error: '[data-automation-id="file-upload-error"]',
@@ -337,12 +337,15 @@ async function inspectOnce(
       removeCount,
       buttonCount: item.buttonCount,
       progressCount: item.progressCount,
+      completionObserved: item.complete,
     });
     if (!item.valid || !item.visible || item.busy || item.progressCount > 0) {
       return { kind: "unavailable" };
     }
     if (!item.identityMatches) return { kind: "different" };
-    if (requiredErrorVisible) return { kind: "unavailable" };
+    // Workday may consume FileList before its attachment has finished committing.
+    // Keep polling read-only until the same item exposes positive completion.
+    if (requiredErrorVisible || !item.complete) return { kind: "unavailable" };
     return {
       kind: "verified",
       browserState: Object.freeze({
@@ -382,29 +385,40 @@ async function inspectUploadedItem(
   readonly busy: boolean;
   readonly buttonCount: number;
   readonly progressCount: number;
+  readonly complete: boolean;
 }> {
   try {
     const [visible, state] = await Promise.all([
       item.isVisible === undefined ? Promise.resolve(true) : item.isVisible(),
       item.evaluate((element: HTMLElement, expected: string) => {
         const text = (element.textContent ?? "").replace(/\s+/gu, " ").trim();
-        const progressCount = element.querySelectorAll(
+        const visible = (node: Element) => node instanceof HTMLElement &&
+          node.getClientRects().length > 0 && !node.closest('[hidden],[aria-hidden="true"]') &&
+          getComputedStyle(node).display !== "none" && getComputedStyle(node).visibility !== "hidden";
+        const owned = (node: Element) => node.closest('[data-automation-id="file-upload-item"]') === element;
+        const progressCount = [...element.querySelectorAll(
           '[role="progressbar"], [aria-busy="true"], [data-automation-id*="progress" i], [data-automation-id*="uploading" i]',
-        ).length;
+        )].filter(node => owned(node) && visible(node)).length;
+        const completionSelector = '[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"], [data-automation-id="file-upload-item"][data-upload-state="success"]';
+        const completions = [element, ...element.querySelectorAll(completionSelector)]
+          .filter(node => node.matches(completionSelector) && owned(node) && visible(node));
+        const activeError = [...element.querySelectorAll('[data-automation-id="file-upload-error"], [role="alert"][aria-invalid="true"]')]
+          .some(node => owned(node) && visible(node));
         return {
           identityMatches: text.includes(expected),
           busy: element.getAttribute("aria-busy") === "true",
           buttonCount: element.querySelectorAll("button").length,
           progressCount,
+          complete: completions.length === 1 && !activeError,
         };
       }, expectedFileName),
     ]);
     if (!uploadedItemResult(state)) {
-      return { valid: false, identityMatches: false, visible, busy: false, buttonCount: 0, progressCount: 0 };
+      return { valid: false, identityMatches: false, visible, busy: false, buttonCount: 0, progressCount: 0, complete: false };
     }
     return { valid: true, visible, ...state };
   } catch {
-    return { valid: false, identityMatches: false, visible: false, busy: false, buttonCount: 0, progressCount: 0 };
+    return { valid: false, identityMatches: false, visible: false, busy: false, buttonCount: 0, progressCount: 0, complete: false };
   }
 }
 
@@ -413,13 +427,15 @@ function uploadedItemResult(value: unknown): value is {
   readonly busy: boolean;
   readonly buttonCount: number;
   readonly progressCount: number;
+  readonly complete: boolean;
 } {
   return typeof value === "object" && value !== null &&
-    Object.keys(value).length === 4 &&
+    Object.keys(value).length === 5 &&
     typeof (value as { identityMatches?: unknown }).identityMatches === "boolean" &&
     typeof (value as { busy?: unknown }).busy === "boolean" &&
     Number.isInteger((value as { buttonCount?: unknown }).buttonCount) &&
-    Number.isInteger((value as { progressCount?: unknown }).progressCount);
+    Number.isInteger((value as { progressCount?: unknown }).progressCount) &&
+    typeof (value as { complete?: unknown }).complete === "boolean";
 }
 
 export function workdayResumeUploadFileName(intent: WorkdayResumeFileIntent): string {

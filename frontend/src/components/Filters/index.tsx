@@ -103,26 +103,6 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
 
   return (
     <div className={styles.wrap}>
-      {/* Status chips */}
-      <div className={styles.chips}>
-        {STATUS_OPTIONS.map((o) => {
-          const count = statusCounts?.[o.value]
-          const active = (query.status ?? 'all') === o.value
-          return (
-            <button
-              key={o.value}
-              className={`${styles.chip} ${active ? styles.active : ''}`}
-              onClick={() => onChange({ status: o.value, page: 1 })}
-              title={`Filter by: ${o.label}`}
-            >
-              {o.label}
-              {count !== undefined && o.value !== 'all' ? ` (${count})` : ''}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Filter row with labeled groups */}
       <div className={styles.filterRow}>
         <div className={`${styles.filterGroup} ${styles.filterGroupSearch}`}>
           <label className={styles.filterLabel} htmlFor="jobs-search">
@@ -134,13 +114,38 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
               ref={searchRef}
               className={styles.searchInput}
               type="text"
-              placeholder="Company, title, description, URL…"
+              placeholder="Company or title"
               defaultValue={query.q ?? ''}
               onChange={handleSearchChange}
               aria-label="Search jobs"
             />
             {isFetching && <span className={styles.spinner} aria-hidden="true" />}
           </div>
+        </div>
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel} htmlFor="jobs-status">
+            Status
+          </label>
+          <select
+            id="jobs-status"
+            className={styles.select}
+            value={query.status ?? 'all'}
+            onChange={(e) => onChange({ status: e.target.value, page: 1 })}
+          >
+            {query.status && !STATUS_OPTIONS.some((option) => option.value === query.status) && (
+              <option value={query.status}>{query.status.replace(/_/g, ' ')}</option>
+            )}
+            {STATUS_OPTIONS.map((option) => {
+              const count = statusCounts?.[option.value]
+              return (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                  {count !== undefined && option.value !== 'all' ? ` (${count})` : ''}
+                </option>
+              )
+            })}
+          </select>
         </div>
 
         <div className={styles.filterGroup}>
@@ -195,8 +200,7 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
         </div>
 
         <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>&nbsp;</label>
-          <button className={styles.resetBtn} onClick={reset} title="Reset all filters to defaults">
+          <button className={styles.resetBtn} onClick={reset} aria-label="Reset job filters">
             Reset
           </button>
         </div>

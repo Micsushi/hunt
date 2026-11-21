@@ -26,14 +26,6 @@
   min-height: 44px;
 }
 
-.kbd {
-  font: 0.8em var(--font-mono);
-  padding: 2px 5px;
-  border-radius: 5px;
-  border: 1px solid var(--line);
-  background: var(--panel-strong);
-}
-
 .tableWrap {
   overflow-x: auto;
   background: var(--panel);
@@ -169,14 +161,6 @@
   font-size: 0.8rem;
   color: var(--muted);
   white-space: nowrap;
-}
-
-.discoveryNote {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 0.75rem;
-  color: var(--muted);
 }
 
 .priorityBadge {

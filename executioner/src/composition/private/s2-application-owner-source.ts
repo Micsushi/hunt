@@ -334,7 +334,7 @@ export function validateProfileAuthority(
   value: unknown,
   facts: readonly { readonly factId: string; readonly value: unknown; readonly provenance: string }[],
 ): ProfilePagePlan {
-  const plan = exact(value, ["mode", "pageType", "fields", "repeatables"]);
+  const plan = exact(structuredClone(value), ["mode", "pageType", "fields", "repeatables"]);
   if ((plan.mode !== "live" && plan.mode !== "synthetic_test_non_submittable") ||
       (plan.pageType !== "profile" && plan.pageType !== "contact") ||
       !Array.isArray(plan.fields) || plan.fields.length > 128 ||
@@ -344,6 +344,8 @@ export function validateProfileAuthority(
     "identity.family_name": "family_name",
     "identity.preferred_name": "preferred_name",
     "contact.email": "email_address",
+    "address.line1": "address_line1",
+    "address.line2": "address_line2",
     "address.city": "city",
     "address.region": "region",
     "address.country": "country",
@@ -351,14 +353,19 @@ export function validateProfileAuthority(
     "phone.number": "phone_number",
     "experience.company": "current_company",
     "experience.title": "current_title",
-    "education.degree": "highest_education",
+    "education.degree": facts.some(fact => fact.factId === "education_degree") ? "education_degree" : "highest_education",
+    "education.school": "education_institution",
+    "education.field_of_study": "education_field_of_study",
+    "education.start_year": "education_start_year",
+    "education.end_year": "education_end_year",
+    "education.gpa": "education_gpa",
   };
   const factsById = new Map(facts.map((fact) => [fact.factId, fact]));
   const ownerInputByField = new Map(profileOwnerInputCatalog.map((field) => [
     field.fieldId,
     field,
   ]));
-  const fields: Array<{ readonly value: unknown; readonly section?: string }> =
+  const fields: Array<{ readonly value: unknown; readonly section?: string; readonly rowKey?: string }> =
     plan.fields.map((field) => ({ value: field }));
   const sections = new Set<string>();
   for (const value of plan.repeatables) {
@@ -386,6 +393,7 @@ export function validateProfileAuthority(
       fields.push(...row.fields.map((field) => ({
         value: field,
         section: repeatable.section as string,
+        rowKey: row.rowKey as string,
       })));
     }
   }
@@ -474,18 +482,40 @@ export function validateProfileAuthority(
       if (entry.section === undefined) {
         if (fact === undefined
           ? !scalarProfileFieldIds.has(field.fieldId as string)
-          : fact.value !== answer.value || fact.provenance !== answer.provenance) denied();
+          : !profileAnswerMatchesFact(field.answerType, answer.value, fact.value) || fact.provenance !== answer.provenance) denied();
       } else if (!repeatableProfileFieldIds.get(entry.section)?.has(field.fieldId as string)) {
         denied();
       }
     } else if (answer.provenance === "owner_provided" ||
       answer.provenance === "configured_template") {
-      const factId = factByField[field.fieldId];
+      const factId = entry.section === "websites" && field.fieldId === "website.url" &&
+          (entry.rowKey === "linkedin" || entry.rowKey === "github" || entry.rowKey === "portfolio")
+        ? `${entry.rowKey}_url`
+        : factByField[field.fieldId];
       const fact = factId === undefined ? undefined : factsById.get(factId);
-      if (fact === undefined || fact.value !== answer.value || fact.provenance !== answer.provenance) {
+      if (fact === undefined || !profileAnswerMatchesFact(field.answerType, answer.value, fact.value) || fact.provenance !== answer.provenance) {
         denied();
       }
     } else denied();
+    if (field.answerType === "multi_select") {
+      // Legacy saved plans stored one owner fact as a scalar; the browser contract
+      // requires a JSON list. Normalize only after the authority check above.
+      let options: unknown;
+      try { options = JSON.parse(answer.value as string); } catch { /* Legacy scalar. */ }
+      if (!Array.isArray(options)) {
+        const factId = factByField[field.fieldId as string];
+        const fact = factId === undefined ? undefined : factsById.get(factId);
+        const mapping = field.optionMapping as Record<string, unknown>;
+        if (!fact || fact.value !== answer.value || fact.provenance !== answer.provenance ||
+            mapping.visibleOption !== answer.value) denied();
+        options = [answer.value];
+      }
+      if (!Array.isArray(options) || options.length < 1 || options.length > 128 ||
+          options.some(option => typeof option !== "string" || !option.trim() || !browserPlainText.test(option)) ||
+          new Set(options.map(option => String(option).trim().toLowerCase())).size !== options.length) denied();
+      answer.value = JSON.stringify(options);
+      (field.optionMapping as Record<string, unknown>).canonicalValue = answer.value;
+    }
     if (field.answerType === "boolean" && !new Set(["true", "false"]).has(answer.value as string)) {
       denied();
     }
@@ -495,6 +525,16 @@ export function validateProfileAuthority(
     ...cloned,
     fields: cloned.fields.map(failClosedProtectedProfileAnswer),
   });
+}
+
+/** A single selected option can represent the same scalar authoritative fact. */
+export function profileAnswerMatchesFact(answerType: unknown, answer: unknown, fact: unknown): boolean {
+  if (answer === fact) return true;
+  if (answerType !== 'multi_select' || typeof answer !== 'string' || typeof fact !== 'string') return false;
+  try {
+    const options: unknown = JSON.parse(answer);
+    return Array.isArray(options) && options.length === 1 && options[0] === fact;
+  } catch { return false; }
 }
 
 function ownerInputValueMatches(

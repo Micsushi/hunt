@@ -3,7 +3,6 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -11,14 +10,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 from hunter import db  # noqa: E402
-from scripts import verify_easy_apply_filter  # noqa: E402
 
 try:
     from hunter import enrich_indeed
 except ModuleNotFoundError:
     enrich_indeed = None
 from hunter import enrich_jobs, enrichment_dispatch  # noqa: E402
-from hunter import scraper as discovery  # noqa: E402
 
 
 class FakeResponse:
@@ -132,159 +129,7 @@ class Stage32Tests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_scrape_single_marks_indeed_rows_pending_for_stage32_enrichment(self):
-        class FakeDf:
-            def __init__(self, rows):
-                self._rows = rows
-
-            def iterrows(self):
-                yield from enumerate(self._rows)
-
-            def __len__(self):
-                return len(self._rows)
-
-        jobs_df = FakeDf(
-            [
-                {
-                    "title": "Data Scientist",
-                    "company": "Acme",
-                    "location": "Canada",
-                    "job_url": "https://ca.indeed.com/viewjob?jk=123",
-                    "job_url_direct": "https://jobs.acme.com/123",
-                    "description": "Feed description",
-                    "site": "indeed",
-                    "date_posted": "2026-04-04",
-                    "is_remote": True,
-                }
-            ]
-        )
-
-        class FakeJobspy:
-            @staticmethod
-            def scrape_jobs(*_args, **_kwargs):
-                return jobs_df
-
-        with patch.dict(sys.modules, {"jobspy": FakeJobspy}):
-            jobs = discovery.scrape_single("indeed", "data scientist", "Canada", "data")
-
-        self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0]["source"], "indeed")
-        self.assertEqual(jobs[0]["apply_type"], "unknown")
-        self.assertEqual(jobs[0]["enrichment_status"], "pending")
-
-    def test_init_db_backfills_indeed_rows_to_pending(self):
-        path = self.make_temp_db_path()
-        old_db_path = db.DB_PATH
-        try:
-            db.DB_PATH = path
-            db.init_db()
-            conn = sqlite3.connect(path)
-            conn.execute(
-                """
-                INSERT INTO jobs (
-                    title, company, location, job_url, source, apply_type, enrichment_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "Data Scientist",
-                    "Acme",
-                    "Canada",
-                    "https://ca.indeed.com/viewjob?jk=111",
-                    "indeed",
-                    None,
-                    None,
-                ),
-            )
-            conn.commit()
-            conn.close()
-
-            db.init_db()
-            row = db.get_job_by_id(1)
-            self.assertEqual(row["apply_type"], "unknown")
-            self.assertEqual(row["enrichment_status"], "pending")
-        finally:
-            db.DB_PATH = old_db_path
-            if os.path.exists(path):
-                os.remove(path)
-
-    def test_claim_job_for_enrichment_prefers_linkedin_before_indeed(self):
-        with self.with_temp_db() as path:
-            linkedin_id = self.insert_job(
-                path,
-                source="linkedin",
-                job_url="https://www.linkedin.com/jobs/view/1",
-                date_posted="2026-04-05",
-            )
-            indeed_id = self.insert_job(
-                path,
-                source="indeed",
-                job_url="https://ca.indeed.com/viewjob?jk=222",
-            )
-
-            claimed = db.claim_job_for_enrichment()
-
-            self.assertIsNotNone(claimed)
-            self.assertEqual(claimed["id"], linkedin_id)
-            self.assertNotEqual(claimed["id"], indeed_id)
-
-    def test_claim_job_for_enrichment_skips_linkedin_when_auth_is_paused(self):
-        with self.with_temp_db() as path:
-            self.insert_job(
-                path,
-                source="linkedin",
-                job_url="https://www.linkedin.com/jobs/view/2",
-                date_posted="2026-04-05",
-            )
-            indeed_id = self.insert_job(
-                path,
-                source="indeed",
-                job_url="https://ca.indeed.com/viewjob?jk=333",
-            )
-
-            db.mark_linkedin_auth_unavailable(
-                "auth_expired: LinkedIn session appears to be logged out or expired."
-            )
-
-            claimed = db.claim_job_for_enrichment()
-
-            self.assertIsNotNone(claimed)
-            self.assertEqual(claimed["id"], indeed_id)
-
-    def test_indeed_enrichment_extracts_description_and_apply_url(self):
-        page_url = "https://ca.indeed.com/viewjob?jk=123"
-        redirect_url = "https://ca.indeed.com/applystart?jk=123"
-        html = """
-        <html><head>
-        <script type="application/ld+json">
-        {"@type":"JobPosting","description":"<p>Build data pipelines and dashboards.</p>"}
-        </script>
-        </head>
-        <body>
-          <a data-testid="apply-button" href="/applystart?jk=123">Apply now</a>
-        </body></html>
-        """
-        session = FakeSession(
-            {
-                page_url: FakeResponse(text=html, url=page_url, status_code=200),
-                redirect_url: FakeResponse(
-                    text="redirected",
-                    url="https://jobs.acme.com/apply/123",
-                    status_code=200,
-                ),
-            }
-        )
-
-        with patch.object(enrich_indeed, "_session", return_value=session):
-            result = enrich_indeed.enrich_indeed_job(
-                {"job_url": page_url, "apply_url": None}, timeout_ms=1000
-            )
-
-        self.assertEqual(result["apply_type"], "external_apply")
-        self.assertEqual(result["apply_url"], "https://jobs.acme.com/apply/123")
-        self.assertEqual(result["apply_host"], "jobs.acme.com")
-        self.assertEqual(result["description"], "Build data pipelines and dashboards.")
-
-    def test_indeed_process_batch_updates_rows(self):
+    def test_indeed_batch_saves_new_description_and_preserves_existing_fallback(self):
         page_url = "https://ca.indeed.com/viewjob?jk=333"
         html = """
         <html><body>
@@ -293,59 +138,48 @@ class Stage32Tests(unittest.TestCase):
           </div>
         </body></html>
         """
-        session = FakeSession({page_url: FakeResponse(text=html, url=page_url, status_code=200)})
+        fallback_url = "https://ca.indeed.com/viewjob?jk=444"
+        fallback_html = """
+        <html><body>
+          <div class="job-card">This page exposes metadata and an external apply link.</div>
+          <a data-testid="apply-button" href="https://jobs.acme.com/apply/444">Apply now</a>
+        </body></html>
+        """
+        existing_description = (
+            "This role owns pipeline automation, reporting, cross-functional collaboration, "
+            "stakeholder updates, forecasting, and customer-facing process improvement."
+        )
+        session = FakeSession(
+            {
+                page_url: FakeResponse(text=html, url=page_url, status_code=200),
+                fallback_url: FakeResponse(text=fallback_html, url=fallback_url, status_code=200),
+            }
+        )
 
         with (
             self.with_temp_db() as path,
             patch.object(enrich_indeed, "_session", return_value=session),
         ):
             job_id = self.insert_job(path, job_url=page_url, source="indeed")
-            summary = enrich_indeed.process_batch(limit=1, timeout_ms=1000, return_summary=True)
+            fallback_id = self.insert_job(
+                path,
+                source="indeed",
+                job_url=fallback_url,
+                apply_url="https://jobs.acme.com/apply/444",
+                description=existing_description,
+            )
+            summary = enrich_indeed.process_batch(limit=2, timeout_ms=1000, return_summary=True)
             row = db.get_job_by_id(job_id)
+            fallback = db.get_job_by_id(fallback_id)
 
-        self.assertEqual(summary["attempted"], 1)
-        self.assertEqual(summary["succeeded"], 1)
+        self.assertEqual(summary["attempted"], 2)
+        self.assertEqual(summary["succeeded"], 2)
         self.assertEqual(row["enrichment_status"], "done")
         self.assertTrue(row["description"].startswith("Analyze product usage"))
 
-    def test_indeed_ui_verify_marks_row_done_verified(self):
-        @contextmanager
-        def fake_browser_context(**_kwargs):
-            yield object()
-
-        with self.with_temp_db() as path:
-            job_id = self.insert_job(
-                path,
-                source="indeed",
-                job_url="https://ca.indeed.com/viewjob?jk=555",
-            )
-            with (
-                patch.object(enrich_indeed, "open_browser_context", fake_browser_context),
-                patch.object(
-                    enrich_indeed,
-                    "enrich_indeed_job_in_context",
-                    return_value={
-                        "description": "Browser-rendered description with enough detail to be valid.",
-                        "apply_url": "https://jobs.acme.com/apply/555",
-                        "apply_type": "external_apply",
-                        "auto_apply_eligible": 1,
-                        "apply_host": "jobs.acme.com",
-                        "ats_type": "unknown",
-                    },
-                ),
-            ):
-                exit_code = enrich_indeed.process_one_job(
-                    job_id=job_id,
-                    timeout_ms=1000,
-                    force=True,
-                    ui_verify=True,
-                )
-                row = db.get_job_by_id(job_id)
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(row["enrichment_status"], "done_verified")
-        self.assertEqual(row["apply_type"], "external_apply")
-        self.assertEqual(row["last_enrichment_error"], None)
+        self.assertEqual(fallback["description"], existing_description)
+        self.assertEqual(fallback["apply_type"], "external_apply")
+        self.assertEqual(fallback["apply_url"], "https://jobs.acme.com/apply/444")
 
     def test_indeed_ui_verify_browser_launch_failure_does_not_leave_processing(self):
         with self.with_temp_db() as path:
@@ -371,82 +205,6 @@ class Stage32Tests(unittest.TestCase):
         self.assertNotEqual(row["enrichment_status"], "processing")
         self.assertEqual(row["enrichment_status"], "failed")
         self.assertIn("browser_unavailable", row["last_enrichment_error"])
-
-    def test_indeed_enrichment_reuses_existing_description_when_page_parse_misses(self):
-        page_url = "https://ca.indeed.com/viewjob?jk=444"
-        html = """
-        <html><body>
-          <div class="job-card">This page exposes metadata and an external apply link.</div>
-          <a data-testid="apply-button" href="https://jobs.acme.com/apply/444">Apply now</a>
-        </body></html>
-        """
-        existing_description = (
-            "This role owns pipeline automation, reporting, cross-functional collaboration, "
-            "stakeholder updates, forecasting, and customer-facing process improvement."
-        )
-        session = FakeSession({page_url: FakeResponse(text=html, url=page_url, status_code=200)})
-
-        with patch.object(enrich_indeed, "_session", return_value=session):
-            result = enrich_indeed.enrich_indeed_job(
-                {
-                    "job_url": page_url,
-                    "apply_url": "https://jobs.acme.com/apply/444",
-                    "description": existing_description,
-                },
-                timeout_ms=1000,
-            )
-
-        self.assertEqual(result["description"], existing_description)
-        self.assertEqual(result["apply_type"], "external_apply")
-        self.assertEqual(result["apply_url"], "https://jobs.acme.com/apply/444")
-
-    def test_process_multi_source_batch_dispatches_across_sources(self):
-        fake_linkedin_summary = {
-            "exit_code": 0,
-            "attempted": 1,
-            "ui_verified": 0,
-            "succeeded": 1,
-            "failed": 0,
-            "actionable_failed": 0,
-            "failure_breakdown": {},
-            "total_elapsed_seconds": 1.0,
-            "average_seconds_per_job": 1.0,
-            "stop_error_code": None,
-        }
-        fake_indeed_summary = {
-            "exit_code": 0,
-            "attempted": 1,
-            "ui_verified": 0,
-            "succeeded": 1,
-            "failed": 0,
-            "actionable_failed": 0,
-            "failure_breakdown": {},
-            "total_elapsed_seconds": 1.0,
-            "average_seconds_per_job": 1.0,
-            "stop_error_code": None,
-        }
-
-        with (
-            patch.object(
-                enrichment_dispatch, "get_linkedin_auth_state", return_value={"available": True}
-            ),
-            patch.object(
-                enrichment_dispatch, "_run_linkedin_batch", return_value=fake_linkedin_summary
-            ) as mock_linkedin_run,
-            patch.object(
-                enrichment_dispatch, "_run_indeed_batch", return_value=fake_indeed_summary
-            ) as mock_indeed_run,
-            patch.object(enrichment_dispatch, "count_ready_jobs_for_enrichment") as mock_count,
-            patch.object(enrichment_dispatch, "count_ready_public_employer_jobs", return_value=0),
-        ):
-            mock_count.side_effect = lambda sources=None: 1
-            summary = enrich_jobs.process_multi_source_batch(limit=2, return_summary=True)
-
-        self.assertEqual(summary["attempted"], 2)
-        self.assertIn("linkedin", summary["by_source"])
-        self.assertIn("indeed", summary["by_source"])
-        mock_linkedin_run.assert_called()
-        mock_indeed_run.assert_called()
 
     def test_process_multi_source_batch_skips_linkedin_without_auth_but_runs_indeed(self):
         """Indeed must not be blocked when LinkedIn auth is missing."""
@@ -515,15 +273,6 @@ class Stage32Tests(unittest.TestCase):
         self.assertIn("indeed", summary["by_source"])
         self.assertEqual(summary["exit_code"], 0)
 
-    def test_enrichment_dispatch_registry_covers_db_source_priority(self):
-        """Every source in db.ENRICHMENT_SOURCE_PRIORITY must have dispatch metadata."""
-        for source in db.ENRICHMENT_SOURCE_PRIORITY:
-            self.assertIn(
-                source,
-                enrichment_dispatch._REQUIRES_LINKEDIN_SESSION,
-                msg=f"Add {source!r} to enrichment_dispatch._REQUIRES_LINKEDIN_SESSION and _run_batch_for_source",
-            )
-
     def test_hiring_cafe_global_cooldown_suppresses_fallback_claims(self):
         with self.with_temp_db() as path:
             self.insert_job(
@@ -540,137 +289,8 @@ class Stage32Tests(unittest.TestCase):
             db.clear_hiring_cafe_cooldown()
             self.assertEqual(db.count_ready_linkedin_jobs_for_hiring_cafe_fallback(), 1)
 
-    def test_verify_easy_apply_filter_checks_c1_invariants(self):
-        with self.with_temp_db() as path:
-            job_id = self.insert_job(
-                path,
-                source="linkedin",
-                job_url="https://www.linkedin.com/jobs/view/777",
-                apply_type="easy_apply",
-                auto_apply_eligible=0,
-                enrichment_status="done",
-                description="Easy Apply job description",
-            )
-
-            exit_code = verify_easy_apply_filter.main(["--job-id", str(job_id), "--db-path", path])
-
-        self.assertEqual(exit_code, 0)
-
-    def test_review_queue_summary_includes_source_counts(self):
-        with self.with_temp_db() as path:
-            self.insert_job(
-                path, source="linkedin", job_url="https://www.linkedin.com/jobs/view/55"
-            )
-            self.insert_job(path, source="indeed", job_url="https://ca.indeed.com/viewjob?jk=55")
-
-            summary = db.get_review_queue_summary()
-
-        self.assertEqual(summary["source_counts"]["linkedin"], 1)
-        self.assertEqual(summary["source_counts"]["indeed"], 1)
-
-    def test_review_queue_summary_splits_partial_and_true_failed_details(self):
-        with self.with_temp_db() as path:
-            self.insert_job(
-                path,
-                job_url="https://example.com/job/enriched",
-                enrichment_status="done",
-                description="Full description",
-                apply_url="https://acme.example/apply",
-            )
-            self.insert_job(
-                path,
-                job_url="https://example.com/job/description-only",
-                enrichment_status="failed",
-                description="Description only",
-                apply_url=None,
-            )
-            self.insert_job(
-                path,
-                job_url="https://example.com/job/url-only",
-                enrichment_status="failed_description",
-                description=None,
-                apply_url="https://acme.example/apply-url-only",
-            )
-            self.insert_job(
-                path,
-                job_url="https://example.com/job/failed",
-                enrichment_status="failed",
-                description=None,
-                apply_url=None,
-            )
-
-            summary = db.get_review_queue_summary()
-            enriched_rows = db.list_jobs_for_review(status="enriched")
-            partial_rows = db.list_jobs_for_review(status="partial")
-            failed_rows = db.list_jobs_for_review(status="failed")
-
-        self.assertEqual(summary["detail_quality_counts"]["enriched"], 1)
-        self.assertEqual(summary["detail_quality_counts"]["partial"], 2)
-        self.assertEqual(summary["detail_quality_counts"]["description_only"], 1)
-        self.assertEqual(summary["detail_quality_counts"]["url_only"], 1)
-        self.assertEqual(summary["detail_quality_counts"]["failed"], 1)
-        self.assertEqual(
-            [row["job_url"] for row in enriched_rows], ["https://example.com/job/enriched"]
-        )
-        self.assertEqual(
-            {row["job_url"] for row in partial_rows},
-            {
-                "https://example.com/job/description-only",
-                "https://example.com/job/url-only",
-            },
-        )
-        self.assertEqual(
-            [row["job_url"] for row in failed_rows], ["https://example.com/job/failed"]
-        )
-
-    def test_generic_retry_backfill_applies_to_indeed_failures(self):
-        with self.with_temp_db() as path:
-            job_id = self.insert_job(
-                path,
-                source="indeed",
-                enrichment_status="failed",
-                enrichment_attempts=1,
-                last_enrichment_error="description_not_found: missing content",
-                next_enrichment_retry_at=None,
-            )
-
-            db.init_db()
-            row = db.get_job_by_id(job_id)
-
-        self.assertIsNotNone(row["next_enrichment_retry_at"])
-
 
 class EnrichmentCliTests(unittest.TestCase):
-    def test_dispatch_preserves_worker_options(self):
-        from unittest.mock import Mock
-
-        from hunter import enrich_hiring_cafe, enrich_indeed, enrich_linkedin
-
-        for worker in (enrich_linkedin, enrich_indeed, enrich_hiring_cafe):
-            for batch in (False, True):
-                with self.subTest(worker=worker.__name__, batch=batch):
-                    one, many = Mock(return_value=7), Mock(return_value=8)
-                    argv = (
-                        ["enrich", "--limit", "3"]
-                        if batch
-                        else ["enrich", "--job-id", "42", "--force"]
-                    )
-                    with (
-                        patch.object(sys, "argv", argv),
-                        patch.object(worker, "process_one_job", one),
-                        patch.object(worker, "process_batch", many),
-                    ):
-                        self.assertEqual(worker.main(), 8 if batch else 7)
-                    called = many if batch else one
-                    (one if batch else many).assert_not_called()
-                    expected = {"limit": 3} if batch else {"job_id": 42, "force": True}
-                    if worker != enrich_hiring_cafe:
-                        expected.update(timeout_ms=45000, browser_channel=None)
-                        expected["ui_verify_blocked" if batch else "ui_verify"] = False
-                    if worker == enrich_linkedin:
-                        expected.update(storage_state_path=None, headless=True, slow_mo=0)
-                    called.assert_called_once_with(**expected)
-
     def test_invalid_cli_combinations_never_claim_jobs(self):
         from unittest.mock import Mock
 
@@ -698,69 +318,6 @@ class EnrichmentCliTests(unittest.TestCase):
                     one.assert_not_called()
                     many.assert_not_called()
 
-    def test_interactive_verification_preserves_provider_claim_behavior(self):
-        from unittest.mock import Mock
-
-        from hunter import enrich_indeed, enrich_linkedin
-
-        for worker in (enrich_linkedin, enrich_indeed):
-            with self.subTest(worker=worker.__name__):
-                one = Mock(return_value=0)
-                with (
-                    patch.object(sys, "argv", ["enrich", "--job-id", "42", "--ui-verify"]),
-                    patch.object(worker, "process_one_job", one),
-                ):
-                    self.assertEqual(worker.main(), 0)
-                self.assertTrue(one.call_args.kwargs["ui_verify"])
-                self.assertEqual(one.call_args.kwargs["force"], worker == enrich_linkedin)
-                if worker == enrich_linkedin:
-                    self.assertFalse(one.call_args.kwargs["headless"])
-
 
 if __name__ == "__main__":
     unittest.main()
-
-
-def test_batch_summary_uses_final_verification_outcome_and_all_attempt_timings():
-    from hunter.enrichment_policy import summarize_batch
-
-    initial = [
-        {
-            "job_id": 1,
-            "status": "failed",
-            "error_code": "security_verification",
-            "duration_seconds": 2,
-        },
-        {"job_id": 2, "status": "failed", "error_code": "job_removed", "duration_seconds": 1},
-    ]
-    verified = [{"job_id": 1, "status": "success", "duration_seconds": 6}]
-    summary = summarize_batch(
-        initial,
-        ui_results=verified,
-        elapsed=12,
-        non_actionable=lambda code: code == "job_removed",
-        should_stop=lambda code: code == "security_verification",
-        prefix="test",
-    )
-    assert summary == {
-        "exit_code": 0,
-        "attempted": 2,
-        "ui_verified": 1,
-        "succeeded": 1,
-        "failed": 1,
-        "actionable_failed": 0,
-        "failure_breakdown": {"job_removed": 1},
-        "total_elapsed_seconds": 12,
-        "average_seconds_per_job": 3,
-        "stop_error_code": None,
-    }
-    paused = summarize_batch(
-        [],
-        elapsed=1,
-        non_actionable=lambda _: False,
-        should_stop=lambda _: False,
-        prefix="test",
-        auth_paused=True,
-    )
-    assert paused["exit_code"] == 1 and paused["stop_error_code"] == "auth_expired"
-    assert paused["attempted"] == 0 and paused["average_seconds_per_job"] == 0

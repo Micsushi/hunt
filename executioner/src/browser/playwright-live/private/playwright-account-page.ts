@@ -17,6 +17,7 @@ import {
 } from "./workday-structural-catalog.ts";
 
 export type PlaywrightAccountPageTraceEvent =
+  | `submit_field_${AccountFieldName}_${"missing" | "ambiguous" | "hidden" | "disabled" | "readonly"}`
   | "submit_click_started"
   | "submit_click_succeeded"
   | "submit_click_failed"
@@ -155,17 +156,42 @@ export class PlaywrightAccountPageAdapter implements SemanticAccountPageAdapter 
     }
     const { locator, field } = semanticLocator(page, control);
     const cardinality = await locator.count();
-    const actionable = cardinality === 1 &&
-      await locator.isVisible() &&
-      await locator.isEnabled() &&
-      (!field || await locator.isEditable());
+    const unavailable = cardinality === 0 ? "missing" : cardinality !== 1 ? "ambiguous" :
+      !await locator.isVisible() ? "hidden" : !await locator.isEnabled() ? "disabled" :
+      field && !await locator.isEditable() ? "readonly" : undefined;
+    const actionable = unavailable === undefined;
+    if (field && unavailable) this.#emit(`submit_field_${control as AccountFieldName}_${unavailable}`);
     return { cardinality, actionable };
   }
 
-  async fill(page: PersistentPage, field: AccountFieldName, bytes: Uint8Array): Promise<void> {
+  async fill(page: PersistentPage, field: AccountFieldName, bytes: Uint8Array, options: { signInOnly?: boolean } = {}): Promise<void> {
     let plaintext = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     try {
-      await semanticLocator(page, field).locator.fill(plaintext);
+      const { locator } = semanticLocator(page, field);
+      if (!(await this.inspect(page, field)).actionable) throw new Error("Credential field is unavailable.");
+      // Deliver native input events without taking focus from the current control.
+      await locator.evaluate((element, { value, email, signInOnly, signInSelector, createSelector }) => {
+          if (!(element instanceof HTMLInputElement) ||
+              !(email ? ["email", "text"].includes(element.type) : element.type === "password") ||
+              !element.isConnected || element.disabled || element.readOnly ||
+              element.closest('[inert],[aria-hidden="true"]') || !element.getClientRects().length ||
+              getComputedStyle(element).visibility === "hidden") throw new Error("Credential field is unavailable.");
+          if (signInOnly) {
+            const root = element.closest('[data-automation-id="signInPage"], form[data-automation-id="signInFormo"]');
+            const owners = document.querySelectorAll(signInSelector);
+            if (!root || owners.length !== 1 || !root.contains(owners[0]!) ||
+                !owners[0]!.getClientRects().length || document.querySelector(createSelector)) {
+              throw new Error("Credential field is unavailable.");
+            }
+          }
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(element, value);
+          element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+      }, { value: plaintext, email: field === "email", signInOnly: options.signInOnly === true,
+        signInSelector: WORKDAY_SIGN_IN_SUBMIT_OWNER_SELECTOR, createSelector: WORKDAY_CREATE_ACCOUNT_SUBMIT_OWNER_SELECTOR });
+    } catch {
+      // Page exceptions and Playwright diagnostics must never retain credentials.
+      throw new Error("The credential field could not be filled. Check sign-in in the application tab.");
     } finally {
       plaintext = "";
     }

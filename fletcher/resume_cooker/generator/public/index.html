@@ -229,14 +229,14 @@
       <section class="column" aria-labelledby="preview-title">
         <div class="section">
           <div class="section-header">
-            <h2 id="preview-title">Temporary PDF preview</h2>
+            <h2 id="preview-title">PDF preview</h2>
             <span id="build-status" class="status">Not built</span>
           </div>
           <iframe id="pdf" title="Temporary resume PDF preview"></iframe>
         </div>
         <div class="section" aria-labelledby="output-title">
           <div class="section-header">
-            <h2 id="output-title">Intentional saved output</h2>
+            <h2 id="output-title">Save PDF</h2>
           </div>
           <div class="output-controls">
             <label for="output-name">Filename</label>
@@ -413,7 +413,7 @@
             const label = document.createElement("span");
             label.className = "finding-status";
             label.textContent = finding.status;
-            item.append(label, document.createTextNode(` ${finding.id}: ${finding.evidence}`));
+            item.append(label, document.createTextNode(` ${finding.evidence}`));
             elements.findings.append(item);
           }
           if (!elements.findings.children.length) {
@@ -441,7 +441,7 @@
             })
           });
           elements["output-status"].textContent =
-            `${result.name} saved and verified (${result.bytes} bytes).`;
+            `${result.name} saved and verified.`;
           announce(elements["output-status"].textContent);
         } catch (error) {
           elements["output-status"].textContent = error.message;

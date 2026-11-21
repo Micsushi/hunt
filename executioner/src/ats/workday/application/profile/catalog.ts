@@ -93,6 +93,8 @@ const retainedProfileSanitizedLabelAliases: Readonly<Record<string, readonly str
     ]),
     "social.twitter": Object.freeze(["X", "If desired, enter the link to your Twitter profile"]),
     "employment.previously_worked_for_organization": Object.freeze([
+      "Have you worked for BMO Financial Group before, including any company acquired by BMO, as an employee or contingent worker? Or are you currently working for BMO as a contingent worker?",
+      "Are you now or have you previously been employed by Analog Devices Inc. (ADI) or Maxim Integrated as a full-time regular employee or in a contract/temporary or coop-intern capacity? If yes, please provide as much info below as you remember. Leave blank if you do not know.",
       "Have you previously worked for NAIT? If yes, please answer the questions below. If no, please continue to the next question. Current NAIT employees: Please apply through Jobs Hub in your internal Workday account to ensure your application is processed correctly.",
       "Have you worked for BDO Canada?",
       "Have you previously been employed by Bird Construction or Stuart Olson? CURRENT EMPLOYEES: Please apply via your internal Workday account instead.",

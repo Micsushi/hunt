@@ -43,7 +43,6 @@ export function LoginPage({ onLogin, loading }: Props) {
       <div className={styles.card}>
         <div className={styles.header}>
           <h1 className={styles.title}>Hunt</h1>
-          <p className={styles.sub}>Job discovery and apply automation</p>
         </div>
         <form className={styles.form} onSubmit={handleSubmit} noValidate aria-busy={loading}>
           <label className={styles.fieldLabel}>

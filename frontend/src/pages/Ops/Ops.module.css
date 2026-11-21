@@ -39,12 +39,6 @@
 .panelHeader .panelTitle {
   margin-bottom: 0;
 }
-.panelMeta {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
-
 .gridTwo {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
@@ -140,16 +134,21 @@ details.panel > .gridTwo > .panel {
   overflow-wrap: anywhere;
 }
 .coverageResults {
-  max-height: 32rem;
-  overflow: auto;
+  overflow-x: auto;
 }
 .coverageResults table {
-  min-width: 640px;
+  min-width: 560px;
 }
-.coverageResults th {
-  position: sticky;
-  top: 0;
-  background: var(--panel-strong);
+.coverageDetails > summary {
+  min-height: 44px;
+  padding: 10px 0;
+}
+.coverageReason {
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.coverageNote + .coverageNote {
+  padding-top: 0;
 }
 .coverageResults:focus-visible {
   outline: 2px solid var(--accent);

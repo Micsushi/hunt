@@ -5,7 +5,9 @@ Putting in the Work so it is less Work for you to apply for Work
 Automated Hunt runtime. The active runtime scope is **C0 (Frontend)**,
 **C1 (Hunter)** discovery/enrichment, and **C2 (Fletcher)** resume generation.
 This release candidate includes local **C3 v3 (Executioner)** workflows for
-Workday and supported hosted ATS families. C4 remains on hold.
+Workday, Greenhouse, Lever, Ashby and Workable. C4 remains on hold.
+See [C3 setup and evidence limits](executioner/docs/product.md); implemented
+support does not establish live end-to-end acceptance or deployment.
 
 Historical operator confidence snapshot (2026-07-30; not current acceptance):
 
@@ -17,13 +19,15 @@ Historical operator confidence snapshot (2026-07-30; not current acceptance):
   service, CLI, and worker entrypoints fail closed, with source retained for
   possible reuse
 
-The retained candidate connects C1/C2 readiness to C3 preparation while keeping
-the final job Submit action forbidden.
+The retained candidate connects C1/C2 readiness to C3 preparation. Filling stops
+at Review. Workday has a separate explicitly confirmed Submit action; submission
+is disabled for the four hosted ATS families. Test work does not authorize
+employer submission.
 
 C0 note: the React SPA is the primary operator UI, but `/legacy/*` server-rendered routes still exist as fallback while we retire them.
 
-Component rule: C1 and C2 run independently. C3 v3 will own its local loop and
-will not depend on C4.
+Component rule: C1 and C2 run independently. C3 v3 owns its local loop and
+does not depend on C4.
 
 **Names and folders:** see **`docs/NAMING.md`** (C1 code is the **`hunter`** package; **`hunter/scraper.py`** is the discovery script name only).
 
@@ -92,7 +96,21 @@ python ci.py c1            # C1 checks + tests
 python ci.py               # full repo CI
 python test.py c1          # C1 tests only
 python smoke.py c1         # C1 smoke tests
+python smoke.py c1-c3      # isolated C1 record -> C2 PDF -> local C3 queue
 ```
+
+The `c1-c3` smoke runs on Windows or a server with the Python app dependencies,
+LaTeX, Node 22.18+, and installed `executioner` dependencies. It creates temporary
+SQLite data and a fictional applicant, compiles five PDFs, checks their exact C3
+handoff hashes through file export, preview, and import, and rejects ineligible
+jobs and missing PDFs. It also checks real
+session authentication, foreign-origin rejection, and repeated handoffs without
+duplicate jobs or changed PDFs. Port 47831 must be
+free; it never connects a browser, crawls jobs, or submits applications. Run it
+in an isolated server container without production volumes. It tests the
+backend/C3 file-transfer boundary, not employer interactions or a deployed
+server-to-PC browser session. For jobs prepared on a remote server, download an
+application file from Jobs, then preview and import it in the local C3 workspace.
 
 ## Config
 
@@ -212,13 +230,14 @@ Testing posture by component:
 
 - `backend/app.py` / C0: browse and inspect DB-backed state without requiring live C1/C2 services
 - C1/C2: runnable from terminal without C0
-- C3 v3: runnable retained Workday candidate; final Submit remains forbidden
+- C3 v3: local five-family candidate; tests stop before Submit and distinguish
+  fixture coverage from live employer acceptance
 - C4: paused and excluded from active component completion
 
 Current local checkpoint for later components:
 
 - `fletcher/` : **C2 (Fletcher)** has usable Option B pasted-JD and Option A job-linked workflows, a shared review workspace, provider/settings scaffolding, progress/restart recovery, and job-linked resume persistence. Treat generation quality, live C1 -> C2 server proof, keyword-list-only targeting, section-level regeneration, and provider model evaluation as the remaining risks.
-- `executioner/` : **C3 v3** contains the retained Workday implementation. The
+- `executioner/` : **C3 v3** contains Workday and the four hosted ATS adapters. The
   v2 runtime is preserved on `codex/c3-v2-backup-20260730`.
 - `coordinator/` : **C4 (Coordinator)** source is retained but the component is on hold and has no active deploy, UI, polling, smoke, or worker path.
 

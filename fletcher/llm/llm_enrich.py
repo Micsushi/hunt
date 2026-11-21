@@ -300,7 +300,14 @@ def keyword_visible_in_text(keyword: str, text: str) -> bool:
         return False
     allowed = [key]
     allowed.extend(_visible_action_phrases(key))
-    return any(_normalize_visible_text(phrase) in visible for phrase in allowed)
+    for phrase in allowed:
+        normalized = _normalize_visible_text(phrase)
+        plural = r"(?:s|es)?" if re.search(r"[a-z]{2}$", normalized) else ""
+        if re.search(
+            r"(?<![a-z0-9+#])" + re.escape(normalized) + plural + r"(?![a-z0-9+#])", visible
+        ):
+            return True
+    return False
 
 
 def _rewrite_prompt_policy_kwargs(
@@ -359,13 +366,14 @@ def validate_rewrite_with_ollama(
         _dedupe_case(rejected if isinstance(rejected, list) else []),
         requested_keywords,
     )
-    if not bool(parsed.get("accepted")) and not rejected_list:
+    accepted = parsed.get("accepted") is True
+    if not accepted and not rejected_list:
         supported_l = {kw.lower() for kw in supported_list}
         rejected_list = [kw for kw in requested_keywords if kw.lower() not in supported_l]
         if not rejected_list:
             rejected_list = list(requested_keywords)
     return {
-        "accepted": bool(parsed.get("accepted")),
+        "accepted": accepted,
         "keywords_supported": supported_list,
         "keywords_rejected": rejected_list,
         "reason": str(parsed.get("reason") or ""),
@@ -1238,7 +1246,17 @@ def rewrite_bullet_targeted(
                     "reason": str(exc) or exc.__class__.__name__,
                 }
             result["validation"] = validation
-            if not validation["accepted"]:
+            # Model approval can overlook dropped limits on the scope of work.
+            scope_qualifiers = re.findall(
+                r"\b(?:class exercise|course project|academic project|personal project|"
+                r"prototype|proof of concept|sample)\b",
+                bullet,
+                re.IGNORECASE,
+            )
+            if not validation["accepted"] or any(
+                not re.search(r"\b" + re.escape(qualifier) + r"\b", text, re.IGNORECASE)
+                for qualifier in scope_qualifiers
+            ):
                 result["bullet"] = bullet
                 result["success"] = False
                 result["error"] = "rewrite_validation_failed"
@@ -1248,10 +1266,18 @@ def rewrite_bullet_targeted(
 
             used, skipped = _derive_keyword_outcome(
                 keywords,
-                validation.get("keywords_supported") or [],
+                [
+                    keyword
+                    for keyword in validation.get("keywords_supported") or []
+                    if len(keyword.split()) > 1 or keyword_visible_in_text(keyword, text)
+                ],
                 validation.get("keywords_rejected") or [],
             )
-            if not used:
+            if not used or any(
+                keyword_visible_in_text(keyword, text)
+                and not keyword_visible_in_text(keyword, bullet)
+                for keyword in validation.get("keywords_rejected") or []
+            ):
                 result["bullet"] = bullet
                 result["success"] = False
                 result["error"] = "rewrite_validation_failed"

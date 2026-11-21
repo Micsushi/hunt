@@ -35,7 +35,8 @@ export function testingQuestionSemanticType(label: string): TestingQuestionSeman
   }
   if (
     /\b(?:previously|ever|prior|formerly)\b.*\b(?:worked|employed|employment)\b/u.test(value) ||
-    /\bprevious employment\b/u.test(value)
+    /\bprevious employment\b/u.test(value) ||
+    /\bhave you (?:worked (?:at|for|here)|been employed (?:by|with|at))\b/u.test(value)
   ) return "prior_employment";
   if (/\b(?:sponsor|sponsorship|visa)\b/u.test(value)) return "sponsorship_requirement";
   if (

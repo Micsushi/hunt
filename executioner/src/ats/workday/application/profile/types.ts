@@ -192,6 +192,7 @@ export interface ProfilePageSnapshot {
   readonly controls: readonly ProfileControlSnapshot[];
   readonly rows: readonly ProfileRowSnapshot[];
   readonly repeatableSections?: readonly ProfileRepeatableSection[];
+  readonly requiredRepeatableSections?: readonly ProfileRepeatableSection[];
 }
 
 export interface ProfileCommitRequest {

@@ -14,7 +14,7 @@ def encoded(value):
     return urlencode({"PARAM": base64.b64encode(value.encode()).decode()})
 
 
-def test_sap_posting_identity_and_navigation_dedup():
+def test_sap_posting_and_pdf_retain_job_identity_dates_and_location():
     identity = "3A184C14A10B1FD1AFB7DF3CEA09411E"
     # A SAP posting identity is 32 hexadecimal characters.
     identity = identity.ljust(32, "0")
@@ -37,20 +37,6 @@ def test_sap_posting_identity_and_navigation_dedup():
     with pytest.raises(ValueError, match="detail_identity_mismatch"):
         validate_pdf_url(pdf, "f" * 32)
 
-
-def test_sap_catalog_and_plan():
-    html = 'Search Result: 2 Hits<table><tr role="row" rr="1"><td><a role="link">IT Analyst</a></td></tr></table>'
-    assert parse_catalog(html) == ([{"position": 1, "title": "IT Analyst"}], 2)
-    with pytest.raises(ValueError, match="catalog_total_unknown"):
-        parse_catalog("<html>Error</html>")
-    with pytest.raises(ValueError, match="invalid_listing"):
-        parse_catalog(html.replace('rr="1"', 'rr="bad"'))
-    url = "https://app.bchydro.com/sap/bc/webdynpro/sap/hrrcf_a_unreg_job_search?sap-wd-configId=ZHRRCF_A_UNREG_JOB_SEARCH"
-    assert career_fetch_plan(url) == {"method": "sap", "url": url}
-    assert career_fetch_plan(url.replace("app.bchydro.com", "evil.example"))["method"] == "manual"
-
-
-def test_sap_pdf_dates_and_identity():
     text = "IT Compliance Analyst\nWhat you'll do\nSupport IT.\nLocation: Vancouver, BC\nDate Posted: 2026-10-01 Closing Date: 2026-10-16"
     assert read_description(text, "IT Compliance Analyst") == (
         "2026-10-01",
@@ -67,6 +53,18 @@ def test_sap_pdf_dates_and_identity():
     assert read_description(clipped, "IT Compliance Analyst (Vernon)")[0] == "2026-10-01"
     with pytest.raises(ValueError, match="detail_identity_mismatch"):
         read_description(clipped, "IT Compliance Analyst (Victoria)")
+
+
+def test_sap_catalog_and_plan():
+    html = 'Search Result: 2 Hits<table><tr role="row" rr="1"><td><a role="link">IT Analyst</a></td></tr></table>'
+    assert parse_catalog(html) == ([{"position": 1, "title": "IT Analyst"}], 2)
+    with pytest.raises(ValueError, match="catalog_total_unknown"):
+        parse_catalog("<html>Error</html>")
+    with pytest.raises(ValueError, match="invalid_listing"):
+        parse_catalog(html.replace('rr="1"', 'rr="bad"'))
+    url = "https://app.bchydro.com/sap/bc/webdynpro/sap/hrrcf_a_unreg_job_search?sap-wd-configId=ZHRRCF_A_UNREG_JOB_SEARCH"
+    assert career_fetch_plan(url) == {"method": "sap", "url": url}
+    assert career_fetch_plan(url.replace("app.bchydro.com", "evil.example"))["method"] == "manual"
 
 
 @pytest.mark.parametrize("fault", [None, "changed", "incomplete", "rate_limit", "pdf_identity"])

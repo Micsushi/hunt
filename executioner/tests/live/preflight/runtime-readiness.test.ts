@@ -64,24 +64,17 @@ test("runtime readiness classifies every setup boundary and keeps low RAM diagno
     loadPlaywright: async () => runtime(),
   })).code, "evidence_failure");
 
-  const ready = await verifyStage2RuntimeReadiness({
-    ...base,
-    loadPlaywright: async () => runtime(),
-  });
-  assert.equal(ready.code, "ready");
-  assert.equal(ready.status, "ready");
-  assert.equal(ready.headroom.low, true);
-  assert.equal(ready.cleanup.profileRemoved, true);
-  assert.equal(ready.cleanup.browserProcessExited, true);
-});
-
-test("runtime readiness is idempotent and closes every throwaway context", async () => {
   let closes = 0;
   const options: RuntimeReadinessOptions = {
     ...base,
     loadPlaywright: async () => runtime({ close: () => { closes += 1; } }),
   };
-  assert.equal((await verifyStage2RuntimeReadiness(options)).code, "ready");
+  const ready = await verifyStage2RuntimeReadiness(options);
+  assert.equal(ready.code, "ready");
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.headroom.low, true);
+  assert.equal(ready.cleanup.profileRemoved, true);
+  assert.equal(ready.cleanup.browserProcessExited, true);
   assert.equal((await verifyStage2RuntimeReadiness(options)).code, "ready");
   assert.equal(closes, 2);
 });

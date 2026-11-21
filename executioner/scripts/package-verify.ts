@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import {
@@ -13,6 +13,16 @@ import {
 } from "../src/corpus/package/index.ts";
 
 const executioner = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const pageRuntime = spawnSync(process.execPath, ["scripts/build-page-runtime.mjs", "--check"], {cwd: executioner, stdio: "inherit"});
+if (pageRuntime.status !== 0) throw new Error("Extension page runtime could not be compiled");
+// Extension entrypoints run directly in Chrome and are outside the TypeScript build.
+for (const file of await readdir(resolve(executioner, "extension"), {recursive:true})) {
+  if (!file.endsWith(".js")) continue;
+  const syntax = spawnSync(process.execPath, ["--check", resolve(executioner, "extension", file)], {
+    encoding: "utf8", shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (syntax.error !== undefined || syntax.status !== 0) throw new Error(`extension syntax invalid: ${file}`);
+}
 const npmCli = process.env.npm_execpath;
 if (npmCli === undefined) throw new Error("npm CLI path unavailable");
 const scratch = await mkdtemp(resolve(tmpdir(), "hunt-executioner-package-"));
@@ -34,6 +44,11 @@ try {
   const files = pack.files.map((file) => file.path);
   const denied = verifyPackageFileList(files);
   if (denied.length > 0) throw new Error(`package contains denied files: ${denied.join(", ")}`);
+  const extensionFiles = (await readdir(resolve(executioner, "extension"), {recursive:true, withFileTypes:true}))
+    .filter(entry => entry.isFile())
+    .map(entry => "extension/" + relative(resolve(executioner, "extension"), join(entry.parentPath, entry.name)).replaceAll("\\", "/"));
+  const missing = extensionFiles.filter(file => verifyPackageFileList([file]).length === 0 && !files.includes(file));
+  if (missing.length) throw new Error(`Package is missing extension assets: ${missing.join(", ")}`);
   if (!files.includes("package.json") || !files.includes("README.md") || !files.includes("dist/control/mcp/facade.js")) {
     throw new Error("package required files missing");
   }
@@ -88,7 +103,14 @@ try {
   const probe = spawnSync(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import('@hunt/executioner/mcp').then((module) => console.log(JSON.stringify(module.mcpMethods)))",
+    `await Promise.all([
+      import("./node_modules/@hunt/executioner/dist/product/hosted-application.js"),
+      import("./node_modules/@hunt/executioner/dist/product/generic-application.js"),
+      import("./node_modules/@hunt/executioner/dist/product/queue.js"),
+      import("./node_modules/@hunt/executioner/extension/page-actions.js"),
+    ]);
+    const {mcpMethods} = await import("@hunt/executioner/mcp");
+    console.log(JSON.stringify(mcpMethods));`,
   ], {
     cwd: installRoot,
     encoding: "utf8",
@@ -96,7 +118,7 @@ try {
     windowsHide: true,
     stdio: ["ignore", "pipe", "inherit"],
   });
-  if (probe.error !== undefined || probe.status !== 0) throw new Error("installed MCP surface failed to start");
+  if (probe.error !== undefined || probe.status !== 0) throw new Error("installed application or MCP modules failed to load");
   const methods = JSON.parse(probe.stdout.trim()) as string[];
   const expected = ["cancel_journey", "journey_result", "journey_status", "start_journey"];
   if (JSON.stringify([...methods].sort()) !== JSON.stringify(expected)) {

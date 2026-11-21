@@ -23,7 +23,6 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Legend,
 } from 'recharts'
 import styles from './Home.module.css'
 
@@ -52,10 +51,15 @@ const PIE_COLORS = [
   '#e879f9',
 ]
 
-const SOURCE_COLORS: Record<string, string> = {
-  linkedin: '#60a5fa',
-  indeed: '#34d399',
-  unknown: '#6b7280',
+const SOURCE_NAMES: Record<string, string> = {
+  linkedin: 'LinkedIn',
+  indeed: 'Indeed',
+  jobright: 'JobRight',
+  unknown: 'Unknown',
+}
+
+function sourceName(source: string) {
+  return SOURCE_NAMES[source] ?? source.replace(/^employer_/, '').replace(/_/g, ' ')
 }
 
 function ServiceStrip() {
@@ -77,28 +81,18 @@ function ServiceStrip() {
       ok: data?.components?.c2?.status === 'ok',
       path: '/fletcher',
     },
-    {
-      key: 'c3',
-      label: 'Applications',
-      ok: false,
-      path: '/executioner',
-    },
   ]
 
   return (
     <div className={styles.serviceStrip}>
       {items.map((item) => {
-        const state = item.key === 'c3' || isError || !data ? 'unknown' : item.ok ? 'ok' : 'error'
+        const state = isError || !data ? 'unknown' : item.ok ? 'ok' : 'error'
         return (
           <button
             key={item.key}
             className={`${styles.servicePill} ${styles[`service_${state}`]}`}
             onClick={() => navigate(item.path)}
-            title={
-              item.key === 'c3'
-                ? 'Open the application queue; its current connection is checked there.'
-                : `${item.label}: ${state}`
-            }
+            title={`${item.label}: ${state}`}
           >
             <span className={`${styles.serviceDot} ${styles[`dot_${state}`]}`} />
             {item.label}
@@ -111,38 +105,41 @@ function ServiceStrip() {
 
 function PanelFeedback({ name, query }: { name: string; query: UseQueryResult }) {
   const { data, isPending, isFetching, isError, refetch } = query
-  const message = isFetching
+  const [retryFocused, setRetryFocused] = useState(false)
+  if (!isError && !isPending && !retryFocused) return null
+
+  const message = isError
     ? data === undefined
-      ? `Loading ${name}...`
-      : `Refreshing ${name}... Showing last loaded data.`
-    : isError
-      ? data === undefined
-        ? `Could not load ${name}.`
-        : `Could not refresh ${name}. Showing last loaded data.`
-      : isPending
-        ? `Waiting to load ${name}.`
-        : ''
+      ? `Could not load ${name}.`
+      : `Could not refresh ${name}. Showing last loaded data.`
+    : isPending
+      ? `Loading ${name}…`
+      : ''
   return (
     <div className={styles.panelFeedback}>
       <span role="status" className={isError && !isFetching ? styles.panelFailure : undefined}>
         {message}
       </span>
-      <button
-        type="button"
-        className={styles.panelRetry}
-        aria-disabled={isFetching}
-        onClick={() => {
-          if (!isFetching) void refetch({ cancelRefetch: false })
-        }}
-      >
-        {isError ? `Retry ${name}` : `Refresh ${name}`}
-      </button>
+      {(isError || retryFocused) && (
+        <button
+          type="button"
+          className={styles.panelRetry}
+          aria-disabled={isFetching}
+          onFocus={() => setRetryFocused(true)}
+          onBlur={() => setRetryFocused(false)}
+          onClick={() => {
+            if (!isFetching) void refetch({ cancelRefetch: false })
+          }}
+        >
+          {isFetching ? 'Refreshing…' : isError ? `Retry ${name}` : `Refresh ${name}`}
+        </button>
+      )}
     </div>
   )
 }
 
 function SearchCoverage({ event }: { event?: { value: string } | null }) {
-  let message = 'Search coverage unknown. Saved-job counts do not confirm source availability.'
+  let message = 'Search coverage unknown.'
   try {
     const recorded = JSON.parse(event?.value ?? 'null')
     const {
@@ -180,8 +177,8 @@ function SearchCoverage({ event }: { event?: { value: string } | null }) {
   }
   return (
     <div className={styles.panelFeedback}>
-      <p role="status">{message} Other discovery sources are not verified here.</p>
-      <Link to="/logs">Check search activity</Link>
+      <p role="status">{message}</p>
+      <Link to="/ops">Check source coverage</Link>
     </div>
   )
 }
@@ -196,17 +193,29 @@ function BreakdownChart() {
   })
 
   const { data } = query
-  const chartData = (data?.data ?? []).slice(0, 10).map((row) => ({
+  const rows = (data?.data ?? []).filter(({ count }) => count > 0)
+  const limit = field === 'source' ? 6 : 10
+  const chartData = rows.slice(0, limit).map((row) => ({
     ...row,
     displayLabel:
-      field === 'enrichment_status' ? (detailQualityLabels[row.label] ?? row.label) : row.label,
+      field === 'enrichment_status'
+        ? (detailQualityLabels[row.label] ?? row.label)
+        : field === 'source'
+          ? sourceName(row.label)
+          : row.label,
   }))
+  if (rows.length > limit) {
+    chartData.push({
+      label: '',
+      displayLabel: 'Other',
+      count: rows.slice(limit).reduce((total, row) => total + row.count, 0),
+    })
+  }
 
   function handleSliceClick(entry: { label: string }) {
-    if (field === 'enrichment_status') navigate(`/jobs?status=${entry.label}`)
-    else if (field === 'source') navigate(`/jobs?source=${entry.label}`)
-    else if (field === 'category') navigate(`/jobs?category=${encodeURIComponent(entry.label)}`)
-    else if (field === 'ats_type') navigate(`/jobs?ats_type=${encodeURIComponent(entry.label)}`)
+    if (!entry.label) return
+    const filter = field === 'enrichment_status' ? 'status' : field
+    navigate(`/jobs?${new URLSearchParams({ [filter]: entry.label })}`)
   }
 
   return (
@@ -241,10 +250,13 @@ function BreakdownChart() {
               outerRadius={90}
               paddingAngle={2}
               onClick={(data) => handleSliceClick(data as unknown as { label: string })}
-              style={{ cursor: 'pointer' }}
             >
               {chartData.map((_, i) => (
-                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                <Cell
+                  key={i}
+                  fill={PIE_COLORS[i % PIE_COLORS.length]}
+                  cursor={chartData[i].label ? 'pointer' : undefined}
+                />
               ))}
             </Pie>
             <Tooltip
@@ -284,17 +296,11 @@ function TimelineChart() {
   })
 
   const { data } = query
-  const raw = data?.data ?? []
-  const dayMap: Record<string, Record<string, number>> = {}
-  for (const r of raw) {
-    if (!dayMap[r.day]) dayMap[r.day] = {}
-    dayMap[r.day][r.source] = (dayMap[r.day][r.source] ?? 0) + r.count
+  const totals = new Map<string, number>()
+  for (const { day, count } of data?.data ?? []) {
+    if (count > 0) totals.set(day, (totals.get(day) ?? 0) + count)
   }
-  const sources = [...new Set(raw.map((r) => r.source))]
-  const chartData = Object.entries(dayMap).map(([day, counts]) => ({
-    day: day.slice(5),
-    ...counts,
-  }))
+  const chartData = Array.from(totals, ([day, count]) => ({ day: day.slice(5), count }))
 
   return (
     <div className={styles.panel}>
@@ -342,16 +348,7 @@ function TimelineChart() {
               }}
               cursor={{ fill: 'var(--panel-hover)' }}
             />
-            <Legend wrapperStyle={{ fontSize: '0.82rem', color: 'var(--muted)', paddingTop: 6 }} />
-            {sources.map((s) => (
-              <Bar
-                key={s}
-                dataKey={s}
-                stackId="a"
-                fill={SOURCE_COLORS[s] ?? '#7a9e80'}
-                radius={sources.indexOf(s) === sources.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
-              />
-            ))}
+            <Bar dataKey="count" name="Jobs" fill="var(--accent)" radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -376,21 +373,20 @@ function DailyDigestPanel() {
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>Daily digest</h2>
-        <span className={styles.meta}>{data?.date ?? 'today'}</span>
+        <h2 className={styles.panelTitle}>Daily digest{data?.date ? ` · ${data.date} UTC` : ''}</h2>
       </div>
       <PanelFeedback name="daily digest" query={query} />
       {data && (
         <div className={styles.statGrid}>
           <div className={styles.statBox}>
             <span className={styles.statVal}>{data?.scraped_today ?? '-'}</span>
-            <span className={styles.statLbl}>Scraped today</span>
+            <span className={styles.statLbl}>Scraped</span>
           </div>
           <div className={styles.statBox}>
             <span className={styles.statVal} style={{ color: 'var(--good)' }}>
               {data?.enriched_today ?? '-'}
             </span>
-            <span className={styles.statLbl}>Enriched today</span>
+            <span className={styles.statLbl}>Enriched</span>
           </div>
           <div className={styles.statBox}>
             <span
@@ -399,26 +395,7 @@ function DailyDigestPanel() {
             >
               {data?.failed_today ?? '-'}
             </span>
-            <span className={styles.statLbl}>Failed today</span>
-          </div>
-          <div className={styles.statBox}>
-            <span className={styles.statVal}>{data?.scraped_24h ?? '-'}</span>
-            <span className={styles.statLbl}>Scraped 24h</span>
-          </div>
-          <div className={styles.statBox}>
-            <span className={styles.statVal} style={{ color: 'var(--good)' }}>
-              {data?.enriched_24h ?? '-'}
-            </span>
-            <span className={styles.statLbl}>Enriched 24h</span>
-          </div>
-          <div className={styles.statBox}>
-            <span
-              className={styles.statVal}
-              style={{ color: data?.failed_24h ? 'var(--danger)' : undefined }}
-            >
-              {data?.failed_24h ?? '-'}
-            </span>
-            <span className={styles.statLbl}>Failed 24h</span>
+            <span className={styles.statLbl}>Failed</span>
           </div>
         </div>
       )}
@@ -441,7 +418,6 @@ function PipelineVelocityPanel() {
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Pipeline velocity</h2>
-        <span className={styles.meta}>vs previous 24h</span>
       </div>
       <PanelFeedback name="pipeline velocity" query={query} />
       {data && (
@@ -451,20 +427,10 @@ function PipelineVelocityPanel() {
             <span className={styles.statLbl}>Jobs / hour</span>
           </div>
           <div className={styles.statBox}>
-            <span className={styles.statVal} style={{ color: 'var(--good)' }}>
-              {data?.enriched_24h ?? '-'}
-            </span>
-            <span className={styles.statLbl}>Enriched 24h</span>
-          </div>
-          <div className={styles.statBox}>
-            <span className={styles.statVal}>{data?.scraped_24h ?? '-'}</span>
-            <span className={styles.statLbl}>Scraped 24h</span>
-          </div>
-          <div className={styles.statBox}>
             <span className={styles.statVal} style={{ color: arrowColor }}>
               {arrow} {Math.abs(delta)}
             </span>
-            <span className={styles.statLbl}>vs prev 24h</span>
+            <span className={styles.statLbl}>Enriched vs previous 24h</span>
           </div>
         </div>
       )}
@@ -485,7 +451,6 @@ function QueueAgePanel() {
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Queue age</h2>
-        <span className={styles.meta}>{data?.count ?? '-'} pending</span>
       </div>
       <PanelFeedback name="queue age" query={query} />
       {data && (
@@ -527,28 +492,12 @@ export function HomePage() {
   const query = useSummary()
   const { data: summary } = query
 
-  if (!summary)
-    return (
-      <div className={styles.page}>
-        <section className={styles.hero}>
-          <h1 className={styles.heroTitle}>Overview</h1>
-        </section>
-        <PanelFeedback name="overview" query={query} />
-      </div>
-    )
-
-  const detailCounts = summary.detail_quality_counts ?? {
-    enriched:
-      (summary.counts_by_status['done'] ?? 0) + (summary.counts_by_status['done_verified'] ?? 0),
-    partial: 0,
-    failed: summary.counts_by_status['failed'] ?? 0,
-    description_only: 0,
-    url_only: 0,
-  }
-  const done = detailCounts.enriched
-  const partial = detailCounts.partial
-  const failed = detailCounts.failed
-  const authAvailable = summary.auth?.linkedin?.available
+  const counts = summary?.counts_by_status
+  const done =
+    summary?.detail_quality_counts?.enriched ?? (counts?.done ?? 0) + (counts?.done_verified ?? 0)
+  const partial = summary?.detail_quality_counts?.partial ?? 0
+  const failed = summary?.detail_quality_counts?.failed ?? counts?.failed ?? 0
+  const authAvailable = summary?.auth?.linkedin?.available
   const authOk = authAvailable === true
 
   return (
@@ -558,62 +507,66 @@ export function HomePage() {
       </section>
 
       <PanelFeedback name="overview" query={query} />
-      <ServiceStrip />
-      <SearchCoverage event={summary.events?.hunt_last_scrape_end} />
+      {summary && (
+        <>
+          <ServiceStrip />
+          <SearchCoverage event={summary.events?.hunt_last_scrape_end} />
 
-      <section className={styles.cards}>
-        <Card
-          label="Total jobs"
-          value={summary.total}
-          onClick={() => navigate('/jobs?status=all')}
-        />
-        <Card
-          label="Pending enrich"
-          value={summary.pending_count}
-          onClick={() => navigate('/jobs?status=pending')}
-          accent={summary.pending_count > 0}
-        />
-        <Card
-          label={detailQualityLabels.enriched}
-          value={done}
-          onClick={() => navigate('/jobs?status=enriched')}
-        />
-        <Card
-          label={detailQualityLabels.partial}
-          value={partial}
-          onClick={() => navigate('/jobs?status=partial')}
-          warning={partial > 0}
-        />
-        <Card
-          label={detailQualityLabels.failed}
-          value={failed}
-          onClick={() => navigate('/jobs?status=failed')}
-          danger={failed > 0}
-        />
-        <Card
-          label="Blocked"
-          value={summary.blocked_count}
-          onClick={() => navigate('/jobs?status=blocked')}
-          warning={summary.blocked_count > 0}
-        />
-        <Card
-          label="LinkedIn auth"
-          value={authOk ? 'Ready' : authAvailable === false ? 'Login needed' : 'Unknown'}
-          onClick={() => navigate('/logs')}
-          danger={authAvailable === false}
-        />
-      </section>
+          <section className={styles.cards}>
+            <Card
+              label="Total jobs"
+              value={summary.total}
+              onClick={() => navigate('/jobs?status=all')}
+            />
+            <Card
+              label="Pending enrich"
+              value={summary.pending_count}
+              onClick={() => navigate('/jobs?status=pending')}
+              accent={summary.pending_count > 0}
+            />
+            <Card
+              label={detailQualityLabels.enriched}
+              value={done}
+              onClick={() => navigate('/jobs?status=enriched')}
+            />
+            <Card
+              label={detailQualityLabels.partial}
+              value={partial}
+              onClick={() => navigate('/jobs?status=partial')}
+              warning={partial > 0}
+            />
+            <Card
+              label={detailQualityLabels.failed}
+              value={failed}
+              onClick={() => navigate('/jobs?status=failed')}
+              danger={failed > 0}
+            />
+            <Card
+              label="Blocked"
+              value={summary.blocked_count}
+              onClick={() => navigate('/jobs?status=blocked')}
+              warning={summary.blocked_count > 0}
+            />
+            <Card
+              label="LinkedIn auth"
+              value={authOk ? 'Ready' : authAvailable === false ? 'Login needed' : 'Unknown'}
+              onClick={() => navigate('/logs')}
+              danger={authAvailable === false}
+            />
+          </section>
 
-      <div className={styles.chartsRow}>
-        <BreakdownChart />
-        <TimelineChart />
-      </div>
+          <div className={styles.chartsRow}>
+            <BreakdownChart />
+            <TimelineChart />
+          </div>
 
-      <div className={styles.chartsRow3}>
-        <DailyDigestPanel />
-        <PipelineVelocityPanel />
-        <QueueAgePanel />
-      </div>
+          <div className={styles.chartsRow3}>
+            <DailyDigestPanel />
+            <PipelineVelocityPanel />
+            <QueueAgePanel />
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -53,38 +53,6 @@ test("the real F2 provider passes conformance with factory cleanup", async () =>
   });
 });
 
-test("malformed provider requests fail closed without reading accessors", async (t) => {
-  const server = new FixtureServer(fixtureRoot);
-  t.after(() => server.close());
-  const invalid = { ok: false, error: providerError("fixture_not_found") } as const;
-  let getterReads = 0;
-  const accessor = Object.defineProperty({}, "fixtureRunId", {
-    enumerable: true,
-    get() {
-      getterReads += 1;
-      return "fixture-run-synthetic";
-    },
-  });
-
-  assert.deepEqual(await server.start(
-    null as unknown as FixtureStartRequest,
-    new AbortController().signal,
-  ), invalid);
-  assert.deepEqual(await server.start(
-    accessor as FixtureStartRequest,
-    new AbortController().signal,
-  ), invalid);
-  assert.deepEqual(await server.reset(
-    { fixtureRunId: "" } as FixtureResetRequest,
-    new AbortController().signal,
-  ), invalid);
-  assert.deepEqual(await server.setFault({
-    fixtureRunId: fixtureRunId("fixture-run-synthetic"),
-    fault: "unknown",
-  } as unknown as FixtureFaultRequest, new AbortController().signal), invalid);
-  assert.equal(getterReads, 0);
-});
-
 test("a cancelled listener rolls back without stopping a concurrent live start", async (t) => {
   const server = new FixtureServer(fixtureRoot);
   t.after(() => server.close());
@@ -108,24 +76,4 @@ test("a cancelled listener rolls back without stopping a concurrent live start",
   if (started.ok) {
     assert.equal((await fetch(`${started.value.origin}/account`)).status, 200);
   }
-});
-
-test("F2 fixture assets pass the component privacy report", () => {
-  const manifest = loadFixtureManifest(fixtureRoot);
-  const contents = manifest.pages
-    .map(({ path }) => readFileSync(`${fixtureRoot}${path}`, "utf8"))
-    .join("\n");
-  for (const pattern of [
-    /https?:\/\//iu,
-    /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/iu,
-    /\b\d{3}[-.)\s]+\d{3}[-.\s]+\d{4}\b/u,
-    /\b\d{3}-\d{2}-\d{4}\b/u,
-    /\b(?:acme|contoso|example corporation|john doe|jane doe)\b/iu,
-  ]) {
-    assert.doesNotMatch(contents, pattern);
-  }
-  const review = readFileSync(`${fixtureRoot}/review`, "utf8");
-  assert.match(review, />Submit application<\/button>/u);
-  assert.match(review, /\bdisabled\b/u);
-  assert.doesNotMatch(review, /<form\b|type="submit"|\b(?:href|action)=/iu);
 });

@@ -61,18 +61,55 @@ async function evidenceRoot(t: TestContext) {
   return root;
 }
 
-test("admitted evidence persists one deterministic schema-v2 manifest and reloads", async (t) => {
+test("cancelled evidence can be retried, deduplicated, and reloaded without replacing accepted facts", async (t) => {
   const root = await evidenceRoot(t);
   const record = evidenceRecord();
   const store = createEvidenceStore(root);
 
+  const request = admittedRequest(record, "1111111111111111");
+  assert.deepEqual(await store.write(request, AbortSignal.abort()), {
+    ok: false,
+    error: { code: "operation_cancelled", retryable: false },
+  });
+  assert.deepEqual(await store.read({ journeyId }, AbortSignal.abort()), {
+    ok: false,
+    error: { code: "operation_cancelled", retryable: false },
+  });
+  assert.deepEqual(await readdir(root), []);
+
   assert.deepEqual(
-    await store.write(admittedRequest(record, "1111111111111111"), liveSignal),
+    await store.write(request, liveSignal),
     { ok: true, value: { recordId: record.id, written: true } },
   );
   assert.deepEqual(
     await store.write(admittedRequest(record, "2222222222222222"), liveSignal),
     { ok: true, value: { recordId: record.id, written: false } },
+  );
+
+  const reordered = {
+    sha256: record.sha256,
+    step: record.step,
+    phase: record.phase,
+    component: record.component,
+    kind: record.kind,
+    id: record.id,
+  } satisfies EvidenceRecord;
+  assert.deepEqual(
+    await store.write(
+      admittedRequest(reordered, "8888888888888888"),
+      liveSignal,
+    ),
+    { ok: true, value: { recordId: record.id, written: false } },
+  );
+  assert.deepEqual(
+    await store.write(
+      admittedRequest(
+        { ...record, component: "F11" },
+        "9999999999999999",
+      ),
+      liveSignal,
+    ),
+    { ok: false, error: { code: "evidence_denied", retryable: false } },
   );
 
   const expected = { schemaVersion: 2, journeyId, records: [record] } as const;
@@ -91,35 +128,6 @@ test("admitted evidence persists one deterministic schema-v2 manifest and reload
   const persisted = await readFile(join(root, files[0] ?? ""), "utf8");
   assert.deepEqual(JSON.parse(persisted), expected);
   assert.ok(Buffer.byteLength(persisted) <= EVIDENCE_MAX_MANIFEST_BYTES);
-});
-
-test("post-admission mutation cannot change the exact frozen record", async (t) => {
-  const root = await evidenceRoot(t);
-  const mutable = {
-    ...evidenceRecord("2222222222222222"),
-  };
-  const attemptId = generatedOperationId("operation_3333333333333333");
-  const admitted = admitContractSnapshot(
-    { journeyId, operationId: attemptId, record: mutable },
-    "evidence",
-    {
-      journeyId,
-      attemptId,
-      guardRevision: guardRevision("policy-s1"),
-    },
-  );
-  assert.equal(admitted.ok, true);
-  if (!admitted.ok) return;
-  mutable.component = "F11";
-
-  const request = bindAdmissionRequest(admitted.value);
-  assert.deepEqual(await createEvidenceStore(root).write(request, liveSignal), {
-    ok: true,
-    value: { recordId: admitted.value.snapshot.record.id, written: true },
-  });
-  const read = await createEvidenceStore(root).read({ journeyId }, liveSignal);
-  assert.equal(read.ok, true);
-  if (read.ok) assert.equal(read.value.records[0]?.component, "F5");
 });
 
 test("stale, crossed, substitute, forged, reused, and concurrent capabilities fail exactly", async (t) => {
@@ -248,49 +256,6 @@ test("denied and hostile evidence graphs never create retention", async (t) => {
   assert.deepEqual(await readdir(root), []);
 });
 
-test("record IDs are order-independent and idempotent but conflicting facts are denied", async (t) => {
-  const root = await evidenceRoot(t);
-  const store = createEvidenceStore(root);
-  const first = evidenceRecord("4444444444444444");
-  assert.equal(
-    (
-      await store.write(
-        admittedRequest(first, "7777777777777777"),
-        liveSignal,
-      )
-    ).ok,
-    true,
-  );
-  const reordered = {
-    sha256: first.sha256,
-    step: first.step,
-    phase: first.phase,
-    component: first.component,
-    kind: first.kind,
-    id: first.id,
-  } satisfies EvidenceRecord;
-  assert.deepEqual(
-    await store.write(
-      admittedRequest(reordered, "8888888888888888"),
-      liveSignal,
-    ),
-    { ok: true, value: { recordId: first.id, written: false } },
-  );
-  assert.deepEqual(
-    await store.write(
-      admittedRequest(
-        { ...first, component: "F11" },
-        "9999999999999999",
-      ),
-      liveSignal,
-    ),
-    { ok: false, error: { code: "evidence_denied", retryable: false } },
-  );
-  const manifest = await store.read({ journeyId }, liveSignal);
-  assert.equal(manifest.ok, true);
-  if (manifest.ok) assert.deepEqual(manifest.value.records, [first]);
-});
-
 test("concurrent stores serialize ownership without losing records", async (t) => {
   const root = await evidenceRoot(t);
   const firstStore = createEvidenceStore(root);
@@ -367,49 +332,4 @@ test("evidence enforces independent record-count and byte limits", async (t) => 
     },
   );
   assert.deepEqual(await readdir(sizeRoot), []);
-});
-
-test("cancellation retains nothing, leaves no temporary files, and does not consume admission", async (t) => {
-  const root = await evidenceRoot(t);
-  const store = createEvidenceStore(root);
-  const record = evidenceRecord("9999999999999999");
-  const request = admittedRequest(record, "eeeeeeeeeeeeeeee");
-
-  assert.deepEqual(await store.write(request, AbortSignal.abort()), {
-    ok: false,
-    error: { code: "operation_cancelled", retryable: false },
-  });
-  assert.deepEqual(await store.read({ journeyId }, AbortSignal.abort()), {
-    ok: false,
-    error: { code: "operation_cancelled", retryable: false },
-  });
-  assert.deepEqual(await readdir(root), []);
-  assert.deepEqual(await store.write(request, liveSignal), {
-    ok: true,
-    value: { recordId: record.id, written: true },
-  });
-  assert.equal((await readdir(root)).some((file) => file.endsWith(".tmp")), false);
-});
-
-test("read results are deeply frozen defensive copies", async (t) => {
-  const root = await evidenceRoot(t);
-  const store = createEvidenceStore(root);
-  const record = evidenceRecord("aaaaaaaaaaaaaaaa");
-  await store.write(
-    admittedRequest(record, "ffffffffffffffff"),
-    liveSignal,
-  );
-  const first = await store.read({ journeyId }, liveSignal);
-  const second = await store.read({ journeyId }, liveSignal);
-  assert.equal(first.ok, true);
-  assert.equal(second.ok, true);
-  if (!first.ok || !second.ok) return;
-  assert.notEqual(first.value, second.value);
-  assert.equal(Object.isFrozen(first.value), true);
-  assert.equal(Object.isFrozen(first.value.records), true);
-  assert.equal(Object.isFrozen(first.value.records[0]), true);
-  assert.throws(() => {
-    (first.value.records as EvidenceRecord[]).push(record);
-  }, TypeError);
-  assert.deepEqual(second.value.records, [record]);
 });

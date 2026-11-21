@@ -75,24 +75,30 @@ def sample_pdf(path, text="Education Experience Projects Skills engineer@example
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is required for Resume Cooker")
 class ResumeCheckerTests(unittest.TestCase):
-    def test_real_pdf_parsers_and_cooker_do_not_mutate_input(self):
+    def test_real_pdf_parsers_preserve_inputs_and_only_score_readable_content(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "resume.pdf"
-            sample_pdf(path)
-            before = path.read_bytes()
-            result = check_resume(path, job_description="Backend engineer Python Kubernetes AWS")
-            self.assertEqual(path.read_bytes(), before)
-            self.assertFalse(result["content_left_machine"])
-            self.assertEqual(result["input_sha256"], hashlib.sha256(before).hexdigest())
-            checks = {item["id"]: item for item in result["checks"]}
-            self.assertEqual(checks["independent_parser_agreement"]["status"], "pass")
-            self.assertIn("Kubernetes", checks["jd_keyword_coverage"]["metadata"]["missing_terms"])
-
-    def test_empty_pdf_cannot_receive_passing_status(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "empty.pdf"
-            sample_pdf(path, "")
-            self.assertEqual(check_resume(path)["status"], "fail")
+            for empty in [False, True]:
+                with self.subTest(empty=empty):
+                    if empty:
+                        sample_pdf(path, "")
+                    else:
+                        sample_pdf(path)
+                    before = path.read_bytes()
+                    result = check_resume(
+                        path, job_description="Backend engineer Python Kubernetes AWS"
+                    )
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertFalse(result["content_left_machine"])
+                    self.assertEqual(result["input_sha256"], hashlib.sha256(before).hexdigest())
+                    if empty:
+                        self.assertEqual(result["status"], "fail")
+                    else:
+                        checks = {item["id"]: item for item in result["checks"]}
+                        self.assertEqual(checks["independent_parser_agreement"]["status"], "pass")
+                        self.assertIn(
+                            "Kubernetes", checks["jd_keyword_coverage"]["metadata"]["missing_terms"]
+                        )
 
     def test_upload_api_actual_check_and_invalid_file(self):
         app = FastAPI()

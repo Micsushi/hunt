@@ -1,3 +1,13 @@
+import {applicantProfile} from '../../src/product/sources.ts';
+
+/** This synthetic employer scenario explicitly supplies its employer-specific answer. */
+export function fixtureApplicantProfile(values: unknown) {
+  const result = structuredClone(applicantProfile(values)) as {profile:{facts:unknown[];unsetFactIds:string[]}};
+  result.profile.facts.push({factId:'previously_worked_for_organization',value:false,provenance:'owner_provided',lane:'live_owner_fact'});
+  result.profile.unsetFactIds=result.profile.unsetFactIds.filter(id=>id!=='previously_worked_for_organization');
+  return result;
+}
+
 /** Synthetic Workday-shaped pages. No employer receives these applications. */
 export const applicationFixture = `<!doctype html><html><body>
 <main data-automation-id="applyFlowPage"></main>
@@ -11,7 +21,7 @@ profile();
 </script></body></html>`;
 
 export const accountFixture = applicationFixture.replace("profile();", `
-function createAccount(){root.innerHTML='<section data-automation-id="createAccountPage"><label>Email<input data-automation-id="email"></label><label>Password<input type="password" data-automation-id="password"></label><label>Confirm password<input type="password" data-automation-id="verifyPassword"></label><label>Accept terms<input type="checkbox" data-automation-id="createAccountCheckbox"></label><div data-automation-id="noCaptchaWrapper"><button data-automation-id="click_filter" role="button"><span data-automation-id="createAccountSubmitButton">Create Account</span></button></div></section>';root.querySelector('button').onclick=()=>{sessionStorage.setItem('created','yes');root.innerHTML='<section data-automation-id="emailVerificationPage">An email has been sent to you. Please verify your account.</section>';};}
+function createAccount(){root.innerHTML='<section data-automation-id="createAccountPage"><label>Email<input data-automation-id="email"></label><label>Password<input type="password" data-automation-id="password"></label><label>Confirm password<input type="password" data-automation-id="verifyPassword"></label><label>Accept terms<input type="checkbox" checked data-automation-id="createAccountCheckbox"></label><div data-automation-id="noCaptchaWrapper"><button data-automation-id="click_filter" role="button"><span data-automation-id="createAccountSubmitButton">Create Account</span></button></div></section>';root.querySelector('button').onclick=()=>{sessionStorage.setItem('created','yes');root.innerHTML='<section data-automation-id="emailVerificationPage">An email has been sent to you. Please verify your account.</section>';};}
 function signIn(){root.innerHTML='<section data-automation-id="signInPage"><label>Email<input data-automation-id="email"></label><label>Password<input type="password" data-automation-id="password"></label><div data-automation-id="noCaptchaWrapper"><button data-automation-id="click_filter" role="button"><span data-automation-id="signInSubmitButton">Sign In</span></button></div><button data-automation-id="createAccountLink">Create Account</button><div id="error"></div></section>';root.querySelector('[data-automation-id="click_filter"]').onclick=()=>document.querySelector('#error').innerHTML='<p data-automation-id="accountNotFoundError">Account not found</p>';root.querySelector('[data-automation-id="createAccountLink"]').onclick=createAccount;}
 if(sessionStorage.getItem('verified')==='yes')profile();else signIn();
 `);

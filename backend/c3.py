@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -16,6 +18,11 @@ from starlette.concurrency import run_in_threadpool
 from backend.gateway import _require_auth
 
 router = APIRouter(prefix="/api/c3", tags=["c3"], dependencies=[Depends(_require_auth)])
+HANDOFF_MAX_BYTES = 32 * 1024 * 1024
+
+
+class C3Rejected(HTTPException):
+    """The local service definitively declined the request."""
 
 
 def require_same_origin(request: Request) -> None:
@@ -62,9 +69,7 @@ async def forward(method: str, path: str, content: bytes = b"") -> Response:
                 503, "C3 is unavailable. Start its local service and connect the browser extension."
             ) from None
     if result.status_code == 401:
-        raise HTTPException(
-            503, "C3 pairing key does not match. Check the local service connection."
-        )
+        raise C3Rejected(503, "C3 pairing key does not match. Check the local service connection.")
     headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
     for name in ("Content-Security-Policy", "Referrer-Policy"):
         if name in result.headers:
@@ -77,7 +82,34 @@ async def forward(method: str, path: str, content: bytes = b"") -> Response:
     )
 
 
+def generic_posting(host: str, route: str) -> bool:
+    """Keep explicit unfamiliar targets aligned with C3's product target validator."""
+    patterns = {
+        "ats.rippling.com": r"(?i:/[\w-]+/jobs/[a-f0-9-]{36}(?:/apply)?)",
+        "ats.us1.rippling.com": r"(?i:/[\w-]+/jobs/[a-f0-9-]{36}(?:/apply)?)",
+        "jobs.jobvite.com": r"/[\w-]+/job/[\w-]+(?:/apply)?",
+        "job-boards.anz.greenhouse.io": r"/[\w-]+/jobs/\d+",
+        "forms-formulaires.alpha.canada.ca": r"/(?:en|fr)/id/[\w-]+",
+        "canonical.com": r"/careers/\d+(?:/[\w-]+(?:/application)?)?",
+        "jobs.smartrecruiters.com": (
+            r"/(?:[\w-]+/\d+(?:-[\w-]+)?|(?i:oneclick-ui/company/[\w-]+/publication/[a-f0-9-]{36}))"
+        ),
+        "www.amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
+        "amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
+    }
+    if host.endswith(".bamboohr.com"):
+        pattern = r"/careers/\d+"
+    elif host.endswith(".applytojob.com"):
+        pattern = r"/apply/[\w-]+(?:/[\w-]+)?"
+    elif host.endswith(".recruitee.com"):
+        pattern = r"/o/[\w-]+(?:/c/new)?"
+    else:
+        pattern = patterns.get(host)
+    return bool(pattern and re.fullmatch(pattern + r"/?", route, re.ASCII))
+
+
 def prepared_jobs(job_ids: list[int]) -> list[dict]:
+    from fletcher.resume.review_store import read_selected_resume_pdf
     from hunter.db import get_connection, get_job_by_id
 
     result = []
@@ -93,13 +125,7 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
             raise HTTPException(
                 409, f"Job {job_id} is already applied, cancelled, or excluded from discovery."
             )
-        if job.get("apply_type") != "external_apply" or job.get("ats_type") not in (
-            "workday",
-            "greenhouse",
-            "lever",
-            "ashby",
-            "workable",
-        ):
+        if job.get("apply_type") != "external_apply":
             raise HTTPException(
                 409, f"Job {job_id} is not a verified supported external application."
             )
@@ -139,7 +165,10 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
                 409,
                 f"The selected resume for job {job_id} does not match its successful C2 version. Select it again.",
             )
-        target = urlsplit(job.get("apply_url") or "")
+        try:
+            target = urlsplit(job.get("apply_url") or "")
+        except ValueError:
+            raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.") from None
         host, route = target.hostname or "", target.path
         family = job.get("ats_type")
         supported = (
@@ -169,18 +198,18 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
             or target.username
             or target.password
             or target.netloc != host
-            or not supported
+            or not (supported or generic_posting(host, route))
             or re.search(r"%2f|%5c", route, re.I)
         ):
             raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.")
         try:
-            if path.stat().st_size > 5 * 1024 * 1024:
-                raise HTTPException(409, f"The resume for job {job_id} is too large.")
-            pdf = path.read_bytes()
+            pdf = read_selected_resume_pdf(path, job_id)
         except OSError:
             raise HTTPException(
                 409, f"The selected resume for job {job_id} is unavailable."
             ) from None
+        except ValueError as error:
+            raise HTTPException(409, f"Job {job_id}: {error}") from None
         if not pdf.startswith(b"%PDF-"):
             raise HTTPException(409, f"The selected resume for job {job_id} is not a PDF.")
         result.append(
@@ -196,14 +225,7 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
     return result
 
 
-@router.post("/handoff")
-async def handoff(request: Request):
-    import json
-
-    from fastapi.responses import JSONResponse
-
-    require_same_origin(request)
-    body = await request.json()
+def selected_job_ids(body: object) -> list[int]:
     ids = body.get("job_ids") if isinstance(body, dict) else None
     if (
         not isinstance(ids, list)
@@ -211,6 +233,46 @@ async def handoff(request: Request):
         or any(type(i) is not int or i < 1 for i in ids)
     ):
         raise HTTPException(400, "Select between 1 and 30 jobs.")
+    return ids
+
+
+@router.post("/handoff/export")
+async def export_handoff(request: Request):
+    require_same_origin(request)
+    jobs = await run_in_threadpool(prepared_jobs, selected_job_ids(await request.json()))
+    for job in jobs:
+        job["title"] = job["title"][:500]
+        if any(
+            not job[key].strip() or len(job[key]) > 500 for key in ("resumeName", "resumeVersion")
+        ):
+            raise HTTPException(
+                409, "A selected resume has an invalid name or version. Select it again."
+            )
+        job["resumeSha256"] = hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
+    content = json.dumps(
+        {"format": "hunt-c3-handoff", "version": 1, "jobs": jobs},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(content) > HANDOFF_MAX_BYTES:
+        raise HTTPException(413, "This application bundle is too large. Export fewer jobs at once.")
+    return Response(
+        content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="hunt-applications.hunt.json"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/handoff")
+async def handoff(request: Request):
+    from fastapi.responses import JSONResponse
+
+    require_same_origin(request)
+    ids = selected_job_ids(await request.json())
     outcomes = [{"sourceJobId": job_id, "status": "not_sent"} for job_id in dict.fromkeys(ids)]
     try:
         jobs = await run_in_threadpool(prepared_jobs, ids)
@@ -227,22 +289,31 @@ async def handoff(request: Request):
         try:
             response = await forward("POST", "jobs", json.dumps({"jobs": [job]}).encode())
         except HTTPException as error:
+            if isinstance(error, C3Rejected):
+                outcome["status"] = "rejected"
             return JSONResponse(
                 {
-                    "detail": "C3 did not confirm the complete handoff. Open Applications to check progress before continuing.",
+                    "detail": error.detail
+                    if isinstance(error, C3Rejected)
+                    else "C3 did not confirm the complete handoff. Open Applications to check progress before continuing.",
                     "queued": queued,
                     "outcomes": outcomes,
                 },
                 status_code=error.status_code,
             )
         if response.status_code >= 400:
+            if response.status_code < 500:
+                outcome["status"] = "rejected"
             try:
                 reason = json.loads(response.body).get("error", "C3 rejected this application.")
             except (ValueError, AttributeError):
                 reason = "C3 rejected this application."
             return JSONResponse(
                 {
-                    "detail": f"{len(queued)} confirmed in Applications. {reason}",
+                    "detail": (
+                        f"{len(queued)} confirmed in Applications. " if len(jobs) > 1 else ""
+                    )
+                    + reason,
                     "queued": queued,
                     "outcomes": outcomes,
                 },

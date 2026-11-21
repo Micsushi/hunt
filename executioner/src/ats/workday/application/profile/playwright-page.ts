@@ -1,3 +1,6 @@
+import { inspectChoiceWidget, type ChoiceWidget } from "../../../../../extension/shared-choice-widget.js";
+import { answerEquivalents } from '../../../../deterministic/answer-equivalence.ts';
+import { annotateQuestionContext } from '../../../../../extension/question-context.js';
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import type { ElementHandle, Locator, Page } from "playwright";
@@ -98,11 +101,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     return resolvedReadback(control, this.#trace);
   }
 
-  #selectionReadbackIncludes(
+  async #selectionReadbackIncludes(
     locator: Locator,
     behavior: "search_select" | "select" | "multi_select",
     value: string,
   ): Promise<boolean> {
+    const fieldId = [...this.#controls.values()].find(control => control.locator === locator)?.fieldId;
+    if (fieldId === "education.degree") {
+      const actual = await this.#readback(locator, behavior);
+      if (actual !== null && sharedUiKnownSemanticAliasMatches(fieldId, actual, value) === true) return true;
+    }
     return selectionReadbackIncludes(locator, behavior, value, this.#trace, this.#selectionOptionLabels(locator, value));
   }
 
@@ -147,7 +155,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           if (label !== null && !retainedProfileLabelSha256Matches(
             entry.fieldId, retainedProfileTextSha256(label),
           ) && !await nativeSocialAccountBinding(matches[0]!, entry.fieldId) &&
-              !await nativeCountryControlBinding(matches[0]!, entry.fieldId)) {
+              !await nativeCountryControlBinding(matches[0]!, entry.fieldId) &&
+              !await nativePreviousWorkerBinding(matches[0]!, entry.fieldId)) {
             if (entry.uiBehavior === "radio_group") {
               if (!(await Promise.all(matches.map(unknownUiBehavior))).every((type) => type === "radio_group")) {
                 throw new TypeError("profile radio group UI binding unavailable");
@@ -196,6 +205,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     for (const entry of profileScalarControlCatalog) controls.push(...scalarSnapshots.get(entry)!);
     const rows: ProfileRowSnapshot[] = [];
     const repeatableSections: ProfileRepeatableSection[] = [];
+    const requiredRepeatableSections: ProfileRepeatableSection[] = [];
     for (const entry of profileRepeatableCatalog) {
       try {
         const section = profile.locator(entry.sectionSelector);
@@ -210,8 +220,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           continue;
         }
         repeatableSections.push(entry.section);
+        if (await sections[0]!.evaluate((section, rowSelector) => {
+          if (section.getAttribute("aria-required") === "true" || section.hasAttribute("required")) return true;
+          return [...section.querySelectorAll('h2,h3,legend,label,[data-automation-id="required"],[role="alert"]')]
+            .filter(node => !node.closest(rowSelector)).some(node =>
+              node.getAttribute("data-automation-id") === "required" || /[✱*]\s*$/.test(node.textContent ?? "") ||
+              node.getAttribute("role") === "alert" && /required|at least one/i.test(node.textContent ?? ""));
+        }, entry.rowSelector)) requiredRepeatableSections.push(entry.section);
         const candidates = await visibleLocators(sections[0]!.locator(entry.rowSelector));
         for (const row of candidates) rows.push(await this.#inspectRow(entry, row, inspectInteractiveOptions));
+        // Native indexed rows can coexist with a recognized section or legacy rows.
+        // Structural rows own their descendants; inspect only the remaining indexed rows.
+        rows.push(...await this.#inspectIndexedRows(entry, sections[0]!, inspectInteractiveOptions, entry.rowSelector));
       } catch (error) {
         throw this.#recordInspectionFailure(
           "repeatable",
@@ -237,7 +257,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     this.#trace?.("profile_inspection_completed", {
       durationMs: Math.round(performance.now() - started), fieldCount: controls.length,
     });
-    return { pageType: this.#pageType, controls, rows, repeatableSections };
+    return { pageType: this.#pageType, controls, rows, repeatableSections, requiredRepeatableSections };
   }
 
   inspectionFailure(): ProfileInspectionFailure | undefined {
@@ -553,6 +573,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     if (!inspectInteractiveOptions) return [];
     const started = performance.now();
     const before = await this.#resolvedReadback(resolved);
+    // Employer defaults may arrive after the caller's empty-country read.
+    if (resolved.binderStrategy === "native_country_control" && before !== null) return [before];
     const promptCatalog = resolved.uiBehavior === "multi_select" ||
       resolved.uiBehavior === "search_select" && await control.evaluate(element => {
         const widgetId = element.getAttribute("data-uxi-multiselect-id");
@@ -1064,6 +1086,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       throw new TypeError("Workday profile shared UI state did not commit");
     }
     } catch (error) {
+      if (unsafeOptionActivation(error)) throw error;
       if (["search_select", "select", "multi_select"].includes(request.uiBehavior) && !signal.aborted) {
         // A successful selection can remount its popup before the action returns.
         // Dismiss residual search UI, then reconcile the exact committed value;
@@ -1073,8 +1096,15 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           const observed = await this.#readback(resolved.locator, request.uiBehavior);
           const matches = request.uiBehavior === "multi_select"
             ? exactOptionListReadback(observed, parseOptionList(request.value), resolved.fieldId)
-            : observed !== null && equivalentOption(observed, request.value);
-          if (matches && await resolved.locator.count() === 1 && await resolved.locator.isVisible() &&
+            : await this.#selectionReadbackIncludes(
+              resolved.locator, request.uiBehavior as "search_select" | "select", request.value,
+            );
+          const controlId = await resolved.locator.getAttribute("id");
+          const selectPortalOpen = request.uiBehavior === "select" && controlId !== null &&
+            (await visibleLocators(this.#page.locator(
+              `[data-associated-widget=${JSON.stringify(controlId)}]`,
+            ))).length > 0;
+          if (matches && !selectPortalOpen && await resolved.locator.count() === 1 && await resolved.locator.isVisible() &&
               (resolved.fieldId !== "source.how_did_you_hear" ||
                 await committedPromptPrefill(resolved.locator, request.value) !== false) &&
               await validationCleared(resolved.locator) &&
@@ -1176,14 +1206,20 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     abort(signal);
     const entry = repeatableEntry(section);
     const containers = await visibleLocators(this.#page.locator(entry.sectionSelector));
-    if (containers.length === 0 && (section === "experience" || section === "education")) {
+    if (containers.length === 0 && (section === "experience" || section === "education" || section === "websites")) {
       const before = new Set(await this.#indexedRowIds(entry));
-      const buttons = await visibleLocators(this.#page.getByRole("button", {
-        name: "Add Another",
-        exact: true,
-      }));
-      if (buttons.length !== 2) throw new TypeError("Workday indexed repeatable action is ambiguous");
-      await buttons[section === "experience" ? 0 : 1]!.click({ timeout: this.#timeoutMs });
+      let add: Locator;
+      if (section === "websites") {
+        const owner = await exactVisible(this.#page.getByRole("group", { name: "Websites", exact: true }));
+        add = await exactVisible(owner.getByRole("button", { name: "Add Another", exact: true }));
+      } else {
+        const buttons = await visibleLocators(this.#page.getByRole("button", {
+          name: "Add Another", exact: true,
+        }));
+        if (buttons.length !== 2) throw new TypeError("Workday indexed repeatable action is ambiguous");
+        add = buttons[section === "experience" ? 0 : 1]!;
+      }
+      await add.click({ timeout: this.#timeoutMs });
       const deadline = Date.now() + this.#timeoutMs;
       while (Date.now() < deadline) {
         const added = (await this.#indexedRowIds(entry)).filter((rowId) => !before.has(rowId));
@@ -1217,7 +1253,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     abort(signal);
     const entry = repeatableEntry(section);
     if (this.#ownedIndexedRows.has(rowIdentifier)) {
-      throw new TypeError("indexed Workday row removal is not yet admitted");
+      if (section !== "websites") throw new TypeError("indexed Workday row removal is not yet admitted");
+      const owner = await exactVisible(this.#page.getByRole("group", { name: "Websites", exact: true }));
+      const control = await exactVisible(owner.locator(`[id="${rowIdentifier}--url"], [id="${rowIdentifier}--website"]`));
+      const row = control.locator('xpath=ancestor::*[@role="group"][1]');
+      const remove = await exactVisible(row.getByRole("button", { name: "Delete", exact: true }));
+      await remove.click({ timeout: this.#timeoutMs });
+      await control.waitFor({ state: "detached", timeout: this.#timeoutMs });
+      this.#ownedIndexedRows.delete(rowIdentifier);
+      abort(signal);
+      return;
     }
     const container = await exactVisible(this.#page.locator(entry.sectionSelector));
     const row = await this.#findRow(entry, container, rowIdentifier);
@@ -1267,15 +1312,17 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const valid = (await Promise.all(matches.map((match) =>
         validationCleared(match)
       ))).every(Boolean);
+      const label = await observedControlLabel(matches[0]!, entry.uiBehavior);
       return [{
         controlId,
         fieldId: entry.fieldId,
-        required: !valid || (await Promise.all(matches.map((match) =>
+        required: (await Promise.all(matches.map((match) =>
           required(match, "radiogroup")
         ))).some(Boolean),
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
         readback: valid ? await radioReadback(matches) : null,
+        ...(label === null ? {} : { label }),
         allowedOptions: uniqueObservedOptions(await Promise.all(matches.map(radioOptionLabel))),
       }];
     }
@@ -1300,20 +1347,25 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const allowedOptions = this.#inspectMissingOptions && isChoice(entry.uiBehavior)
         ? currentReadback === null
           ? await this.#observeOptionLabels(this.#controls.get(controlId)!, [match],
-            inspectInteractiveOptions && entry.fieldId !== "phone.country_code")
+            inspectInteractiveOptions && isRequired && entry.fieldId !== "phone.country_code")
           : [currentReadback]
         : [];
       // Blur during catalog discovery may reveal required-field validation.
       // Report its current state instead of treating validation as an answer edit.
       const currentValid = await validationCleared(match);
+      const label = isRequired ? await observedControlLabel(match, entry.uiBehavior) : null;
+      const constraints = isRequired ? await unknownConstraints(match) : undefined;
       snapshots.push({
         controlId,
         fieldId: entry.fieldId,
-        required: !currentValid || isRequired,
+        required: isRequired,
         uiBehavior: entry.uiBehavior,
         uiVariant: entry.uiVariant,
-        readback: currentValid ? currentReadback : null,
+        readback: currentValid ? entry.fieldId === "address.country"
+          ? await this.#readback(match, entry.uiBehavior) : currentReadback : null,
         ...(allowedOptions.length === 0 ? {} : { allowedOptions }),
+        ...(label === null ? {} : { label }),
+        ...(constraints === undefined ? {} : { constraints }),
       });
     }
     return snapshots;
@@ -1327,14 +1379,18 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const identifier = await rowId(row);
     const controls: ProfileControlSnapshot[] = [];
     for (const field of entry.fields) {
-      const locator = row.locator(`[data-automation-id$="--${field.suffix}"]`);
+      const locator = row.locator(`[data-automation-id$="--${field.suffix}"]` +
+        (field.indexed === false ? "" : `, [id$="--${field.suffix}"]`));
       const variants = entry.fields.filter(candidate =>
         candidate.fieldId === field.fieldId && candidate.suffix === field.suffix);
       if (variants.length > 1) {
         const visible = await visibleLocators(locator);
         if (visible.length === 1) {
           const observedBehavior = await unknownUiBehavior(visible[0]!);
-          const variant = variants.find(candidate => candidate.uiBehavior === observedBehavior);
+          const automationBound = await visible[0]!.evaluate((element, suffix) =>
+            element.getAttribute("data-automation-id")?.endsWith(`--${suffix}`) === true, field.suffix);
+          const variant = variants.find(candidate => candidate.uiBehavior === observedBehavior &&
+            (candidate.indexed !== false || automationBound));
           if (variant === undefined) throw new TypeError("unsupported Workday repeatable control variant");
           if (variant !== field) continue;
         }
@@ -1358,9 +1414,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     entry: ProfileRepeatableCatalogEntry,
     profile: Locator,
     inspectInteractiveOptions: boolean,
+    structuralRowSelector?: string,
   ): Promise<ProfileRowSnapshot[]> {
     if (indexedRepeatablePrefixes(entry.section).length === 0) return [];
-    const rowIds = await this.#indexedRowIds(entry);
+    const rowIds = await this.#indexedRowIds(entry, profile, structuralRowSelector);
     const rows: ProfileRowSnapshot[] = [];
     for (const identifier of rowIds) {
       const controls: ProfileControlSnapshot[] = [];
@@ -1383,15 +1440,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     return rows;
   }
 
-  async #indexedRowIds(entry: ProfileRepeatableCatalogEntry): Promise<string[]> {
+  async #indexedRowIds(entry: ProfileRepeatableCatalogEntry, scope?: Locator, structuralRowSelector?: string): Promise<string[]> {
     const prefixes = indexedRepeatablePrefixes(entry.section);
     if (prefixes.length === 0) return [];
-    const ids = await this.#page.locator(prefixes.map(prefix =>
-      `[id^="${prefix}"][id*="--"]`).join(", ")).evaluateAll((elements) =>
+    const ids = await (scope ?? this.#page).locator(prefixes.map(prefix =>
+      `[id^="${prefix}"][id*="--"]`).join(", ")).evaluateAll((elements, rowSelector) =>
       elements.flatMap((element) => {
+        if (rowSelector !== undefined && element.closest(rowSelector) !== null) return [];
         const split = element.id.indexOf("--");
         return split > 0 ? [element.id.slice(0, split)] : [];
-      })
+      }), structuralRowSelector
     );
     return [...new Set(ids)].sort();
   }
@@ -1578,7 +1636,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const currentReadback = await this.#readback(candidate, uiBehavior).catch(() => null);
       let allowedOptions = await unknownAllowedOptions(candidate);
       if (allowedOptions.length === 0 && isChoice(uiBehavior) &&
-          uiBehavior !== "radio_group" && this.#inspectMissingOptions && inspectInteractiveOptions) {
+          uiBehavior !== "radio_group" && this.#inspectMissingOptions && inspectInteractiveOptions && isRequired) {
         // Match known scalar choices: read a valid committed value without
         // reopening its popup. Cleared or invalid dependencies discover afresh.
         allowedOptions = currentReadback !== null &&
@@ -1636,6 +1694,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     behavior: "search_select" | "select" | "multi_select",
     priorCatalogs: readonly (ElementHandle | null)[] | undefined,
   ): Promise<void> {
+    const fieldId = [...this.#controls.values()].find(item => item.locator === control)?.fieldId;
     await control.click({ timeout: this.#timeoutMs });
     await this.#captureSelectionDiagnostic("clicked", behavior);
     const editable = await control.evaluate((element) =>
@@ -1710,8 +1769,41 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         await this.#selectPromptCatalogOption(control, value, interaction, behavior, priorCatalogs)
       ) return;
       if (behavior === "select") {
-        const scope = await field.count() === 1 ? field : this.#page.locator("body");
-        const selected = await this.#waitForSelectableLeaf(scope, value);
+        const controlId = await control.getAttribute("id");
+        const portals = controlId === null ? [] : await visibleLocators(this.#page.locator(
+          `[data-associated-widget=${JSON.stringify(controlId)}]`,
+        ));
+        if (portals.length > 1) throw new TypeError("Workday select popup ownership is ambiguous");
+        const portal = portals[0];
+        const targetHandle = portal === undefined ? null : await control.elementHandle();
+        let portalOwned = portal === undefined;
+        try {
+          portalOwned ||= targetHandle !== null && await portal!.evaluate((popup, target) => {
+          if (popup.getRootNode() !== target.getRootNode()) return false;
+          const root = popup.getRootNode() as Document | ShadowRoot;
+          const id = target.id;
+          const controls = root.querySelectorAll(`[id="${CSS.escape(id)}"]`);
+          if (controls.length !== 1 || controls[0] !== target || popup.contains(target)) return false;
+          const fieldSelector = '[data-automation-id="formField"], [data-automation-id^="formField-"]';
+          const owner = controls[0]!.closest(fieldSelector);
+          const popupOwner = popup.closest(fieldSelector);
+          if (popupOwner !== null && popupOwner !== owner) return false;
+          const visible = (node: Element) => node.getClientRects().length > 0 &&
+            getComputedStyle(node).visibility !== "hidden" && !node.closest('[hidden],[aria-hidden="true"]');
+          if ([...popup.querySelectorAll('[data-associated-widget]')].some(node =>
+            visible(node) && node.getAttribute("data-associated-widget") !== id)) return false;
+          return !owner || ![...owner.querySelectorAll(
+            '[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"], [role="listbox"]',
+          )].some(node => visible(node) && !popup.contains(node) && node !== popup &&
+            !node.closest('[data-automation-id="selectedItem"], [data-automation-id="selectedItemList"]'));
+          }, targetHandle);
+        } finally { await targetHandle?.dispose(); }
+        if (!portalOwned) throw new TypeError("Workday select popup ownership is ambiguous");
+        if (portal === undefined && await field.count() !== 1) {
+          throw new TypeError("Workday select popup ownership is unavailable");
+        }
+        const scope = portal ?? field;
+        const selected = await this.#waitForSelectableLeaf(scope, value, new Set(), true, this.#timeoutMs, fieldId);
         await this.#captureSelectionDiagnostic("option-found", behavior);
         interaction.popupBound = false;
         interaction.visibleOptionCount = selected.visibleOptionCount;
@@ -1719,11 +1811,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         interaction.optionFocused = await selected.option.evaluate((element) =>
           element.ownerDocument.activeElement === element
         );
-        await selected.option.click({ timeout: this.#timeoutMs });
+        await activateProfileOption(selected.option, this.#timeoutMs);
         interaction.optionActivated = true;
         await control.blur({ timeout: this.#timeoutMs });
         await this.#page.waitForTimeout(25);
-        interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true";
+        interaction.popupClosed = await control.getAttribute("aria-expanded") !== "true" &&
+          (portal === undefined || !await selectionPopupVisible(portal, false));
         interaction.backingValueCommitted = await this.#selectionReadbackIncludes(
           control,
           behavior,
@@ -1887,7 +1980,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           interaction.optionFocused = await selected.option.evaluate((element) =>
             element.ownerDocument.activeElement === element
           );
-          await selected.option.click({ timeout: this.#timeoutMs });
+          await activateProfileOption(selected.option, this.#timeoutMs);
           interaction.optionActivated = true;
           await this.#page.waitForTimeout(100);
           interaction.popupClosed = true;
@@ -1994,6 +2087,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         expandedCategories,
         !fallbackScope,
         remainingSelectionTime(),
+        fieldId,
       );
       await this.#captureSelectionDiagnostic("option-found", behavior);
       interaction.visibleOptionCount = selected.visibleOptionCount;
@@ -2001,10 +2095,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       interaction.optionFocused = await selected.option.evaluate((element) =>
         element.ownerDocument.activeElement === element
       );
-      await selected.option.click({ timeout: this.#timeoutMs });
+      await activateProfileOption(selected.option, this.#timeoutMs);
       interaction.optionActivated = true;
     } catch (error) {
-      if (error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
+      if (unsafeOptionActivation(error) || error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
       // `fill` has already entered the query for editable Workday comboboxes.
       // Re-typing appended the same query (for example `PythonPython`) and made
       // an otherwise valid typeahead result impossible to match exactly.
@@ -2021,9 +2115,10 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         expandedCategories,
         !fallbackScope,
         remainingSelectionTime(),
+        fieldId,
       )
         .catch(error => {
-          if (error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
+          if (unsafeOptionActivation(error) || error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
           return undefined;
         });
       const active = activeId === null
@@ -2032,11 +2127,11 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       if (revealed !== undefined) {
         interaction.visibleOptionCount = revealed.visibleOptionCount;
         interaction.selectedOptionOrdinal = revealed.selectedOptionOrdinal;
-        await revealed.option.click({ timeout: this.#timeoutMs });
+        await activateProfileOption(revealed.option, this.#timeoutMs);
       } else if (active === undefined) {
         await this.#page.keyboard.press("Enter");
       } else {
-        await active.click({ timeout: this.#timeoutMs });
+        await activateProfileOption(active, this.#timeoutMs);
       }
       interaction.optionActivated = true;
       await this.#page.waitForTimeout(100);
@@ -2050,15 +2145,16 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           expandedCategories,
           !fallbackScope,
           remainingSelectionTime(),
+          fieldId,
         )
           .catch(error => {
-            if (error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
+            if (unsafeOptionActivation(error) || error instanceof Error && error.message === "Workday selectable leaf is ambiguous") throw error;
             return undefined;
           });
         if (nested !== undefined) {
           interaction.visibleOptionCount = nested.visibleOptionCount;
           interaction.selectedOptionOrdinal = nested.selectedOptionOrdinal;
-          await nested.option.click({ timeout: this.#timeoutMs });
+          await activateProfileOption(nested.option, this.#timeoutMs);
           await this.#page.waitForTimeout(100);
         }
       }
@@ -2202,9 +2298,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     // already-saved answer off when its result remains visible.
     if (!await this.#selectionReadbackIncludes(control, behavior, value)) {
       try {
-        await (leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option))
-          .click({ timeout: Math.min(this.#timeoutMs, 5_000) });
+        await activateProfileOption(
+          leaves.length === 1 ? leaves[0]! : inputs[0] ?? await promptOptionActivation(option),
+          Math.min(this.#timeoutMs, 5_000),
+        );
       } catch (error) {
+        if (unsafeOptionActivation(error)) throw error;
         // Enter can save the answer while Playwright waits for its option to
         // settle. Accept that exact committed token, never a vanished row alone.
         if (!await this.#selectionReadbackIncludes(control, behavior, value)) throw error;
@@ -2411,11 +2510,8 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     const activation = await promptOptionActivation(option);
     try {
       try {
-        await activation.click({
-          timeout: behavior === "multi_select"
-            ? Math.min(this.#timeoutMs, 5_000)
-            : this.#timeoutMs,
-        });
+        await activateProfileOption(activation, behavior === "multi_select"
+          ? Math.min(this.#timeoutMs, 5_000) : this.#timeoutMs);
         interaction.optionActivated = true;
       } finally {
         await this.#page.keyboard.press("Escape");
@@ -2423,6 +2519,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
         await this.#page.waitForTimeout(100);
       }
     } catch (error) {
+      if (unsafeOptionActivation(error)) throw error;
       // A Workday prompt row can commit and remount while Playwright is still
       // waiting for its stale activation target. Reconcile exact field-owned
       // backing truth promptly instead of spending the full page budget or
@@ -2473,9 +2570,12 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       }));
     });
     if (options === null) throw new TypeError("Workday native select is unavailable");
-    const matches = options.filter((option) =>
+    const exact = options.filter((option) =>
       !option.disabled && normalize(option.label) === normalize(value)
     );
+    const fieldId = [...this.#controls.values()].find(item => item.locator === control)?.fieldId;
+    const matches = exact.length > 0 ? exact : options.filter(option => !option.disabled &&
+      fieldId === "education.degree" && sharedUiKnownSemanticAliasMatches(fieldId, option.label, value) === true);
     if (matches.length !== 1) {
       throw new TypeError("Workday native select option is missing or ambiguous");
     }
@@ -2676,9 +2776,9 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const selected = await this.#waitForSelectableLeaf(listbox, selectionValue);
       interaction.visibleOptionCount = selected.visibleOptionCount;
       interaction.selectedOptionOrdinal = selected.selectedOptionOrdinal;
-      await selected.option.click({ timeout: this.#timeoutMs });
+      await activateProfileOption(selected.option, this.#timeoutMs);
     } else if (active !== undefined) {
-      await active.click({ timeout: this.#timeoutMs });
+      await activateProfileOption(active, this.#timeoutMs);
     } else {
       await this.#page.keyboard.press("Enter");
     }
@@ -2698,7 +2798,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const nested = await this.#waitForSelectableLeaf(listbox, selectionValue);
       interaction.visibleOptionCount = nested.visibleOptionCount;
       interaction.selectedOptionOrdinal = nested.selectedOptionOrdinal;
-      await nested.option.click({ timeout: this.#timeoutMs });
+      await activateProfileOption(nested.option, this.#timeoutMs);
       await this.#page.waitForTimeout(100);
     }
     await control.blur({ timeout: this.#timeoutMs });
@@ -2745,6 +2845,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
     expandedCategories = new Set<string>(),
     allowTextLeaves = true,
     timeoutMs = this.#timeoutMs,
+    fieldId?: string,
   ): Promise<{
     readonly option: Locator;
     readonly visibleOptionCount: number;
@@ -2776,6 +2877,13 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
           exact.push({ option: leaves[index]!, ordinal: index + 1 });
         }
       }
+      if (exact.length === 0 && fieldId === "education.degree") {
+        for (const [index, labels] of leafLabels.entries()) {
+          if (labels.some(label => sharedUiKnownSemanticAliasMatches(fieldId, label, value) === true)) {
+            exact.push({ option: leaves[index]!, ordinal: index + 1 });
+          }
+        }
+      }
       if (exact.length === 1) return {
         option: exact[0]!.option,
         visibleOptionCount: leaves.length,
@@ -2802,7 +2910,7 @@ export class PlaywrightWorkdayProfilePage implements WorkdayProfilePagePort {
       const category = await expandableCategory(categories, value, expandedCategories);
       if (category !== undefined) {
         expandedCategories.add(category.key);
-        await category.option.click({ timeout: this.#timeoutMs });
+        await activateProfileOption(category.option, this.#timeoutMs);
         await this.#page.waitForTimeout(25);
         continue;
       }
@@ -3010,6 +3118,10 @@ async function exactActiveOption(
 async function unknownUiBehavior(
   locator: Locator,
 ): Promise<ProfileControlSnapshot["uiBehavior"]> {
+  if (await locator.evaluate(element => element.matches('input[data-uxi-widget-type="selectinput"]'))) {
+    const choice = await locator.evaluate<ChoiceWidget | null, void>(inspectChoiceWidget);
+    return choice?.multiple === true ? "multi_select" : "search_select";
+  }
   return await locator.evaluate((element) => {
     const role = element.getAttribute("role");
     if (role === "checkbox") return "checkbox";
@@ -3026,16 +3138,6 @@ async function unknownUiBehavior(
       element.getAttribute("aria-haspopup") === "listbox"
     ) return "search_select";
     if (element instanceof HTMLInputElement) {
-      // Workday prompts can omit ARIA combobox semantics. Bind the input to
-      // its own widget before treating it as a choice rather than free text.
-      const widgetId = element.getAttribute("data-uxi-multiselect-id");
-      const widget = element.closest('[data-automation-id="multiSelectContainer"][data-uxi-widget-type="multiselect"]');
-      if (element.getAttribute("data-uxi-widget-type") === "selectinput" &&
-          widgetId && widget?.id === widgetId &&
-          [...widget.querySelectorAll('input[data-uxi-widget-type="selectinput"]')]
-            .filter(input => input.getAttribute("data-uxi-multiselect-id") === widgetId).length === 1) {
-        return "search_select";
-      }
       if (element.type === "checkbox") return "checkbox";
       if (element.type === "date") return "date";
       if (element.type === "month") return "month";
@@ -3282,6 +3384,19 @@ async function resolvedReadback(
   return readback(control.locator, control.uiBehavior, trace);
 }
 
+async function nativePreviousWorkerBinding(locator: Locator, fieldId: string): Promise<boolean> {
+  if (fieldId !== "employment.previously_worked_for_organization") return false;
+  return locator.evaluate((element) => {
+    if (!(element instanceof HTMLInputElement) || element.type !== "radio" ||
+        element.name !== "candidateIsPreviousWorker") return false;
+    const owner = element.closest('[data-automation-id^="formField-"]');
+    const group = element.closest('[id="previousWorker--candidateIsPreviousWorker"]');
+    return owner?.getAttribute("data-automation-id") === "formField-candidateIsPreviousWorker" &&
+      group !== null && owner.contains(group) &&
+      group.querySelectorAll('input[type="radio"][name="candidateIsPreviousWorker"]').length === 2;
+  });
+}
+
 async function nativeCountryControlBinding(locator: Locator, fieldId: string): Promise<boolean> {
   const id = nativeCountryControlIds[fieldId];
   if (id === undefined) return false;
@@ -3315,7 +3430,10 @@ async function observedControlLabel(
   locator: Locator,
   behavior: ProfileControlSnapshot["uiBehavior"],
 ): Promise<string | null> {
+  await locator.page().evaluate(annotateQuestionContext);
   const value = await locator.evaluate((element, radioGroup) => {
+    const context = element.getAttribute('data-hunt-question-context');
+    if (context) return context;
     const normalized = (text: string | null | undefined) => (text ?? "")
       .normalize("NFC").replace(/\s+/gu, " ").trim()
       .replace(/\s+(?:Not )?Required$/iu, "").replace(/\s*\*\s*$/u, "")
@@ -3478,15 +3596,11 @@ function equivalentOption(left: string, right: string): boolean {
 
 function equivalentOptionLabels(value: string): ReadonlySet<string> {
   const normalized = normalize(value);
-  return new Set(new Set(["linkedin", "linkedin corporate page"]).has(normalized)
-    ? ["linkedin", "linkedin corporate page"]
-    : new Set(["recruiter", "recruiter outreach"]).has(normalized)
-    ? ["recruiter", "recruiter outreach"]
-    : normalized === "computer science"
-    ? [normalized, "computer and information science"]
-    : normalized === "computer and information science"
-      ? [normalized, "computer science"]
-      : [normalized]);
+  for (const context of ['application_source','education_field_of_study']) {
+    const labels=answerEquivalents(value,context);
+    if(labels.length>1)return new Set(labels);
+  }
+  return new Set([normalized]);
 }
 
 async function phoneDeviceTypeSelectionValue(
@@ -3561,8 +3675,10 @@ async function required(
       '[data-automation-id="formField"], [data-automation-id^="formField-"]',
     );
     if (field === null) return false;
+    if ([...field.querySelectorAll('[data-automation-id="errorMessage"],[role="alert"]')].some(error =>
+      error.getClientRects().length > 0 && /required|cannot be blank|must be (?:entered|provided)/i.test(error.textContent ?? ""))) return true;
     if (field.querySelector(
-      '[data-automation-id="required"], abbr[title="Required"], [aria-label="Required"]',
+      '[data-automation-id="required"], abbr[title="Required" i], [aria-label="Required" i]',
     ) !== null) return true;
     return [...field.querySelectorAll("legend, label")].some((candidate) =>
       /\*\s*$/u.test(candidate.textContent ?? "")
@@ -3705,7 +3821,41 @@ async function promptOptionActivation(option: Locator): Promise<Locator> {
   if (radios.length > 1 || leaves.length > 1) {
     throw new TypeError("Workday prompt catalog activation is ambiguous");
   }
-  return radios[0] ?? leaves[0] ?? option;
+  const activation = radios[0] ?? leaves[0] ?? option;
+  await assertSafeProfileOption(activation);
+  return activation;
+}
+
+function unsafeOptionActivation(error: unknown): boolean {
+  return error instanceof Error && error.message === "Workday option activation is unsafe";
+}
+
+async function assertSafeProfileOption(option: Locator): Promise<void> {
+  const safe = await option.evaluate(element => {
+    const unsafe = (node: Element): boolean =>
+      node instanceof HTMLButtonElement && node.type !== "button" ||
+      node instanceof HTMLInputElement && ["submit", "image", "reset"].includes(node.type) ||
+      node.matches('a[href], area[href]') ||
+      node instanceof HTMLLabelElement && node.control !== null && (
+        unsafe(node.control) || ![
+          node,
+          node.closest('[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]'),
+          node.closest('[role="listbox"], [data-automation-id="responsiveMonikerPrompt"], [data-associated-widget]'),
+        ].some(owner => owner?.contains(node.control))
+      );
+    for (let ancestor: Element | null = element; ancestor !== null;) {
+      if (unsafe(ancestor)) return false;
+      const root = ancestor.getRootNode();
+      ancestor = ancestor.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return ![...element.querySelectorAll('button, input, label, a[href], area[href]')].some(unsafe);
+  }).catch(() => false);
+  if (!safe) throw new TypeError("Workday option activation is unsafe");
+}
+
+async function activateProfileOption(option: Locator, timeout: number): Promise<void> {
+  await assertSafeProfileOption(option);
+  await option.click({ timeout });
 }
 
 async function preferredPromptOption(

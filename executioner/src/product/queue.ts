@@ -3,29 +3,63 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
-import { applicationTarget } from "./target.ts";
-import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, submitReviewedApplication, type ProductInput } from "./engine.ts";
-import { applicantProfile, productSources } from "./sources.ts";
+import { productApplicationTarget } from "./target.ts";
+import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
+import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
+import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
+import { AttachmentFailure } from './extension-bridge.ts';
+import { viewportCleanupPending } from '../../extension/page-viewport.js';
+
+import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
 
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
+
+const safeFailureStages = new Set(["Opening application", "Opening existing account sign-in", "Signing in",
+  "Waiting for account page", "Continuing opened application", "Filling application", "Verifying application",
+  "Checking application page", "Moving to the next page", "Checking application review",
+  "Filling profile", "Uploading resume", "Answering questions"]);
+const safeFailureFiles = new Set(["engine.ts", "queue.ts", "hosted-application.ts", "generic-application.ts",
+  "extension-bridge.ts", "playwright-account-page.ts", "playwright-posting-navigation.ts",
+  "application-authentication.ts", "application-review.ts", "current-page-workflow.ts",
+  "workday-workflow.ts", "workday-walk-diagnostics.ts", "page-answer-planner.ts",
+  "page-matching.ts", "workable-resume.ts", "greenhouse-resume.ts"]);
+
+function runFailure(error: unknown, stage: string) {
+  const message = error instanceof Error ? error.message : "";
+  const operation = error instanceof AttachmentFailure ? 'browser.attach' : message.match(/^(locator\.(?:count|isVisible|isEditable|isEnabled|inputValue|fill|click|evaluate|waitFor|press|blur)|page\.(?:evaluate|goto|waitForFunction)): /)?.[1];
+  const category = error instanceof AttachmentFailure ? error.code : /strict mode violation/i.test(message) ? "ambiguous_control"
+    : /intercepts pointer events/i.test(message) ? "click_intercepted"
+    : /not attached|detached/i.test(message) ? "control_detached"
+    : /(?:page|context|browser|target).{0,30}closed/i.test(message) ? "browser_closed"
+    : error instanceof Error && error.name === "TimeoutError" ? "browser_timeout"
+    : error instanceof TypeError ? "type_error" : "unexpected_error";
+  const sourceFrames = error instanceof Error ? (error.stack ?? "").split("\n").flatMap(line=>{
+    if (!/^\s+at\s/.test(line)) return [];
+    const match = line.match(/(?:\/|\\)([a-z-]+\.ts):(\d+):(\d+)\)?$/);
+    return match && safeFailureFiles.has(match[1]!) ? [`${match[1]}:${match[2]}:${match[3]}`] : [];
+  }).slice(0,6) : [];
+  return {stage:safeFailureStages.has(stage)?stage:"Other",category,operation,sourceFrames};
+}
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
   tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
-  resumeName?: string; resumeVersion?: string; resumeSha256?: string;
+  resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
 }
 export interface BrowserConnection {
   connected: boolean;
-  open(url: string, tabId?: number, existingOnly?: boolean): Promise<{ tabId: number; page: Page; browser: Browser }>;
+  open(url: string, tabId?: number, existingOnly?: boolean): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
   release(tabId: number): Promise<void>;
-  focus?(tabId: number): Promise<void>;
+  focus?(tabId: number, url?: string): Promise<void>;
+  prepareAccount?(options: import('./workday-sign-in.ts').WorkdayAccountOptions): Promise<void>;
 }
 export class ApplicationQueue {
   jobs: ProductJob[] = [];
   concurrency = 6;
   credentials?: ProductInput["credentials"];
-  verifyEmail?: ProductInput["verifyEmail"];
+  verifyEmail?: import('./workday-sign-in.ts').WorkdayAccountOptions['verifyEmail'];
   private running = new Map<string, AbortController>();
   private sessions = new Map<string, { tabId: number; page: Page; browser: Browser }>();
   private settings?: { profile: unknown; resume: string };
@@ -46,7 +80,7 @@ export class ApplicationQueue {
     if (existsSync(join(root, "jobs.json"))) {
       const saved = JSON.parse(readFileSync(join(root, "jobs.json"), "utf8"));
       if (!Array.isArray(saved.jobs) || !Number.isInteger(saved.concurrency) || saved.concurrency < 1 || saved.concurrency > 30 ||
-          saved.jobs.some((job: ProductJob) => !job || !/^[a-f0-9-]{36}$/.test(job.id) || !["queued", "running", "paused", "review", "submitting", "submitted", "submission_uncertain", "removed"].includes(job.status) || applicationTarget(job.url).key !== job.key) ||
+          saved.jobs.some((job: ProductJob) => !job || (job.resumeExpected !== undefined && typeof job.resumeExpected !== "boolean") || !/^[a-f0-9-]{36}$/.test(job.id) || !["queued", "running", "paused", "review", "submitting", "submitted", "submission_uncertain", "removed"].includes(job.status) || productApplicationTarget(job.url).key !== job.key) ||
           new Set(saved.jobs.map((job: ProductJob) => job.id)).size !== saved.jobs.length) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
       this.jobs = saved.jobs;
       this.concurrency = saved.concurrency;
@@ -73,7 +107,16 @@ export class ApplicationQueue {
   private save() { this.persist(join(this.root, "jobs.json"), { jobs: this.jobs, concurrency: this.concurrency }); }
   private safePump() { try { this.pump(); } catch { /* save() exposes the failure and pauses active work. */ } }
   private changed(job: ProductJob) { job.updatedAt = new Date().toISOString(); this.save(); }
-  snapshot() { return { jobs: this.jobs.filter(j => j.status !== "removed").map(job => ({ ...job, actionPending: this.running.has(job.id) || this.reviewActions.has(job.id) })), connected: this.bridge.connected,
+  snapshot() {
+    const profileDigest=this.settings?createHash('sha256').update(JSON.stringify(this.settings.profile)).digest('hex'):undefined;
+    return { jobs: this.jobs.filter(j => j.status !== "removed").map(job => {
+      let profileUpdateAvailable=false;
+      if (job.status==='paused' && profileDigest) try {
+        const input=JSON.parse(readFileSync(join(this.root,`${job.id}.input.json`),'utf8'));
+        profileUpdateAvailable=createHash('sha256').update(JSON.stringify(input.profile)).digest('hex')!==profileDigest;
+      } catch { /* A damaged saved input is reported by the explicit job action. */ }
+      return {...job,profileUpdateAvailable,actionPending:this.running.has(job.id)||this.reviewActions.has(job.id)};
+    }), connected: this.bridge.connected,
     configured: !!this.settings, accountConfigured: !!this.credentials, emailConfigured: !!this.verifyEmail, concurrency: this.concurrency, storageError: this.storageError }; }
   getSettings() { return this.settings ?? null; }
   recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
@@ -93,29 +136,38 @@ export class ApplicationQueue {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
     this.concurrency = value; this.save(); this.safePump();
   }
-  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[]) {
+  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean } = {}) {
     if (!this.settings) throw new Error("Choose a profile and resume first.");
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
-      const target = applicationTarget(input.url);
+      const target = productApplicationTarget(input.url);
+      if (target.ats === "generic" && !options.paused) {
+        const existing=this.jobs.find(job=>job.key===target.key && job.status!=='removed');
+        if (!existing || existing.status!=='paused' || this.running.has(existing.id) || this.reviewActions.has(existing.id) ||
+            !Number.isSafeInteger(input.tabId) || (input.tabId??0)<1 || Object.keys(input).some(key=>!['url','tabId'].includes(key))) {
+          throw new Error("Import unfamiliar applications paused. Only an existing paused application can connect an explicitly selected tab using its original job link.");
+        }
+      }
       if (input.sourceJobId !== undefined && (!Number.isSafeInteger(input.sourceJobId) || input.sourceJobId < 1)) throw new Error("Invalid Hunt job.");
       for (const value of [input.title, input.resumeName, input.resumeVersion]) if (value !== undefined && (typeof value !== "string" || value.length > 500)) throw new Error("Invalid job or resume label.");
       if (input.tabId !== undefined && (!Number.isSafeInteger(input.tabId) || input.tabId < 1)) throw new Error("Invalid browser tab.");
-      const resume = input.resumeBase64 ?? this.settings!.resume;
+      const resume = Buffer.from(input.resumeBase64 ?? this.settings!.resume, 'base64').toString('base64');
       const sources = productSources(this.settings!.profile, Buffer.from(resume, "base64"));
       disposeResumeArtifact(sources.resumeIntent.artifact);
       return { input, target, resume, submissionAllowed: target.ats === "workday" && sources.profilePlan.mode === "live" && sources.executionPolicy.browserTransport === "live_browser" };
     });
     const added: ProductJob[] = [];
+    const pendingInputs = new Map<string, {profile: unknown; resume: string}>();
     const next = this.jobs.map(job => ({ ...job }));
     for (const { input, target, resume, submissionAllowed } of prepared) {
       const existing = next.find(j => j.key === target.key && j.status !== "removed");
       if (existing) {
+        if (options.paused && (existing.status !== "paused" || this.running.has(existing.id) || this.reviewActions.has(existing.id))) throw new Error("This application is already active. Pause it before importing a resume.");
         if (input.tabId !== undefined && input.tabId !== existing.tabId) {
           if (existing.status !== "paused" || this.running.has(existing.id) || this.reviewActions.has(existing.id)) throw new Error("Pause this job before connecting another tab.");
           existing.tabId = input.tabId;
         }
-        if (input.resumeBase64 !== undefined && JSON.parse(readFileSync(join(this.root, `${existing.id}.input.json`), "utf8")).resume !== resume) throw new Error("This job already has a different resume. Pause and remove it before adding the new selection.");
+        if (input.resumeBase64 !== undefined && Buffer.from((pendingInputs.get(existing.id) ?? JSON.parse(readFileSync(join(this.root, `${existing.id}.input.json`), "utf8"))).resume, 'base64').toString('base64') !== resume) throw new Error("This job already has a different resume. Remove its existing entry before adding the new selection; pause it first if it is running.");
         if (input.sourceJobId !== undefined) {
           if (existing.sourceJobId !== undefined && existing.sourceJobId !== input.sourceJobId) throw new Error("This application is already linked to another Hunt job.");
           if (existing.sourceJobId === undefined) existing.resumeName = input.resumeName ?? existing.resumeName;
@@ -126,22 +178,51 @@ export class ApplicationQueue {
         added.push(existing); continue;
       }
       const id = randomUUID();
-      this.persist(join(this.root, `${id}.input.json`), { profile: this.settings.profile, resume });
+      pendingInputs.set(id, { profile: this.settings.profile, resume });
       const job: ProductJob = { id, ...target, title: input.title?.slice(0, 200) || target.posting,
-        status: "queued", stage: "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
+        status: options.paused ? "paused" : "queued", stage: options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
         resumeName: input.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
         resumeSha256: createHash("sha256").update(Buffer.from(resume, "base64")).digest("hex"),
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       next.push(job); added.push(job);
     }
+    for (const [id, value] of pendingInputs) this.persist(join(this.root, `${id}.input.json`), value);
     this.persist(join(this.root, "jobs.json"), { jobs: next, concurrency: this.concurrency });
     // Preserve active runner references when publishing metadata on existing jobs.
     this.jobs = next.map(job => { const current = this.jobs.find(item => item.id === job.id); return current ? Object.assign(current, job) : job; });
     this.safePump(); return added;
   }
-  async action(id: string, action: string, digest?: string, confirmed?: boolean) {
+  async action(id: string, action: string, digest?: string, confirmed?: boolean, options: {expectedProfileRevision?:unknown;expectedProfileDigest?:unknown;inputDigest?:unknown;refreshToken?:unknown} = {}) {
     if (this.closed) throw new Error("The application service is stopping.");
     if (this.storageError && action === "retry") this.recoverStorage();
+    if (action === 'refresh_profile' || action === 'undo_profile_refresh') {
+      const job=this.jobs.find(job=>job.id===id);
+      if (!job || job.status!=='paused' || this.running.has(id) || this.reviewActions.has(id)) throw new Error('Wait for this application to pause before refreshing its profile.');
+      if (this.storageError) throw new Error(this.storageError);
+      const inputPath=join(this.root,`${id}.input.json`),backupPath=join(this.root,`${id}.profile-refresh.json`);
+      const before=readFileSync(inputPath,'utf8');
+      const history: {token:string;profile:unknown;afterDigest:string}[]=existsSync(backupPath)?JSON.parse(readFileSync(backupPath,'utf8')).entries:[];
+      if (action === 'undo_profile_refresh') {
+        const saved=history.find(entry=>entry.token===options.refreshToken);
+        if (!saved || typeof options.inputDigest!=='string' || saved.afterDigest!==options.inputDigest ||
+            createHash('sha256').update(before).digest('hex')!==options.inputDigest) throw new Error('This application profile changed after the refresh. Its newer details were kept.');
+        this.persist(inputPath,{...JSON.parse(before),profile:saved.profile});
+        return {undone:true};
+      }
+      const revision=(this.settings?.profile as {profile?:{revision?:number}}|undefined)?.profile?.revision;
+      if (!Number.isSafeInteger(options.expectedProfileRevision) || options.expectedProfileRevision!==revision ||
+          options.expectedProfileDigest!==createHash('sha256').update(JSON.stringify(this.settings?.profile)).digest('hex')) throw new Error('Saved profile changed. Refresh the profile view and review its details first.');
+      const input=JSON.parse(before);
+      const sources=productSources(this.settings!.profile,Buffer.from(input.resume,'base64'));
+      disposeResumeArtifact(sources.resumeIntent.artifact);
+      const after=JSON.stringify({...input,profile:this.settings!.profile});
+      if (after===before) return {unchanged:true};
+      const inputDigest=createHash('sha256').update(after).digest('hex');
+      const refreshToken=createHash('sha256').update(before).update(inputDigest).digest('hex');
+      this.persist(backupPath,{entries:[...history.filter(entry=>entry.token!==refreshToken).slice(-19),{token:refreshToken,profile:input.profile,afterDigest:inputDigest}]});
+      this.persist(inputPath,JSON.parse(after));
+      return {inputDigest,refreshToken,profileRevision:revision};
+    }
     if (!["refresh_review", "submit"].includes(action)) return this.performAction(id, action, digest, confirmed);
     if (this.reviewActions.has(id)) throw new Error("A review action is already in progress for this job.");
     this.reviewActions.add(id);
@@ -170,20 +251,34 @@ export class ApplicationQueue {
     if (!job) throw new Error("Job not found.");
     if (action === "open") {
       if (!job.tabId || !this.bridge.focus) throw new Error("The original tab is unavailable. Retry this job to open its saved draft.");
-      await this.bridge.focus(job.tabId); return;
+      await this.bridge.focus(job.tabId, job.url); return;
     }
     if (action === "refresh_review") {
       if (job.status !== "review" && !(job.status === "paused" && job.reviewUrl) || this.running.has(id)) throw new Error("Wait for this job to pause before refreshing its review.");
       try {
-        const session = await this.reviewSession(job);
-        await restoreSavedReview(session.page, job.reviewUrl ?? job.url);
-        const digest = await reviewDigest(session.page);
+        const session = await this.reviewSession(job).catch(error => {
+          recordComponentFailure(error, "browser_interaction", "open_review_tab");
+          throw error;
+        });
+        await restoreSavedReview(session.page, job.reviewUrl ?? job.url).catch(error => {
+          recordComponentFailure(error, "review", "restore_saved_review");
+          throw error;
+        });
+        const resumeSha256 = job.resumeSha256 ?? createHash("sha256").update(Buffer.from(
+          JSON.parse(readFileSync(join(this.root, `${job.id}.input.json`), "utf8")).resume, "base64")).digest("hex");
+        const verified = await reviewSnapshot(session.page, resumeSha256, job.resumeExpected, job.resumeUpload).catch(error => {
+          recordComponentFailure(error, "review", "inspect_saved_review");
+          throw error;
+        });
+        const digest = verified.digest;
         if (this.closed) throw new Error("The application service is stopping.");
         if (job.status === "paused") job.stage = "Owner review needed: Check every answer and the attached resume.";
-        job.status = "review"; job.reviewDigest = digest; delete job.error; this.changed(job); return;
+        job.resumeExpected = job.resumeExpected === true || verified.resumeExpected;
+        job.status = "review"; job.reviewDigest = digest; delete job.error; delete job.componentFailure; this.changed(job); return;
       } catch (error) {
         if (!this.closed) {
           job.status = "paused"; job.stage = "Review needs attention"; delete job.reviewDigest;
+          job.componentFailure = componentFailure(error);
           job.error = error instanceof ApplicationPause ? error.message : "C3 could not verify this review. Inspect the tab, then refresh its review or retry.";
           this.changed(job);
         }
@@ -198,11 +293,11 @@ export class ApplicationQueue {
     }
     if (action === "retry") {
       if (!["paused", "review"].includes(job.status) || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for this job to pause before retrying.");
-      job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.reviewDigest; this.changed(job); this.safePump(); return;
+      job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.componentFailure; delete job.reviewDigest; this.changed(job); this.safePump(); return;
     }
     if (action === "remove" || action === "restore") {
       if (action === "restore" && this.jobs.some(other => other.id !== id && other.key === job.key && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
-      if (action === "remove" && !["paused", "queued"].includes(job.status) || action === "restore" && job.status !== "removed" || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for the job to pause and its review to finish before removing it.");
+      if (action === "remove" && !["paused", "queued", "review"].includes(job.status) || action === "restore" && job.status !== "removed" || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for the job to pause and its review to finish before removing it.");
       job.status = action === "remove" ? "removed" : "paused"; job.stage = action === "remove" ? "Removed" : "Restored. Retry when ready"; this.changed(job); return;
     }
     if (action === "submit") {
@@ -229,7 +324,7 @@ export class ApplicationQueue {
       if (this.running.size >= this.concurrency) break;
       if (job.status !== "queued" || this.running.has(job.id)) continue;
       // Workday tabs share account cookies. Serialize jobs for the same employer.
-      if (this.jobs.some(j => this.running.has(j.id) && applicationTarget(j.url).host === applicationTarget(job.url).host && (applicationTarget(job.url).ats === "workday" || applicationTarget(j.url).posting.split("/")[0] === applicationTarget(job.url).posting.split("/")[0]))) continue;
+      if (this.jobs.some(j => this.running.has(j.id) && productApplicationTarget(j.url).host === productApplicationTarget(job.url).host && (productApplicationTarget(job.url).ats === "workday" || productApplicationTarget(j.url).posting.split("/")[0] === productApplicationTarget(job.url).posting.split("/")[0]))) continue;
       const controller = new AbortController();
       this.running.set(job.id, controller);
       job.status = "running"; job.stage = "Opening application";
@@ -238,6 +333,7 @@ export class ApplicationQueue {
     }
   }
   private async run(job: ProductJob, controller: AbortController) {
+    const runId = randomUUID();
     const deadline = setTimeout(() => {
       controller.abort(new ApplicationPause("This job exceeded 30 minutes. The draft is preserved; inspect the tab before retrying."));
       void this.release(job.id).catch(() => {});
@@ -245,13 +341,33 @@ export class ApplicationQueue {
     deadline.unref();
     try {
       await this.release(job.id);
-      const session = await this.bridge.open(job.url, job.tabId);
+      const input = JSON.parse(readFileSync(join(this.root, `${job.id}.input.json`), "utf8"));
+      const journal = accountJournal(this.root, job.id, runId);
+      if (productApplicationTarget(job.url).ats === 'workday' && this.bridge.prepareAccount) {
+        if (input.profile?.profilePlan?.mode === 'synthetic_test_non_submittable') throw new ApplicationPause('This is a synthetic test profile. Choose your saved personal profile before running a real application.');
+        job.stage = 'Opening employer account';
+        const policy = this.credentials ? employerAccountPolicy(this.root,job.url,this.credentials.email) : undefined;
+        await this.bridge.prepareAccount({ url: job.url, tabId: job.tabId, credentials: this.credentials,
+          preferCreate:policy?.preferCreate,verificationSince:policy?.verificationSince,verifyEmail:this.verifyEmail,
+          acceptCreationTerms:effectiveProfileFacts(input.profile).some(f=>f.factId==='terms_consent' && f.value===true),
+          signal: controller.signal, record:(event,trace,observation)=>{journal(event,trace,observation);policy?.record(event);}, onTab: tabId => { job.tabId = tabId; this.changed(job); } }).catch(error => {
+          recordComponentFailure(error, "authentication", "prepare_account");
+          throw error;
+        });
+      }
+      const session = await this.bridge.open(job.url, job.tabId, productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount).catch(error => {
+        recordComponentFailure(error, "browser_interaction", "open_tab");
+        throw error;
+      });
       this.sessions.set(job.id, session); job.tabId = session.tabId;
       controller.signal.throwIfAborted();
       this.changed(job);
-      const input = JSON.parse(readFileSync(join(this.root, `${job.id}.input.json`), "utf8"));
-      const result = await this.fill(session.page, { url: job.url, profile: input.profile, learningRoot: join(this.root, "learning", job.id, randomUUID()),
-        resume: Buffer.from(input.resume, "base64"), credentials: this.credentials, verifyEmail: this.verifyEmail }, controller.signal,
+      const executionUrl=productApplicationTarget(job.url).ats==='generic' ? session.applicationUrl ?? job.url : job.url;
+      const result = await this.fill(session.page, { url: executionUrl, profile: input.profile, learningRoot: join(this.root, "learning", job.id, runId),
+        resume: Buffer.from(input.resume, "base64"), resumeExpected: job.resumeExpected,
+        onResumeObserved: () => { job.resumeExpected = true; this.changed(job); },
+        resumeUpload: job.resumeUpload, onResumeUpload: receipt => { job.resumeUpload = receipt; this.changed(job); },
+        credentials: this.credentials, requireScriptSignIn: !!this.bridge.prepareAccount, recordAccountAction: journal }, controller.signal,
       stage => { if (job.status === "running" && job.stage !== stage) { job.stage = stage; job.updatedAt = new Date().toISOString(); } });
       controller.signal.throwIfAborted();
       const reviewUrl = session.page.url();
@@ -259,14 +375,28 @@ export class ApplicationQueue {
       controller.signal.throwIfAborted();
       job.status = "review";
       job.stage = result.needsOwnerReview ? "Owner review needed: suggested or unverified answers. Check every answer in the draft." : "Ready to review";
-      job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error;
+      job.resumeExpected = job.resumeExpected === true || result.resumeExpected;
+      job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error; delete job.componentFailure;
       this.changed(job);
     } catch (error) {
+      job.componentFailure = controller.signal.aborted ? undefined : componentFailure(error);
+      if (!controller.signal.aborted && (job.componentFailure || !(error instanceof ApplicationPause))) {
+        try {
+          const directory = join(this.root, "learning", job.id, runId);
+          mkdirSync(directory, {recursive:true,mode:0o700});
+          writePrivateFileAtomic(join(directory,"run-failure.json"),
+            Buffer.from(JSON.stringify({schemaVersion:1,...runFailure(error,job.stage),componentFailure:job.componentFailure})));
+        } catch { /* Diagnostics do not affect the paused job or release its tab. */ }
+      }
       job.status = "paused"; job.stage = controller.signal.aborted ? "Paused" : "Needs attention";
       // Never retain Playwright errors containing DOM snippets or typed values.
       job.error = controller.signal.aborted
         ? controller.signal.reason instanceof ApplicationPause ? controller.signal.reason.message : "Paused. Your draft is preserved."
-        : error instanceof ApplicationPause ? error.message : "C3 could not finish this page. Inspect the tab, then retry.";
+        : error instanceof ApplicationPause ? error.message
+        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? 'Chrome is protecting another extension on this tab. Complete employer sign-in manually in the same tab, then retry when C3 can access it.'
+        : error instanceof AttachmentFailure && error.code==='attachment_viewport_unavailable' ? 'This tab has no usable page area. Resize or restore its browser window, then retry.'
+        : error instanceof AttachmentFailure && error.code==='attachment_viewport_cleanup_pending' || error instanceof Error && error.message===viewportCleanupPending ? viewportCleanupPending
+        : "C3 could not finish this page. Inspect the tab, then retry.";
       await this.release(job.id);
     } finally { clearTimeout(deadline); this.running.delete(job.id); this.changed(job); this.safePump(); }
   }
@@ -284,7 +414,10 @@ export class ApplicationQueue {
       const [, detached] = await Promise.allSettled([
         session.browser.close(), this.bridge.release(session.tabId),
       ]);
-      if (detached.status === "rejected") throw detached.reason;
+      if (detached.status === "rejected") {
+        if(detached.reason instanceof Error && detached.reason.message===viewportCleanupPending){const job=this.jobs.find(job=>job.id===id);if(job){job.error=viewportCleanupPending;this.changed(job);}}
+        throw detached.reason;
+      }
     })());
   }
   close(timeoutMs = 5_000): Promise<void> {

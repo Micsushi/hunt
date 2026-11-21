@@ -40,18 +40,39 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function request<T>(path: string, init: RequestInit): Promise<T> {
+  // Bound C3 waits without shortening unrelated resume-generation requests.
+  const signal = path.startsWith('/api/c3/')
+    ? AbortSignal.timeout(init.method === 'POST' ? 90_000 : 15_000)
+    : undefined
+  try {
+    return await handleResponse<T>(await fetch(path, { ...init, signal }))
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new ApiError(
+        0,
+        path === '/api/c3/handoff/export'
+          ? 'The application download timed out. Retry the download; nothing was queued.'
+          : init.method === 'POST'
+            ? 'Handoff was not confirmed in time. Check Applications before retrying; it may still finish.'
+            : 'Application progress did not respond in time. Retry the connection.',
+      )
+    }
+    throw error
+  }
+}
+
 export async function get<T>(path: string): Promise<T> {
   if (MOCK) return mockGet<T>(path)
-  const res = await fetch(path, {
+  return request<T>(path, {
     credentials: 'include',
     headers: { Accept: 'application/json' },
   })
-  return handleResponse<T>(res)
 }
 
 export async function post<T>(path: string, body?: unknown): Promise<T> {
   if (MOCK) return mockPost<T>(path)
-  const res = await fetch(path, {
+  return request<T>(path, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -60,12 +81,11 @@ export async function post<T>(path: string, body?: unknown): Promise<T> {
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
-  return handleResponse<T>(res)
 }
 
 export async function patch<T>(path: string, body: unknown): Promise<T> {
   if (MOCK) return mockPatch<T>()
-  const res = await fetch(path, {
+  return request<T>(path, {
     method: 'PATCH',
     credentials: 'include',
     headers: {
@@ -74,12 +94,11 @@ export async function patch<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   })
-  return handleResponse<T>(res)
 }
 
 export async function del<T>(path: string, body?: unknown): Promise<T> {
   if (MOCK) return mockDel<T>()
-  const res = await fetch(path, {
+  return request<T>(path, {
     method: 'DELETE',
     credentials: 'include',
     headers: {
@@ -88,5 +107,4 @@ export async function del<T>(path: string, body?: unknown): Promise<T> {
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
-  return handleResponse<T>(res)
 }

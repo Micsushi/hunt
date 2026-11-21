@@ -53,10 +53,6 @@
   background: var(--panel);
   align-self: flex-start;
 }
-.statusPillOnline {
-  border-color: var(--good);
-  color: var(--good);
-}
 .statusPillOffline {
   border-color: var(--danger);
   color: var(--danger);
@@ -684,12 +680,9 @@
   border-bottom: 1px solid var(--line);
 }
 
-.detailHeaderCopy {
-  min-width: 0;
-}
-
 .detailTitle {
-  margin: 8px 0 0;
+  margin: 0;
+  min-width: 0;
   color: var(--ink);
   font-size: clamp(1.3rem, 1.8vw, 1.9rem);
   line-height: 1.18;

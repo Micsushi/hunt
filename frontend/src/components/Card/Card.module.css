@@ -4,8 +4,7 @@
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: 16px 18px;
-  box-shadow: var(--shadow);
+  padding: 12px;
   transition:
     border-color var(--ease),
     box-shadow var(--ease);
@@ -22,14 +21,12 @@
 
 .label {
   font-size: 0.82rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--muted);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .value {
-  font-size: 1.6rem;
+  font-size: 1.35rem;
   font-weight: 700;
   color: var(--ink);
   line-height: 1;

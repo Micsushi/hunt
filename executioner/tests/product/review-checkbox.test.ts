@@ -11,23 +11,20 @@ test("unknown Review ordinals are scoped to the physical profile page", () => {
   assert.notEqual(info, unknownProfileReviewFieldId("s2-profile:applyFlowMyInfoPage", "unknown.required.2"));
 });
 
-test("typed checkbox Review expectations match Yes/No without accepting opposite or unrelated text", () => {
+test("Review matches typed checkbox and month values only to their correct displays", () => {
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-  for (const [committed, displayed, opposite] of [["true", "Yes", "No"], ["false", "No", "Yes"]]) {
-    const expected = hash(profileReviewDisplayValue("boolean", "checkbox", committed!));
-    assert.ok([...reviewAnswerCandidates(displayed!)].some(value => hash(value) === expected));
-    assert.ok(![...reviewAnswerCandidates(opposite!)].some(value => hash(value) === expected));
-    assert.ok(![...reviewAnswerCandidates("No Response")].some(value => hash(value) === expected));
+  for (const [type, behavior, value, display, rejected] of [
+    ["boolean", "checkbox", "true", "Yes", ["No", "No Response"]],
+    ["boolean", "checkbox", "false", "No", ["Yes", "No Response"]],
+    ["month", "month", "1", "01/2000", ["02/2000"]],
+  ] as const) {
+    const expected = hash(profileReviewDisplayValue(type, behavior, value));
+    const matches = (text: string) => [...reviewAnswerCandidates(text)].some(candidate => hash(candidate) === expected);
+    assert.ok(matches(display), display);
+    for (const other of rejected) assert.ok(!matches(other), other);
   }
   assert.equal(profileReviewDisplayValue("text", "text", "true"), "true");
   assert.equal(profileReviewDisplayValue("boolean", "radio_group", "true"), "true");
   assert.equal(profileReviewDisplayValue("boolean", "checkbox", "unknown"), "unknown");
-});
-
-
-test("month Review matching tolerates display padding without treating arbitrary numbers as dates", () => {
-  const expected = profileReviewDisplayValue("month", "month", "1");
-  assert.ok(reviewAnswerCandidates("01/2000").has(expected));
-  assert.ok(!reviewAnswerCandidates("02/2000").has(expected));
   assert.equal(profileReviewDisplayValue("text", "text", "1"), "1");
 });

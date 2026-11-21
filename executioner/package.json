@@ -9,6 +9,11 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "extension/**/*.js",
+    "extension/**/*.d.ts",
+    "extension/manifest.json",
+    "extension/popup.html",
+    "extension/popup.css",
     "docs/corpus-release.md",
     "docs/corpus-acceptance-summary.md"
   ],
@@ -20,8 +25,10 @@
   },
   "scripts": {
     "product": "node scripts/run-product.ts",
+    "mcp:product": "node src/product/mcp.ts",
     "test": "node tests/run.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build:page-runtime": "node scripts/build-page-runtime.mjs",
+    "build": "node scripts/build-page-runtime.mjs && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "quality": "npm run typecheck && npm test && npm run corpus:verify",

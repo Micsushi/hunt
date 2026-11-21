@@ -21,7 +21,9 @@ python scripts/run_local_smoke.py
 
 Check the C0 dashboard at `http://localhost:18090`:
 
-- Dashboard health cards show active DB, C1, and C2 state plus C3 v3 as planned
+- Dashboard health cards reflect actual DB, C1 and C2 availability
+- Applications reports the local C3 connection accurately; a remote backend
+  cannot reach a service on the operator computer through its own loopback address
 - Jobs page loads
 - Operator status page shows all services up
 

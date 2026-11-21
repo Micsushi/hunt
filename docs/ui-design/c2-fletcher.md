@@ -46,3 +46,9 @@ Scope: `/fletcher`, Option B queue/history, review workspace, diff document, ins
 - Review state comes from `review_package.json`.
 - Runtime settings come from `component_settings` with env fallback.
 - Batch history download is generated on demand from `fletcher_jobs` plus safe review artifact lookup; it is not stored as a durable artifact.
+
+## Source summary status
+
+For new `summary_origin: source` versions, display a concise origin label next to the existing workspace status. Compare the current draft summary with the generated summary, so unsaved edits and Undo report the right state. Saving or compiling does not clear origin metadata. Legacy versions without origin metadata receive no new provenance claim.
+
+An omitted summary is a partial output outcome, not an overall failed generation: history and workspace show the reason and the available no-summary PDF. Do not put this persistent outcome into import warnings or application-readiness warnings.

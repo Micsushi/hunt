@@ -9,7 +9,7 @@ This includes C1's requirements and Chroma for C2's optional retrieval workflow.
 
 | Version                           | Focus                                                                                                                                                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **~v0.1 (shipped in repo)**       | End-to-end pipeline, heuristic tailoring, optional Ollama for classification, keywords, rewrite/summary checks, DB/artifacts, `fletch`, review-app structured diff + highlights, Ansible Stage 7.          |
+| **~v0.1 (shipped in repo)**       | End-to-end pipeline, heuristic tailoring, optional Ollama for classification, keywords, rewrite checks, source-preserving summaries, DB/artifacts, `fletch`, review-app structured diff + highlights, Ansible Stage 7.          |
 | **v1 review workspace (current)** | DB-backed Option B queue, persistent run history, PDF/TeX import/export, full review workspace, structured resume editing, segment revert, manual block edit, compile, and shared job/attempt review flow. |
 | **v2.0 (deferred)**               | Rich interactive tailoring: gap/coverage, user-selected keywords, constrained regen, scoped AI edits, and deeper provider routing.                                                                         |
 
@@ -21,7 +21,7 @@ This includes C1's requirements and Chroma for C2's optional retrieval workflow.
   [resume checking](../docs/RESUME_CHECKING.md) for setup, APIs, and limitations.
 
 - Parse / render a neutral tracked **`main.tex`** template or an ignored personal source selected with `HUNT_OG_RESUME_PATH`. Optional family sources live as ignored `main.local.tex` files under `fletcher/base_resumes/<family>/`, or under `HUNT_BASE_RESUMES_ROOT`.
-- **Keywords** (`fletcher/keyword_extractor.py`): tiny draft from the job title when the backend is `heuristic`. With Ollama or another configured provider, Fletcher can fill metadata, judge JD usability, extract grounded keywords, rewrite bullets, validate rewrites, restore original inline `\textbf{...}` formatting for surviving rewritten phrases, normalize added Technical Skills phrases so their first letter is capitalized, and generate/validate summaries.
+- **Keywords** (`fletcher/keyword_extractor.py`): tiny draft from the job title when the backend is `heuristic`. With Ollama or another configured provider, Fletcher can fill metadata, judge JD usability, extract grounded keywords, rewrite bullets, validate rewrites, restore original inline `\textbf{...}` formatting for surviving rewritten phrases, normalize added Technical Skills phrases so their first letter is capitalized, and filter keywords for skills enrichment. Optional summaries copy original resume wording without model generation or validation.
 - **Heuristic** bullet scoring and selection (candidate profile + bullet library). Bullets are selected by relevance score. Keywords are never force-injected into unrelated bullets.
 - **LaTeX compile**, **one-page gate** with controlled retries.
 - **SQLite/Postgres**: `resume_attempts`, `resume_versions`, job latest/selected resume columns, `get_apply_context`, and DB-compatible C2 queue storage.
@@ -84,7 +84,7 @@ Both files are **gitignored**. They contain personal data. See the template for 
 | `HUNT_RESUME_LOG_LLM_IO`                                                                             | `1`                               | Write prompt + response to attempt dir (`0` to disable).                                                                         |
 | `HUNT_RESUME_LOG_LLM_MAX_CHARS`                                                                      | `120000`                          | Max chars captured from prompt/response.                                                                                         |
 
-The Settings page also exposes C2 component settings for provider, model, cloud confirmation, redacted provider API keys, Ollama host/model/timeout/keep-alive, rewrite parallelism/memory guards, prompt policy, keyword limits, and summary/rewrite guardrails. UI settings override environment fallbacks through `component_settings`.
+The Settings page also exposes C2 component settings for provider, model, cloud confirmation, redacted provider API keys, Ollama host/model/timeout/keep-alive, rewrite parallelism/memory guards, prompt policy, keyword limits, skills-keyword policy, and rewrite guardrails. UI settings override environment fallbacks through `component_settings`.
 
 ### Operator entrypoints
 
@@ -153,3 +153,13 @@ Requires `pdflatex` and optionally `pdfinfo` on PATH for full pipeline tests. Un
 - Running job cancellation is best-effort.
 - PDF import supports text PDFs only. Scanned/image-only PDFs need OCR or manual conversion later.
 - The provider abstraction exists, but C2 pipeline migration is incremental: some lower-level paths still use the older `llm_enrich.py` compatibility layer.
+
+### Source-preserving summaries
+
+Automatic summaries retain the uploaded resume's nonblank summary verbatim. Otherwise, they copy up to two complete retained original bullets with their role or project attribution. Rewritten bullets are not used as evidence. This proves where wording came from, not that the user's claims are independently verified. The same contract applies to queue and CLI generation.
+
+The optional summary PDF is compiled once after the no-summary PDF succeeds. It never removes more resume content, truncates a source statement, or pads wording to meet a line target. An empty source, compile failure, unknown page count, or overflow omits only the summary variant; history and the workspace explain why and keep the successful no-summary PDF available. Original wording and provenance are retained in `source_summary.json`.
+
+New source-based summary versions show their origin in the workspace. Unsaved edits change that label immediately; Undo restores it. Saving, compiling and reopening preserve the origin metadata. Existing packages without this metadata retain their previous behavior. Bullet-rewrite fidelity is a separate contract.
+
+Source entries with one bullet are retained when they fit. Page fitting may remove an entry to produce a one-page resume, but it does not invent a second bullet. If the remaining entry still cannot fit, generation reports that failure instead of publishing an oversized resume.

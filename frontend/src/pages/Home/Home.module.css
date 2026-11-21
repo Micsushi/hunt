@@ -136,11 +136,6 @@
   color: var(--muted);
 }
 
-.meta {
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
 .segmented {
   display: flex;
   border: 1px solid var(--line);

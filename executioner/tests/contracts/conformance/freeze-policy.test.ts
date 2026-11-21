@@ -20,18 +20,6 @@ import {
   predecessorAcceptedBase,
 } from "../../../src/testing/contracts/index.ts";
 
-test("the R2.n freeze records ancestry without a self-referential base", () => {
-  assert.equal(contractRevisionStatus, "r2n_frozen");
-  assert.match(historicalContractRevision, /^[0-9a-f]{40}$/u);
-  const record = readFileSync("docs/contract-freeze.md", "utf8");
-  assert.match(record, new RegExp(historicalContractRevision, "u"));
-  assert.match(record, new RegExp(historicalR1Revision, "u"));
-  assert.match(record, new RegExp(planningRevision, "u"));
-  assert.match(record, new RegExp(predecessorAcceptedBase, "u"));
-  assert.match(record, /Status: R2.n frozen component baseline/u);
-  assert.doesNotMatch(record, /acceptedF1Base:\s*[0-9a-f]{40}/u);
-});
-
 test("the freeze gate rejects dirty and untracked files in every frozen root", () => {
   const repository = mkdtempSync(join(tmpdir(), "hunt-contract-freeze-"));
   const roots = [

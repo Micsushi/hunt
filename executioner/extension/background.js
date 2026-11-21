@@ -1,12 +1,24 @@
+import { listPageTabs, pageAction, pageActionTabs } from './page-actions.js';
+import { workdayAccountCommand } from './workday-account.js';
+const accountSessions = new Map();
+const instanceId = crypto.randomUUID();
+let reloadPending = false;
+import { registerWebsiteHandoff } from './website-handoff.js';
+import { preparePageViewport, viewportOwnership, viewportCleanupPending } from './page-viewport.js';
 const origin = 'http://127.0.0.1:47831';
 let socket, heartbeat, socketToken, reconnect;
 const attached = new Map();
+const browserVersion = () => `${navigator.brave ? 'Brave' : 'Chrome'}/${navigator.userAgent.match(/(?:Chrome|Chromium)\/([\d.]+)/)?.[1] || 'unknown'}`;
 const retryTabs = new Map();
 const attachmentChanges = new Set();
 let cleanup = Promise.resolve();
 function supported(value) {
   try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && !u.port && (/^[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com$/i.test(u.hostname) || ['job-boards.greenhouse.io','boards.greenhouse.io','job-boards.eu.greenhouse.io','jobs.lever.co','jobs.eu.lever.co','jobs.ashbyhq.com','apply.workable.com'].includes(u.hostname)); }
   catch { return false; }
+}
+function exactGenericUrl(value) {
+  try { const url=new URL(value); if(url.protocol!=='https:'||url.username||url.password||url.port)return null;url.hash='';return url.href; }
+  catch { return null; }
 }
 function send(value) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); }
 async function connect() {
@@ -28,10 +40,12 @@ async function connect() {
   connection.onclose = () => {
     if (socket !== connection) return;
     clearInterval(heartbeat);
+    for (const [tabId, owner] of accountSessions) if (owner.connection === connection) { accountSessions.delete(tabId); pageActionTabs.delete(tabId); }
     // An attach may still be awaiting Chrome when the socket closes.
     cleanup = Promise.allSettled([...attachmentChanges]).then(async () => {
       await Promise.all([...attached].filter(([, owner]) => owner.connection === connection).map(async ([tabId, owner]) => {
         if (attached.get(tabId) === owner) attached.delete(tabId);
+        await owner.restoreViewport?.().catch(() => {});
         await chrome.debugger.detach({ tabId }).catch(() => {});
       }));
     });
@@ -55,16 +69,39 @@ function command(method, params, connection = socket) {
 }
 async function executeCommand(method, params, connection) {
   let tabId = params.tabId;
+  if (method === 'agentStatus') return {version:chrome.runtime.getManifest().version,browser:browserVersion(),extensionId:chrome.runtime.id,instanceId,reloadPending,capabilities:['pageAction-v1','pageAction-v2','question-matching-v1','website-handoff-v1','generic-attach-v1','workday-account-v1','workday-create-account-v1','workday-account-fill-v1','workday-page-v1','self-reload-v1']};
+  if (reloadPending) throw new Error('Hunt is reloading. Wait for it to reconnect.');
+  if (method === 'reloadExtension') {
+    if (connection !== socket || connection.readyState !== WebSocket.OPEN || attached.size || accountSessions.size || pageActionTabs.size || attachmentChanges.size) throw new Error('Pause active C3 operations before reloading the extension.');
+    reloadPending = true;
+    // Acknowledge first; Chrome then reloads only this extension from its installed folder.
+    setTimeout(() => chrome.runtime.reload(), 250);
+    return {accepted:true,instanceId};
+  }
+  if (method === 'workdayAccount') return workdayAccountCommand(chrome, accountSessions, attached, pageActionTabs, params, connection);
+  if (method === 'browserDiagnostics') return (await chrome.debugger.getTargets()).map(target=>{
+    let extensionOrigin;
+    try { const url=new URL(target.url);if(url.protocol==='chrome-extension:' && /^[a-p]{32}$/.test(url.hostname))extensionOrigin=`chrome-extension://${url.hostname}`; } catch {}
+    return {targetId:target.id,type:['page','background_page','worker','service_worker'].includes(target.type)?target.type:'other',
+      attached:target.attached===true,...(Number.isSafeInteger(target.tabId)?{tabId:target.tabId}:{}),...(extensionOrigin?{extensionOrigin}:{})};
+  });
+  if (method === 'pageTabs') return listPageTabs();
+  if (method === 'pageAction') return pageAction(params, attached);
   if (method === 'version') return { protocolVersion: '1.3', product: navigator.userAgent.match(/(?:Chrome|Chromium)\/[\d.]+/)?.[0] || 'Chrome/125.0.0.0', revision: 'c3', userAgent: navigator.userAgent, jsVersion: 'V8' };
   if (method === 'focus') {
     const tab = await chrome.tabs.get(tabId);
-    if (!supported(tab.url)) throw new Error('This tab no longer shows a supported application.');
+    const genericUrl=params.generic===true?exactGenericUrl(params.url):null;
+    if (params.generic===true ? !genericUrl || exactGenericUrl(tab.url)!==genericUrl : !supported(tab.url)) throw new Error('This tab no longer shows the selected application.');
     await chrome.tabs.update(tabId, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true }); return {};
   }
   if (method === 'attach') {
+    if (pageActionTabs.has(tabId)) throw new Error('C3 is already operating this tab.');
     if (connection !== socket || connection.readyState !== WebSocket.OPEN) throw new Error('Browser connection closed during attachment. Retry this job.');
-    if (!supported(params.url)) throw new Error('Use a supported job posting link.');
+    // Only the authenticated service can admit a generic target. Bind its exact document.
+    const genericUrl=params.generic===true?exactGenericUrl(params.url):null;
+    if (params.generic===true?!genericUrl:!supported(params.url)) throw new Error('Use a supported job posting link.');
+    const matches=value=>genericUrl?exactGenericUrl(value)===genericUrl:supported(value)&&new URL(value).hostname===new URL(params.url).hostname;
     if (!tabId && !params.existingOnly) tabId = retryTabs.get(params.url);
     let tab, created = false;
     if (tabId) {
@@ -78,35 +115,54 @@ async function executeCommand(method, params, connection) {
       // Keep failed opens recoverable without closing a tab the user may inspect.
       retryTabs.set(params.url, tab.id);
     }
-    if (!supported(tab.url || tab.pendingUrl) || new URL(tab.url || tab.pendingUrl).hostname !== new URL(params.url).hostname) throw new Error('The selected tab does not match this job.');
+    if (!matches(tab.url || tab.pendingUrl)) throw new Error('The selected tab does not match this job.');
     tabId = tab.id;
     const waking = tab.discarded;
     if (waking) await chrome.tabs.reload(tabId);
     const deadline = Date.now() + 30_000;
     if (waking) tab = await chrome.tabs.get(tabId);
-    while ((!supported(tab.url) || (waking || created) && (tab.discarded || tab.status !== 'complete')) && Date.now() < deadline) {
+    while ((!matches(tab.url) || (waking || created) && (tab.discarded || tab.status !== 'complete')) && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 100));
       tab = await chrome.tabs.get(tabId);
     }
-    if (!supported(tab.url) || (waking || created) && (tab.discarded || tab.status !== 'complete') || new URL(tab.url).hostname !== new URL(params.url).hostname) throw new Error('The job page did not load. Retry when the site is available.');
+    if (!matches(tab.url) || (waking || created) && (tab.discarded || tab.status !== 'complete')) throw new Error('The job page did not load. Retry when the site is available.');
     if (attached.has(tabId)) throw new Error('This tab is already running.');
     if (connection !== socket || connection.readyState !== WebSocket.OPEN) throw new Error('Browser connection closed during attachment. Retry this job.');
     await chrome.debugger.attach({ tabId }, '1.3');
+    let restoreViewport = async () => {};
     try {
       const target = (await chrome.debugger.getTargets()).find(t => t.tabId === tabId);
       if (!target || connection !== socket || connection.readyState !== WebSocket.OPEN) throw new Error('Browser connection closed during attachment. Retry this job.');
-      attached.set(tabId, { targetId: target.id, host: new URL(params.url).hostname, connection });
+      const viewportOwner=viewportOwnership(target.id);
+      restoreViewport = await preparePageViewport((method,values={})=>chrome.debugger.sendCommand({tabId},method,values),viewportOwner);
+      if (connection !== socket || connection.readyState !== WebSocket.OPEN) throw new Error('Browser connection closed during attachment. Retry this job.');
+      const documentId=genericUrl?(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame?.loaderId:undefined;
+      if(genericUrl&&!documentId)throw new Error('The application document could not be verified.');
+      attached.set(tabId, { targetId: target.id, host: new URL(params.url).hostname, genericUrl, documentId, connection, restoreViewport, viewportOwner });
       return { tabId, targetId: target.id };
     } catch (error) {
+      let cleanupFailed=false;
+      await restoreViewport().catch(() => {cleanupFailed=true;});
       await chrome.debugger.detach({ tabId }).catch(() => {});
+      if(cleanupFailed)throw new Error(viewportCleanupPending);
       throw error;
     }
   }
   const owned = attached.get(tabId);
   if (!owned) throw new Error('This tab is not attached to C3.');
-  if (method === 'detach') { attached.delete(tabId); await chrome.debugger.detach({ tabId }); return {}; }
+  if (method === 'detach') {
+    attached.delete(tabId);let cleanupFailed=false;
+    await owned.restoreViewport?.().catch(() => {cleanupFailed=true;});
+    try { await chrome.debugger.detach({ tabId }); }
+    catch(error) { if(!cleanupFailed)throw error; }
+    if(cleanupFailed)throw new Error(viewportCleanupPending);
+    return {};
+  }
   const tab = await chrome.tabs.get(tabId);
-  if (!supported(tab.url) || new URL(tab.url).hostname !== owned.host) throw new Error('The selected tab left its supported job site.');
+  if (owned.genericUrl) {
+    if(exactGenericUrl(tab.url)!==owned.genericUrl||(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame?.loaderId!==owned.documentId)throw new Error('The application document changed. Inspect it before retrying.');
+    if(method==='cdp'&&['Page.navigate','Page.reload','Page.navigateToHistoryEntry'].includes(params.method))throw new Error('Unfamiliar applications must stay on the current page.');
+  } else if (!supported(tab.url) || new URL(tab.url).hostname !== owned.host) throw new Error('The selected tab left its supported job site.');
   if (method === 'info') return { targetId: owned.targetId, browserContextId: 'c3-default', type: 'page', title: tab.title || '', url: tab.url, attached: true, canAccessOpener: false };
   if (method === 'cdp') {
     if (params.method === 'Page.navigate' && (!supported(params.params.url) || new URL(params.params.url).hostname !== owned.host)) throw new Error('Navigation outside the selected employer is blocked.');
@@ -117,21 +173,39 @@ async function executeCommand(method, params, connection) {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (attached.get(source.tabId)?.connection === socket) send({ method: 'event', params: { tabId: source.tabId, sessionId: source.sessionId, method, params } });
 });
-chrome.debugger.onDetach.addListener(async source => {
+chrome.debugger.onDetach.addListener(async (source, reason) => {
   const owner = attached.get(source.tabId);
   if (!owner) return;
   // A delayed old detach event must not invalidate a newly attached session.
   const targets = await chrome.debugger.getTargets().catch(() => null);
   if (!targets || attached.get(source.tabId) !== owner || targets.some(target => target.tabId === source.tabId && target.attached)) return;
   attached.delete(source.tabId);
-  if (owner.connection === socket) send({ method: 'detached', params: { tabId: source.tabId } });
+  if (owner.connection === socket) send({ method: 'detached', params: { tabId: source.tabId, reason:['target_closed','canceled_by_user'].includes(reason)?reason:'unspecified_or_other', viewportCleanupPending:await owner.viewportOwner?.has().catch(()=>false)===true } });
 });
 chrome.tabs.onRemoved?.addListener(tabId => {
   for (const [url, id] of retryTabs) if (id === tabId) retryTabs.delete(url);
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
+  if (message.action === 'connectionStatus' && sender.url === chrome.runtime.getURL('popup.html')) {
+    respond({connected:socket?.readyState === WebSocket.OPEN,version:chrome.runtime.getManifest().version,browser:browserVersion()}); return;
+  }
+  if (message.action === 'pageAction' && sender.url === chrome.runtime.getURL('popup.html')) {
+    const expiresAt = Math.min(Date.now()+12000,Number.isFinite(message.expiresAt) ? message.expiresAt : Infinity);
+    (async()=>{
+      const {token} = await chrome.storage.local.get('token');
+      if(Date.now()>=expiresAt)throw new Error('The page action expired. Inspect the draft before retrying.');
+      // The service validates live profile mode and queued resume ownership for every entry point.
+      const response=await fetch(origin+'/browser/page',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify({operation:message.operation,tabId:message.tabId,expectedUrl:message.expectedUrl,documentId:message.documentId,expiresAt}),signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),redirect:'error'});
+      const result=await response.json();
+      if(!response.ok)throw new Error(response.status===404?'Update the local C3 app before filling this page.':typeof result?.error==='string'?result.error:'C3 could not confirm this page action. Inspect the draft before retrying.');
+      return result;
+    })().then(result=>respond({ok:true,result})).catch(error=>respond({ok:false,error:error.message}));
+    return true;
+  }
   if (message.action === 'connect') { connect().then(() => respond({ ok: true })).catch(() => respond({ ok: false, error: 'Could not connect to C3.' })); return true; }
 });
 chrome.runtime.onStartup.addListener(connect);
+chrome.runtime.onInstalled?.addListener(connect);
+registerWebsiteHandoff(chrome, () => socket?.readyState === WebSocket.OPEN);
 void connect();

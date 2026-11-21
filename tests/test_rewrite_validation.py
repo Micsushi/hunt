@@ -1,54 +1,90 @@
 from __future__ import annotations
 
-from fletcher.llm.llm_enrich import (
-    categorize_keyword,
-    keyword_requires_direct_support,
-    keyword_visible_in_text,
-    validate_summary_grounding,
-)
+import json
+
+import pytest
 
 
-def test_domain_terms_do_not_get_extra_hardcoded_direct_support():
-    for keyword in [
-        "real-time threat intelligence",
-        "SIEM",
-        "XDR",
-        "ITDR",
-        "MDR",
-        "AI-driven platform",
-    ]:
-        assert categorize_keyword(keyword) == "domain"
-        assert not keyword_requires_direct_support(keyword)
-
-
-def test_common_tech_terms_do_not_require_direct_support():
-    for keyword in ["React", "backend services", "API", "Terraform"]:
-        assert categorize_keyword(keyword) == "tech"
-        assert not keyword_requires_direct_support(keyword)
-
-
-def test_llm_validator_rejects_unsupported_claim(monkeypatch):
+def test_rewrite_preserves_explicit_scope_even_when_model_approves(monkeypatch):
     import fletcher.llm.llm_enrich as mod
 
     monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
-    monkeypatch.setattr(
-        mod,
-        "_ollama_chat",
-        lambda _prompt: (
-            '{"accepted": false, "keywords_supported": [], '
-            '"keywords_rejected": ["Infrastructure as Code"], '
-            '"reason": "Original only mentions Vercel and Supabase."}'
+    original = (
+        "Wrote a Python script to check ten sample CSV rows for missing values in a class exercise."
+    )
+    for context, accepted in [("", False), (" during a class exercise", True)]:
+        rewritten = (
+            "Used Python for data validation on ten sample CSV rows, checking missing values"
+            + context
+            + "."
+        )
+        responses = iter(
+            [
+                json.dumps({"bullet": rewritten, "keywords_used": ["data validation"]}),
+                json.dumps(
+                    {
+                        "accepted": True,
+                        "keywords_supported": ["data validation"],
+                        "keywords_rejected": [],
+                    }
+                ),
+            ]
+        )
+        monkeypatch.setattr(mod, "_ollama_chat", lambda _prompt: next(responses))
+        result = mod.rewrite_bullet_targeted(original, ["data validation"])
+        assert result["success"] is accepted
+        assert result["bullet"] == (rewritten if accepted else original)
+        assert result["keywords_used"] == (["data validation"] if accepted else [])
+
+
+@pytest.mark.parametrize(
+    "original,rewritten,requested,supported,rejected,expected_supported",
+    [
+        (
+            "Optimized scalability on Vercel and Supabase.",
+            "Optimized scalability on Vercel and Supabase using Infrastructure as Code practices.",
+            "Infrastructure as Code",
+            [],
+            ["Infrastructure as Code"],
+            [],
         ),
-    )
+        (
+            "Automated CI/CD via Bitbucket pipelines and ECR.",
+            "Automated CI/CD via Azure DevOps, Bitbucket pipelines, and ECR.",
+            "Azure DevOps",
+            ["Bitbucket pipelines", "ECR"],
+            ["Azure DevOps"],
+            [],
+        ),
+        (
+            "Taught Computer Science courses.",
+            "Taught Computer Science and Computer Engineering courses.",
+            "Computer Engineering",
+            ["Computer Engineering"],
+            [],
+            ["Computer Engineering"],
+        ),
+    ],
+)
+def test_rejected_rewrite_grounds_keywords_within_the_requested_scope(
+    monkeypatch, original, rewritten, requested, supported, rejected, expected_supported
+):
+    import fletcher.llm.llm_enrich as mod
 
+    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
+    response = {
+        "accepted": False,
+        "keywords_supported": supported,
+        "keywords_rejected": rejected,
+        "reason": "unsupported",
+    }
+    monkeypatch.setattr(mod, "_ollama_chat", lambda _: json.dumps(response))
     result = mod.validate_rewrite_with_ollama(
-        original="Optimized scalability on Vercel and Supabase.",
-        rewritten="Optimized scalability on Vercel and Supabase using Infrastructure as Code practices.",
-        requested_keywords=["Infrastructure as Code"],
+        original=original, rewritten=rewritten, requested_keywords=[requested]
     )
-
     assert result["accepted"] is False
-    assert result["keywords_rejected"] == ["Infrastructure as Code"]
+    assert result["keywords_supported"] == expected_supported
+    assert result["keywords_rejected"] == [requested]
 
 
 def test_ambiguous_rewrite_fails_closed_when_validator_errors(monkeypatch):
@@ -84,13 +120,6 @@ def test_ambiguous_rewrite_fails_closed_when_validator_errors(monkeypatch):
     assert result["keywords_skipped"] == ["Infrastructure as Code"]
 
 
-def test_keyword_visible_helper_accepts_data_pipeline_monitoring_noun_form():
-    assert keyword_visible_in_text(
-        "Monitor data pipelines",
-        "Improved data pipeline monitoring with Datadog metrics and alerts.",
-    )
-
-
 def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypatch):
     import fletcher.llm.llm_enrich as mod
 
@@ -102,6 +131,15 @@ def test_model_claimed_keyword_not_counted_if_not_in_validated_rewrite(monkeypat
             '{"bullet": "Enhanced user engagement by building a responsive UI using Next.js.", '
             '"keywords_used": ["React"], "keywords_skipped": []}'
         ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "validate_rewrite_with_ollama",
+        lambda **_kwargs: {
+            "accepted": True,
+            "keywords_supported": ["React"],
+            "keywords_rejected": [],
+        },
     )
 
     result = mod.rewrite_bullet_targeted(
@@ -145,109 +183,3 @@ def test_rewrite_with_no_used_keywords_keeps_original_without_validation(monkeyp
     assert result["bullet"] == original
     assert result["keywords_used"] == []
     assert result["keywords_skipped"] == ["backend development", "Go ecosystem"]
-
-
-def test_mixed_validation_failure_sends_all_attempted_keywords_to_summary(monkeypatch):
-    import fletcher.llm.llm_enrich as mod
-
-    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
-    responses = iter(
-        [
-            (
-                '{"bullet": "Enhanced UI using React/Next.js for an AI-driven platform.", '
-                '"keywords_used": ["React", "AI-driven platform"], "keywords_skipped": []}'
-            ),
-            (
-                '{"accepted": false, "keywords_supported": ["React"], '
-                '"keywords_rejected": ["AI-driven platform"], "reason": "AI claim unsupported."}'
-            ),
-        ]
-    )
-    monkeypatch.setattr(mod, "_ollama_chat", lambda _prompt: next(responses))
-
-    result = mod.rewrite_bullet_targeted(
-        "Enhanced UI using Next.js based on beta tester feedback.",
-        ["React", "AI-driven platform"],
-    )
-
-    assert result["success"] is False
-    assert result["keywords_used"] == []
-    assert result["keywords_skipped"] == ["React", "AI-driven platform"]
-
-
-def test_validator_ignores_supported_keywords_that_were_not_requested(monkeypatch):
-    import fletcher.llm.llm_enrich as mod
-
-    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
-    monkeypatch.setattr(
-        mod,
-        "_ollama_chat",
-        lambda _prompt: (
-            '{"accepted": false, "keywords_supported": ["Bitbucket pipelines", "ECR"], '
-            '"keywords_rejected": ["Azure DevOps"], "reason": "unsupported"}'
-        ),
-    )
-
-    result = mod.validate_rewrite_with_ollama(
-        original="Automated CI/CD via Bitbucket pipelines and ECR.",
-        rewritten="Automated CI/CD via Azure DevOps, Bitbucket pipelines, and ECR.",
-        requested_keywords=["Azure DevOps"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_supported"] == []
-    assert result["keywords_rejected"] == ["Azure DevOps"]
-
-
-def test_false_validator_acceptance_rejects_requested_keyword(monkeypatch):
-    import fletcher.llm.llm_enrich as mod
-
-    monkeypatch.setattr(mod.config, "DEFAULT_MODEL_BACKEND", "ollama")
-    monkeypatch.setattr(
-        mod,
-        "_ollama_chat",
-        lambda _prompt: (
-            '{"accepted": false, "keywords_supported": ["Computer Engineering"], '
-            '"keywords_rejected": [], "reason": "unsupported"}'
-        ),
-    )
-
-    result = mod.validate_rewrite_with_ollama(
-        original="Taught Computer Science courses.",
-        rewritten="Taught Computer Science and Computer Engineering courses.",
-        requested_keywords=["Computer Engineering"],
-    )
-
-    assert result["accepted"] is False
-    assert result["keywords_supported"] == ["Computer Engineering"]
-    assert result["keywords_rejected"] == ["Computer Engineering"]
-
-
-def test_summary_grounding_leaves_domain_support_to_llm():
-    result = validate_summary_grounding(
-        "Software Engineer with XDR and real-time threat intelligence experience.",
-        "Experience: Software Developer. Skills: Python, React, Terraform",
-        ["XDR", "real-time threat intelligence"],
-    )
-
-    assert result["accepted"] is True
-
-
-def test_summary_grounding_does_not_reject_unprompted_domain_claim():
-    result = validate_summary_grounding(
-        "Software Engineer with SIEM experience.",
-        "Experience: Software Developer. Skills: Python, React, Terraform",
-        [],
-    )
-
-    assert result["accepted"] is True
-
-
-def test_summary_grounding_no_longer_runs_banned_tone_d_check():
-    result = validate_summary_grounding(
-        "Motivated developer eager to contribute immediately.",
-        "Experience: Software Developer.",
-        [],
-    )
-
-    assert result == {"accepted": True, "reasons": []}

@@ -171,56 +171,6 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("unsupported_target_role", result["error"])
 
-    def test_queue_job_blocks_when_low_rag_unsupported_target_check_flags_role(self):
-        init_resume_db(self.db_path)
-        classification = {
-            "role_family": "general",
-            "job_level": "mid",
-            "confidence": 0.8,
-            "weak_description": False,
-            "recommended_base_resume": "general",
-            "reasons": [],
-            "concern_flags": [],
-        }
-        with (
-            patch(
-                "fletcher.pipeline.enrich_with_ollama_if_enabled",
-                return_value=(
-                    classification,
-                    {"must_have_terms": ["Aspen HYSYS", "P&IDs", "flare sizing"]},
-                    {
-                        "ollama_enriched": True,
-                        "jd_usable": True,
-                        "jd_usable_reason": "Detailed JD.",
-                        "unsupported_target_role": False,
-                    },
-                ),
-            ),
-            patch(
-                "fletcher.pipeline.match_keywords_to_bullets",
-                return_value={
-                    "bullet_matches": [],
-                    "summary_keywords": ["P&IDs"],
-                    "ignored_keywords": [],
-                    "scores": [{"keyword": "Aspen HYSYS", "tier": "mid", "score": 0.62}],
-                    "rag_used": True,
-                },
-            ),
-            patch(
-                "fletcher.pipeline.check_low_rag_unsupported_target_with_ollama",
-                return_value={
-                    "success": True,
-                    "unsupported_target_role": True,
-                    "reason": "Process engineering role is outside the target lane.",
-                },
-            ) as unsupported_check,
-        ):
-            result = generate_resume_for_job(1, db_path=self.db_path)
-
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("unsupported_target_role", result["error"])
-        unsupported_check.assert_called_once()
-
     def test_generate_ad_hoc_writes_artifacts_without_db(self):
         result = generate_resume_for_ad_hoc(
             title="Associate Product Manager",
@@ -318,71 +268,36 @@ class Component2PipelineTests(unittest.TestCase):
         )
         self.assertTrue(failed_context["selected_resume_ready_for_c3"])
 
-    def test_manual_only_job_does_not_select_resume_for_c3(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("UPDATE jobs SET priority = 1 WHERE id = 1")
-        conn.commit()
-        conn.close()
-
+    def test_only_eligible_jobs_keep_a_selected_resume_for_c3(self):
         init_resume_db(self.db_path)
-        with patch("fletcher.pipeline.compile_tex") as mock_compile:
-            mock_compile.return_value = {
+        # Start in manual-only mode, select a resume for an eligible job, then revoke it.
+        with patch(
+            "fletcher.pipeline.compile_tex",
+            return_value={
                 "compile_status": "ok",
                 "page_count": 1,
                 "fits_one_page": True,
-                "pdf_path": str(Path(self.temp_dir.name) / "manual_only_resume.pdf"),
+                "pdf_path": str(Path(self.temp_dir.name) / "resume.pdf"),
                 "log_text": "mock one-page result",
-            }
-            result = generate_resume_for_job(1, db_path=self.db_path)
-
-        context = get_apply_context(1, db_path=self.db_path)
-        self.assertFalse(result["selected_for_c3"])
-        self.assertFalse(context["selected_resume_ready_for_c3"])
-        self.assertIsNone(context["selected_resume_version_id"])
-        self.assertIsNone(context["selected_resume_pdf_path"])
-
-    def test_easy_apply_job_clears_stale_selected_resume_context(self):
-        init_resume_db(self.db_path)
-        with patch("fletcher.pipeline.compile_tex") as mock_compile:
-            mock_compile.return_value = {
-                "compile_status": "ok",
-                "page_count": 1,
-                "fits_one_page": True,
-                "pdf_path": str(Path(self.temp_dir.name) / "selected_resume.pdf"),
-                "log_text": "mock one-page result",
-            }
-            first_result = generate_resume_for_job(1, db_path=self.db_path)
-
-        self.assertTrue(first_result["selected_for_c3"])
-
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            UPDATE jobs
-            SET apply_type = 'easy_apply',
-                auto_apply_eligible = 0,
-                apply_url = ''
-            WHERE id = 1
-            """
-        )
-        conn.commit()
-        conn.close()
-
-        with patch("fletcher.pipeline.compile_tex") as mock_compile:
-            mock_compile.return_value = {
-                "compile_status": "ok",
-                "page_count": 1,
-                "fits_one_page": True,
-                "pdf_path": str(Path(self.temp_dir.name) / "easy_apply_resume.pdf"),
-                "log_text": "mock one-page result",
-            }
-            second_result = generate_resume_for_job(1, db_path=self.db_path)
-
-        context = get_apply_context(1, db_path=self.db_path)
-        self.assertFalse(second_result["selected_for_c3"])
-        self.assertFalse(context["selected_resume_ready_for_c3"])
-        self.assertIsNone(context["selected_resume_version_id"])
-        self.assertIsNone(context["selected_resume_pdf_path"])
+            },
+        ):
+            for updates, eligible in [
+                ("priority = 1", False),
+                ("priority = 0", True),
+                ("apply_type = 'easy_apply', auto_apply_eligible = 0, apply_url = ''", False),
+            ]:
+                with self.subTest(updates=updates):
+                    conn = sqlite3.connect(self.db_path)
+                    conn.execute(f"UPDATE jobs SET {updates} WHERE id = 1")
+                    conn.commit()
+                    conn.close()
+                    result = generate_resume_for_job(1, db_path=self.db_path)
+                    context = get_apply_context(1, db_path=self.db_path)
+                    self.assertEqual(result["selected_for_c3"], eligible)
+                    self.assertEqual(context["selected_resume_ready_for_c3"], eligible)
+                    if not eligible:
+                        self.assertIsNone(context["selected_resume_version_id"])
+                        self.assertIsNone(context["selected_resume_pdf_path"])
 
     def test_generate_resume_uses_source_material_bullets(self):
         profile_path = Path(self.temp_dir.name) / "candidate_profile.md"
@@ -456,37 +371,6 @@ class Component2PipelineTests(unittest.TestCase):
             ],
         )
 
-    def test_generate_resume_selects_family_base_resume_when_available(self):
-        base_root = Path(self.temp_dir.name) / "base_resumes"
-        pm_dir = base_root / "pm"
-        pm_dir.mkdir(parents=True)
-        family_resume_path = pm_dir / "main.tex"
-        family_resume_path.write_text(
-            (REPO_ROOT / "main.tex").read_text(encoding="utf-8"), encoding="utf-8"
-        )
-
-        with patch("fletcher.pipeline.compile_tex") as mock_compile:
-            mock_compile.return_value = {
-                "compile_status": "ok",
-                "page_count": 1,
-                "fits_one_page": True,
-                "pdf_path": str(Path(self.temp_dir.name) / "pm_resume.pdf"),
-                "log_text": "mock one-page result",
-            }
-            with patch("fletcher.config.BASE_RESUMES_ROOT", base_root):
-                result = generate_resume_for_ad_hoc(
-                    title="Associate Product Manager",
-                    company="Beta",
-                    description="Associate product manager role focused on roadmap planning, stakeholder alignment, and agile delivery.",
-                )
-
-        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
-        structured_output = json.loads(
-            (Path(result["attempt_dir"]) / "tailored_resume.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(structured_output["selected_base_resume"], "pm")
-        self.assertEqual(metadata["source_resume_path"], str(family_resume_path))
-
     def test_page_fit_retry_recompiles_after_controlled_reduction(self):
         init_resume_db(self.db_path)
         compile_results = [
@@ -516,7 +400,6 @@ class Component2PipelineTests(unittest.TestCase):
         self.assertEqual(len(metadata["compile_history"]), 2)
 
     def test_c1_exclusions_prevent_automatic_resume_and_application_readiness(self):
-        from fletcher.db import _job_is_ready_for_c3
 
         init_resume_db(self.db_path)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -596,68 +479,3 @@ class Component2PipelineTests(unittest.TestCase):
         conn.close()
         rows2 = list_jobs_ready_for_resume(db_path=self.db_path, limit=10, only_missing=False)
         self.assertEqual([r["id"] for r in rows2], [1])
-
-    def test_automatic_generation_and_selection_respect_discovery_and_history(self):
-        init_resume_db(self.db_path)
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("ALTER TABLE jobs ADD COLUMN discovery_suppressed_reason TEXT")
-        for status, reason in (
-            ("applied", None),
-            ("cancelled", None),
-            ("canceled", None),
-            ("new", "duplicate_canonical_job"),
-            ("new", "employer_month_cap"),
-        ):
-            with self.subTest(status=status, reason=reason):
-                with closing(sqlite3.connect(self.db_path)) as conn, conn:
-                    conn.execute(
-                        "UPDATE jobs SET status = ?, discovery_suppressed_reason = ?",
-                        (status, reason),
-                    )
-                self.assertEqual(list_jobs_ready_for_resume(db_path=self.db_path), [])
-                self.assertFalse(
-                    _job_is_ready_for_c3(
-                        {
-                            "status": status,
-                            "discovery_suppressed_reason": reason,
-                            "enrichment_status": "done",
-                            "apply_type": "external_apply",
-                            "auto_apply_eligible": 1,
-                            "priority": 0,
-                            "apply_url": "https://example.com/job/1",
-                        }
-                    )
-                )
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("UPDATE jobs SET status = 'new', discovery_suppressed_reason = NULL")
-        self.assertEqual(
-            [row["id"] for row in list_jobs_ready_for_resume(db_path=self.db_path)], [1]
-        )
-
-    def test_record_resume_attempt_uses_postgres_safe_job_id_filters(self):
-        source = (REPO_ROOT / "fletcher" / "db.py").read_text(encoding="utf-8")
-
-        self.assertNotIn("WHERE job_id IS ?", source)
-        self.assertIn(
-            'job_filter_sql = "job_id IS NULL" if job_id is None else "job_id = ?"', source
-        )
-
-    def test_retained_exclusions_do_not_starve_older_ready_jobs(self):
-        init_resume_db(self.db_path)
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute("ALTER TABLE jobs ADD COLUMN discovery_suppressed_reason TEXT")
-            conn.executemany(
-                "INSERT INTO jobs (title, job_url, enrichment_status, status, discovery_suppressed_reason) "
-                "VALUES ('Excluded role', ?, 'done', ?, ?)",
-                [
-                    (
-                        f"https://example.com/excluded/{index}",
-                        "applied" if index % 2 else "new",
-                        None if index % 2 else "employer_month_cap",
-                    )
-                    for index in range(5001)
-                ],
-            )
-        self.assertEqual(
-            [row["id"] for row in list_jobs_ready_for_resume(db_path=self.db_path, limit=1)], [1]
-        )

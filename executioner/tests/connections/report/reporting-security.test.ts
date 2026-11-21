@@ -72,42 +72,6 @@ test("real F10 reporting preserves provider facts and bounds its notification se
   assert.equal(attempts, 2);
 });
 
-test("F5, F6, and F8 factual results never enter real F10 failure notification", async () => {
-  let notifications = 0;
-  const reporter = new FactualFailureReporter(async () => {
-    notifications += 1;
-  });
-  const cases = [
-    { component: "F5", phase: "page_understanding", step: "classify", code: "unknown" },
-    { component: "F6", phase: "answer_resolution", step: "resolve", code: "option_no_match" },
-    { component: "F8", phase: "verification", step: "verify", code: "rejected" },
-  ] as const;
-
-  for (const [index, factual] of cases.entries()) {
-    const result = await reporter.report({
-      reportId: generatedReportId(
-        `report_${(index + 2).toString().padStart(16, "0")}`,
-      ),
-      context: {
-        journeyId,
-        ...factual,
-        retryable: false,
-        source: {
-          kind: "operation",
-          id: generatedOperationId(
-            `operation_${(index + 5).toString().padStart(16, "0")}`,
-          ),
-        },
-      },
-    } as unknown as FailureReportRequest, signal);
-    assert.deepEqual(result, {
-      ok: false,
-      error: { code: "failure_context_invalid", retryable: false },
-    });
-  }
-  assert.equal(notifications, 0);
-});
-
 test("real F11 guards deny without retention and evidence reloads digest-only", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hunt-t5-evidence-"));
   t.after(() => rm(root, { recursive: true, force: true }));

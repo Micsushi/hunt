@@ -5,6 +5,7 @@ import type {
 } from "../../contracts/index.ts";
 import { normalizeCatalogText } from "../questions/normalize.ts";
 import { resolveOption } from "./catalog.ts";
+import { equivalentAnswer } from '../../deterministic/answer-equivalence.ts';
 
 type AnswerValue = Extract<
   ProfileAnswerResult,
@@ -30,11 +31,15 @@ function optionKey(value: string): string {
 export function mapVisibleOption(
   value: AnswerValue,
   options: FieldObservation["options"],
+  context = '',
 ): OptionMappingResult {
   const wanted = optionKey(
     typeof value === "boolean" ? (value ? "yes" : "no") : String(value),
   );
   let matches = options.filter(({ label }) => optionKey(label) === wanted);
+  if (matches.length === 0 && context && typeof value === 'string') {
+    matches = options.filter(({label})=>equivalentAnswer(label,value,context));
+  }
   // Employers often qualify a binary answer ("Yes, I am over 18").
   // Only accept one matching polarity; multiple qualified answers need more context.
   if (matches.length === 0 && typeof value === "boolean") {

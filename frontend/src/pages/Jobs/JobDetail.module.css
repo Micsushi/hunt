@@ -49,11 +49,10 @@
   background: var(--accent-soft);
 }
 
-.headerId {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--muted);
-  flex-shrink: 0;
+.jobTitle {
+  margin: 0;
+  font-size: 1.5rem;
+  overflow-wrap: anywhere;
 }
 
 .navBtns {
@@ -189,25 +188,12 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.serviceOk {
-  color: var(--good);
-  border-color: var(--good-soft);
-}
-.serviceOk .serviceDot {
-  background: var(--good);
-}
 .serviceDown {
   color: var(--danger);
   border-color: rgba(200, 50, 50, 0.2);
 }
 .serviceDown .serviceDot {
   background: var(--danger);
-}
-.serviceUnknown {
-  color: var(--muted);
-}
-.serviceUnknown .serviceDot {
-  background: var(--muted);
 }
 
 /* ── Description lock controls ─────────────────────── */
@@ -216,24 +202,6 @@
   align-items: center;
   gap: 8px;
   margin-left: auto;
-}
-
-.manualBadge {
-  font-size: 0.68rem;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--warning-soft);
-  color: var(--warning);
-  border: 1px solid rgba(132, 93, 0, 0.3);
-}
-.scrapedBadge {
-  font-size: 0.68rem;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-soft);
-  color: var(--good);
 }
 
 .lockToggle {

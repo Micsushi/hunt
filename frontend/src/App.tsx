@@ -87,15 +87,17 @@ export default function App() {
           ) : (
             <p role="status">Checking your session…</p>
           )}
-          <button
-            className={styles.submit}
-            aria-disabled={auth.isFetching}
-            onClick={() => {
-              if (!auth.isFetching) void auth.refetch()
-            }}
-          >
-            Retry
-          </button>
+          {auth.errorUpdatedAt > 0 && (
+            <button
+              className={styles.submit}
+              aria-disabled={auth.isFetching}
+              onClick={() => {
+                if (!auth.isFetching) void auth.refetch()
+              }}
+            >
+              {auth.isFetching ? 'Checking…' : 'Retry'}
+            </button>
+          )}
         </div>
       </main>
     )

@@ -472,6 +472,10 @@ export type BrowserTargetState =
     };
 
 export interface BrowserTargetObservation {
+  /** Complete overlength question, retained as evidence rather than a shortened match. */
+  readonly rawQuestion?: string;
+  /** Complete choice labels, aligned with the bounded structural option identities. */
+  readonly rawOptions?: readonly string[];
   readonly token: BrowserTargetToken;
   readonly name: BrowserReadbackText;
   readonly required: boolean;
@@ -812,6 +816,10 @@ export const uiBehaviorIds = [
 export type UiBehaviorId = (typeof uiBehaviorIds)[number];
 
 export interface FieldObservation {
+  /** Complete overlength question. Its bounded label is an opaque fallback marker. */
+  readonly rawQuestion?: string;
+  /** Complete choice labels, aligned with the bounded structural option identities. */
+  readonly rawOptions?: readonly string[];
   readonly fieldId: FieldId;
   readonly target: BrowserTargetToken;
   readonly label: BoundedText;

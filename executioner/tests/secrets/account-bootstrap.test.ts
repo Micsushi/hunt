@@ -57,18 +57,43 @@ function fixture() {
   return { root, forbidden, runtime, secrets, evidence, ownerConfigPath, input };
 }
 
-test("preflights and ACL-checks before sealing the exact configured account handle", async () => {
+test("account bootstrap rolls back denied records, seals the approved handle and preserves it on retry", async () => {
   const record = fixture();
   try {
-    const acl = new AclAdmission();
-    const sealer = new Sealer();
-    const result = await bootstrapS2AccountSecret(record.input, {
+    const bootstrap = (aclAdmission: AclAdmission, sealer: Sealer) => bootstrapS2AccountSecret(record.input, {
       now: NOW,
       ownerConfigPath: record.ownerConfigPath,
       forbiddenRoots: [record.forbidden],
-      aclAdmission: acl,
+      aclAdmission,
       sealer,
     }, new AbortController().signal);
+    const deniedSealer = new Sealer();
+    assert.deepEqual(await bootstrap(new AclAdmission([{
+      ok: false,
+      failure: { target: "secret_root", reason: "other_principal" },
+    }]), deniedSealer), {
+      ok: false,
+      error: { code: "secret_root_invalid" },
+    });
+    assert.equal(deniedSealer.calls, 0);
+
+    const deniedRecord = await bootstrap(new AclAdmission([
+      { ok: true },
+      { ok: false, failure: { target: "secret_record", reason: "other_principal" } },
+    ]), new Sealer());
+    assert.deepEqual(deniedRecord, {
+      ok: false,
+      error: { code: "account_record_acl_invalid" },
+    });
+    assert.equal(
+      existsSync(join(record.secrets, `${ACCOUNT_HANDLE}.s2secret`)),
+      false,
+    );
+    assert.equal(JSON.stringify(deniedRecord).includes(record.secrets), false);
+
+    const acl = new AclAdmission();
+    const sealer = new Sealer();
+    const result = await bootstrap(acl, sealer);
 
     assert.deepEqual(result, {
       ok: true,
@@ -92,70 +117,13 @@ test("preflights and ACL-checks before sealing the exact configured account hand
       join(record.secrets, `${ACCOUNT_HANDLE}.s2secret`),
     );
     assert.equal(JSON.stringify(result).includes(record.secrets), false);
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
 
-test("preflight denial and an existing handle fail before secure UI", async () => {
-  const record = fixture();
-  try {
-    const deniedSealer = new Sealer();
-    assert.deepEqual(await bootstrapS2AccountSecret(record.input, {
-      now: NOW,
-      ownerConfigPath: record.ownerConfigPath,
-      forbiddenRoots: [record.forbidden],
-      aclAdmission: new AclAdmission([{
-        ok: false,
-        failure: { target: "secret_root", reason: "other_principal" },
-      }]),
-      sealer: deniedSealer,
-    }, new AbortController().signal), {
-      ok: false,
-      error: { code: "secret_root_invalid" },
-    });
-    assert.equal(deniedSealer.calls, 0);
-
-    writeFileSync(join(record.secrets, `${ACCOUNT_HANDLE}.s2secret`), "existing");
     const existingSealer = new Sealer();
-    assert.deepEqual(await bootstrapS2AccountSecret(record.input, {
-      now: NOW,
-      ownerConfigPath: record.ownerConfigPath,
-      forbiddenRoots: [record.forbidden],
-      aclAdmission: new AclAdmission(),
-      sealer: existingSealer,
-    }, new AbortController().signal), {
+    assert.deepEqual(await bootstrap(new AclAdmission(), existingSealer), {
       ok: false,
       error: { code: "account_handle_exists" },
     });
     assert.equal(existingSealer.calls, 0);
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
-test("post-write ACL denial removes the exact record and emits no path", async () => {
-  const record = fixture();
-  try {
-    const result = await bootstrapS2AccountSecret(record.input, {
-      now: NOW,
-      ownerConfigPath: record.ownerConfigPath,
-      forbiddenRoots: [record.forbidden],
-      aclAdmission: new AclAdmission([
-        { ok: true },
-        { ok: false, failure: { target: "secret_record", reason: "other_principal" } },
-      ]),
-      sealer: new Sealer(),
-    }, new AbortController().signal);
-    assert.deepEqual(result, {
-      ok: false,
-      error: { code: "account_record_acl_invalid" },
-    });
-    assert.equal(
-      existsSync(join(record.secrets, `${ACCOUNT_HANDLE}.s2secret`)),
-      false,
-    );
-    assert.equal(JSON.stringify(result).includes(record.secrets), false);
   } finally {
     rmSync(record.root, { recursive: true, force: true });
   }

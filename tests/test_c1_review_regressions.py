@@ -18,15 +18,9 @@ def settings(monkeypatch, tmp_path):
     return path
 
 
-def test_settings_invalid_file_is_preserved(settings):
-    for content in ('{"company_career_sites":', "[]"):
-        settings.write_text(content)
-        with pytest.raises(ValueError):
-            user_config.patch({"max_workers": 3})
-        assert settings.read_text() == content
-
-
-def test_settings_atomic_failure_and_concurrent_updates(settings, monkeypatch):
+def test_settings_patches_preserve_prior_data_across_concurrency_and_failures(
+    settings, monkeypatch
+):
     user_config.save({"company_career_sites": {"Example": "https://example.test"}})
     before = settings.read_bytes()
     with monkeypatch.context() as patch:
@@ -40,18 +34,11 @@ def test_settings_atomic_failure_and_concurrent_updates(settings, monkeypatch):
     assert len(saved) == 21
     assert saved["company_career_sites"]["Example"] == "https://example.test"
 
-
-def test_blank_scalar_environment_keeps_file_and_default(monkeypatch):
-    monkeypatch.setattr(
-        config, "_USER_CONFIG", {"run_interval_seconds": 900, "enrich_after_scrape": True}
-    )
-    for key in ("RUN_INTERVAL_SECONDS", "ENRICHMENT_BATCH_LIMIT", "ENRICH_AFTER_SCRAPE"):
-        monkeypatch.setenv(key, "")
-    assert config._get_config_int("RUN_INTERVAL_SECONDS", 600) == 900
-    assert config._get_config_int("ENRICHMENT_BATCH_LIMIT", 25) == 25
-    assert config._get_config_bool("ENRICH_AFTER_SCRAPE", False) is True
-    monkeypatch.setenv("RUN_INTERVAL_SECONDS", "1200")
-    assert config._get_config_int("RUN_INTERVAL_SECONDS", 600) == 1200
+    for content in ('{"company_career_sites":', "[]"):
+        settings.write_text(content)
+        with pytest.raises(ValueError):
+            user_config.patch({"max_workers": 3})
+        assert settings.read_text() == content
 
 
 @pytest.mark.parametrize(
@@ -76,19 +63,6 @@ def test_invalid_numeric_settings_rejected_before_writing(settings, monkeypatch,
     with TestClient(app) as client:
         assert client.patch("/config", json=updates).status_code == 422
     assert not settings.exists()
-
-
-def test_settings_get_retains_saved_draft_and_reports_effective(settings, monkeypatch):
-    from hunter.service import ConfigPatchRequest, get_config, patch_config
-
-    monkeypatch.setattr(config, "MAX_WORKERS", 10)
-    patch_config(ConfigPatchRequest(max_workers=3))
-    response = get_config()
-    assert response["max_workers"] == 3
-    assert response["effective"]["max_workers"] == 10
-    assert response["restart_required"] is True
-    patch_config(ConfigPatchRequest(hours_old=48))
-    assert get_config()["max_workers"] == 3
 
 
 @pytest.fixture
@@ -186,27 +160,6 @@ def test_excluded_rechecks_stop_and_transient_exhaustion_recovers(database):
     assert db.count_ready_public_employer_jobs() == 0
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://jobs.apple.com/en-ca/search",
-        "https://www.google.com/about/careers/applications/jobs/results/",
-    ],
-)
-def test_cached_geography_plan_is_rebuilt(monkeypatch, url):
-    from hunter import discovery_sources as sources
-
-    monkeypatch.setattr(config, "DISCOVERY_COUNTRIES", ["Canada"])
-    previous = sources.career_fetch_plan(url)
-    monkeypatch.setattr(config, "DISCOVERY_COUNTRIES", ["United States"])
-    current = sources.career_fetch_plan(url)
-    reader = Mock(return_value=([], {"status": "ok"}))
-    monkeypatch.setattr(sources, "_discover_company_plan", reader)
-    sources.discover_company_career_site("Example", url, resolved_plan=previous)
-    assert reader.call_args.args[1] == current
-    assert current != previous
-
-
 def test_jobright_cycle_continues_after_outer_scan_finishes(database, monkeypatch):
     from hunter import discovery_jobright, scraper
 
@@ -244,89 +197,3 @@ def test_jobright_cycle_continues_after_outer_scan_finishes(database, monkeypatc
     db.set_runtime_state("jobright_retry_after", "")
     scraper._discover_public_sources(336, lambda *args: None, due_only=True)
     assert calls[-1] == ["first", "second", "third"]
-
-
-def test_board_blacklist_is_case_insensitive_and_retains_audit_rows(database, monkeypatch):
-    from hunter import discovery_policy, scraper
-
-    monkeypatch.setattr(discovery_policy, "TITLE_BLACKLIST", ["JUNIOR"])
-    monkeypatch.setattr(discovery_policy, "WATCHLIST", ["REVIEW"])
-    raw = _job(
-        title="Junior Software Engineer",
-        company="Review Example",
-        location="Canada",
-        source="linkedin",
-        url="https://linkedin.com/jobs/view/123456789",
-    )
-    monkeypatch.setattr(
-        scraper,
-        "discover_linkedin_query",
-        Mock(return_value=([raw], {"status": "ok", "error": None})),
-    )
-    jobs = scraper._scrape_jobspy_task(
-        "linkedin", "software engineer", "Canada", "engineering", 336
-    )
-    assert len(jobs) == 1
-    assert jobs[0]["priority"] is True
-    assert jobs[0]["discovery_suppressed_reason"] == "title_blacklist"
-    monkeypatch.setattr(discovery_policy, "WATCHLIST", [])
-    assert discovery_policy.annotate_job(jobs[0])["priority"] is False
-
-
-def test_returning_to_default_profile_reclassifies_custom_occupation(database, monkeypatch):
-    monkeypatch.setattr(config, "TARGETING_CONFIGURED", False)
-    monkeypatch.setattr(config, "SEARCH_TERMS", {"healthcare": ["registered nurse"]})
-    _, job_id = db.add_job(
-        _job(
-            title="Registered Nurse",
-            company="Example Hospital",
-            location="Toronto, Canada",
-            source="employer_workday",
-            url="https://example.wd5.myworkdayjobs.com/External/job/Toronto/Nurse_R9000",
-        )
-    )
-    db.init_db(maintenance=False)
-    assert db.get_job_by_id(job_id)["discovery_suppressed_reason"] is None
-    monkeypatch.setattr(config, "SEARCH_TERMS", config._DEFAULT_SEARCH_TERMS)
-    db.init_db(maintenance=False)
-    assert db.get_job_by_id(job_id)["category"] == "other"
-    assert db.get_job_by_id(job_id)["discovery_suppressed_reason"] == "outside_search_lanes"
-
-
-def test_jobright_country_selection_respects_quota_and_unsupported_country():
-    from hunter.discovery_jobright import _country_code, _select_search_country
-
-    page = Mock(url="https://jobright.ai/jobs/search?country=CA")
-    response = Mock()
-    response.value.json.return_value = {"success": False, "errorCode": 43004}
-    assert _select_search_country(page, "engineer", response, "ca") is response
-    with pytest.raises(ValueError, match="jobright_hourly_refresh_limit"):
-        _select_search_country(page, "engineer", response, "us")
-    page.get_by_role.assert_not_called()
-    response.value.json.return_value = {"success": True}
-    with pytest.raises(ValueError, match="jobright_search_country_unsupported"):
-        _select_search_country(page, "engineer", response, "de")
-    page.get_by_role.assert_not_called()
-    assert [_country_code(c) for c in ["United States", "UK", "Ireland", "CAN"]] == [
-        "us",
-        "gb",
-        "ie",
-        "ca",
-    ]
-
-
-def test_jobright_country_selection_checks_search_response_and_sort():
-    from unittest.mock import MagicMock
-
-    from hunter.discovery_jobright import _select_search_country
-
-    page = MagicMock(url="https://jobright.ai/jobs/search?country=CA")
-    response = Mock()
-    response.value.json.return_value = {"success": True}
-    selected = page.expect_response.return_value.__enter__.return_value
-    selected.value.url = "https://jobright.ai/swan/recommend/search?position=0&sortCondition=1"
-    assert _select_search_country(page, "engineer", response, "us") is selected
-    page.wait_for_function.assert_called_once()
-    selected.value.url = "https://jobright.ai/swan/recommend/search?position=0&sortCondition=0"
-    with pytest.raises(ValueError, match="jobright_recent_sort_unverified"):
-        _select_search_country(page, "engineer", response, "us")

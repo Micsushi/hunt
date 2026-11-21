@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
-import { discoveryLabel } from '@/utils/discovery'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
 import { useSummary } from '@/hooks/useSummary'
@@ -317,9 +316,6 @@ export function JobsPage() {
         </td>
         <td className={styles.titleCell} title={job.title ?? undefined}>
           {job.title ?? '-'}
-          <small className={styles.discoveryNote} title={discoveryLabel(job)}>
-            {discoveryLabel(job)}
-          </small>
         </td>
         <td onClick={(e) => e.stopPropagation()}>
           {job.job_url && (
@@ -379,24 +375,6 @@ export function JobsPage() {
         <h1 ref={headingRef} tabIndex={-1} className={styles.heroTitle}>
           Jobs
         </h1>
-        <p className="muted">
-          <span role="status">
-            {isLoading
-              ? 'Loading…'
-              : isPlaceholderData
-                ? 'Showing previous results while loading this view…'
-                : isError && !data
-                  ? 'Jobs unavailable'
-                  : `${jobs.length} of ${total} rows shown.`}
-          </span>
-          {isFetching && !isLoading && !isPlaceholderData && (
-            <span style={{ marginLeft: 8, color: 'var(--accent)' }}>Refreshing…</span>
-          )}
-          <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: '0.83rem' }}>
-            Keyboard: <kbd className={styles.kbd}>j</kbd>/<kbd className={styles.kbd}>k</kbd> move ·{' '}
-            <kbd className={styles.kbd}>Enter</kbd> open
-          </span>
-        </p>
       </section>
 
       {isError && (
@@ -430,10 +408,15 @@ export function JobsPage() {
       {/* Export row */}
       <div className={styles.exportRow}>
         <span role="status" className="muted">
-          {isLoading ? 'Loading…' : `${jobs.length} of ${total} jobs`}
-          {isFetching && !isLoading ? ' · Refreshing…' : ''}
+          {isLoading
+            ? 'Loading jobs…'
+            : isPlaceholderData
+              ? 'Showing previous results while loading this view…'
+              : isError && !data
+                ? ''
+                : `${jobs.length} of ${total} jobs`}
         </span>
-        <span className={styles.exportRowLabel}>Export current view</span>
+        <span className={styles.exportRowLabel}>Export</span>
         <a
           className={styles.exportBtn}
           href={
@@ -461,7 +444,13 @@ export function JobsPage() {
       </div>
 
       {/* Table */}
-      <div className={styles.tableWrap} role="region" aria-label="Jobs table" tabIndex={0}>
+      <div
+        className={styles.tableWrap}
+        role="region"
+        aria-label="Jobs table"
+        aria-keyshortcuts="J K Enter"
+        tabIndex={0}
+      >
         <table className={styles.table}>
           <thead>
             <tr>

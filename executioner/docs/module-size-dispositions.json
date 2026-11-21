@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "modules": {
+    "src/product/queue.ts": { "disposition": "Keep draft ownership, persistence and action scheduling together so a retry or restart observes the same queue state.", "regressionImpact": "Exercise selected PDF binding, active-job exclusion, Review recovery and shutdown before changing queue transitions." },
     "src/ats/workday/application/profile/catalog.ts": { "disposition": "Retain the declarative Workday field labels, selectors, and repeatable mappings in their established catalog owner.", "regressionImpact": "Covered by profile catalog, discovery, and Playwright profile suites." },
     "src/product/engine.ts": { "disposition": "Retain supported-family dispatch, fill and retry reconciliation, and verified Review admission in the product engine owner.", "regressionImpact": "Covered by product hosted application, account transition, learning, review completeness, and no-Submit suites." },
     "src/account/entry/adapter.ts": { "disposition": "Retain the established account entry boundary.", "regressionImpact": "Covered by account entry and composition suites." },

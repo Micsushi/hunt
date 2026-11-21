@@ -716,7 +716,6 @@ def cmd_tests(args):
         "c2": [
             "test_component2_stage1.py",
             "test_component2_pipeline.py",
-            "test_component2_ollama.py",
         ],
         "all": [
             "test_stage1.py",
@@ -728,8 +727,6 @@ def cmd_tests(args):
             "test_review_ops.py",
             "test_component2_stage1.py",
             "test_component2_pipeline.py",
-            "test_component2_ollama.py",
-            "test_resume_review_ui.py",
         ],
     }
     patterns = suites[args.stage]

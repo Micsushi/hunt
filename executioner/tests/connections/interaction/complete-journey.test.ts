@@ -27,7 +27,7 @@ import {
   value,
 } from "./support.ts";
 
-test("all frozen controls reach Review through independent real readback", async () => {
+test("independent readback rejects an altered receipt value and verifies all frozen controls before Review", async () => {
   const opened = await openInteractionFixture("complete");
   const answers = answerContext("complete");
   const safety = admittingSafety();
@@ -43,6 +43,8 @@ test("all frozen controls reach Review through independent real readback", async
   let nextOperation = 100;
 
   try {
+    const browserPage = opened.context.pages()[0];
+    assert.ok(browserPage !== undefined);
     for (const expectedPage of ["profile", "questionnaire"] as const) {
       const page = await understand(opened.browser, session);
       assert.deepEqual(page.snapshot.pageIdentity, {
@@ -53,7 +55,7 @@ test("all frozen controls reach Review through independent real readback", async
 
       for (const field of page.snapshot.fields) {
         const intent = await resolveField(answers, field);
-        const receipt = value(await driver.drive({
+        const drive = async () => value(await driver.drive({
           journeyId: interactionJourneyId,
           sessionId: session.sessionId,
           pageId: session.pageId,
@@ -61,6 +63,17 @@ test("all frozen controls reach Review through independent real readback", async
           operationId: operationId(nextOperation += 1),
           intent,
         }, signal));
+        let receipt = await drive();
+        if (field.fieldId === "s1-field-given-name") {
+          await browserPage.locator('[data-hunt-target-token="target-s1-field-given-name"]').fill("Changed after receipt");
+          assert.deepEqual(value(await verifier.verify({
+            sessionId: session.sessionId,
+            pageId: session.pageId,
+            intent,
+            receipt,
+          }, signal)), { kind: "rejected", fieldId: field.fieldId, reason: "mismatch" });
+          receipt = await drive();
+        }
         assert.deepEqual(Object.keys(receipt).sort(), [
           "attempted",
           "behavior",
@@ -170,51 +183,8 @@ test("all frozen controls reach Review through independent real readback", async
     );
     const observedReview = value(await opened.browser.observe(session, signal));
     assert.equal(observedReview.targets.some(({ name }) => /submit/iu.test(name)), false);
-    const browserPage = opened.context.pages()[0];
-    assert.ok(browserPage !== undefined);
     assert.equal(await browserPage.getByRole("button", { name: /submit application/iu }).isDisabled(), true);
-    assert.equal(safety.calls.length, requiredFieldFlowCases.length);
-  } finally {
-    await opened.close();
-  }
-});
-
-test("a driver receipt cannot hide a changed real DOM value", async () => {
-  const opened = await openInteractionFixture("false-success");
-  const answers = answerContext("false-success");
-  const page = await understand(opened.browser, opened.session);
-  const field = page.snapshot.fields.find(({ fieldId }) => fieldId === "s1-field-given-name");
-  assert.ok(field !== undefined);
-  const intent = await resolveField(answers, field);
-  const receipt = value(await createFieldDriver(
-    opened.browser,
-    admittingSafety().port,
-  ).drive({
-    journeyId: interactionJourneyId,
-    sessionId: opened.session.sessionId,
-    pageId: opened.session.pageId,
-    guardRevision: interactionRevision,
-    operationId: operationId(900),
-    intent,
-  }, signal));
-
-  try {
-    const browserPage = opened.context.pages()[0];
-    assert.ok(browserPage !== undefined);
-    await browserPage.locator('[data-hunt-target-token="target-s1-field-given-name"]').fill("Changed after receipt");
-    assert.deepEqual(
-      value(await createFieldVerifier(opened.browser, { maxAttempts: 1 }).verify({
-        sessionId: opened.session.sessionId,
-        pageId: opened.session.pageId,
-        intent,
-        receipt,
-      }, signal)),
-      {
-        kind: "rejected",
-        fieldId: "s1-field-given-name",
-        reason: "mismatch",
-      },
-    );
+    assert.equal(safety.calls.length, requiredFieldFlowCases.length + 1);
   } finally {
     await opened.close();
   }

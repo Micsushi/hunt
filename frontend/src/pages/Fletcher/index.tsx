@@ -237,10 +237,6 @@ function historySearchText(job: FletcherQueueItem): string {
     .toLowerCase()
 }
 
-function fletcherSourceLabel(job: FletcherQueueItem): string {
-  return job.input.job_id ? `Saved job ${job.input.job_id}` : 'Uploaded resume'
-}
-
 function fletcherQueueRefetchInterval(query: {
   state: { data?: { jobs?: FletcherQueueItem[] } }
 }): number {
@@ -508,12 +504,15 @@ export function FletcherPage() {
         <div>
           <h1 className={styles.heroTitle}>Fletcher</h1>
         </div>
-        <div
-          className={`${styles.statusPill} ${serviceOnline ? styles.statusPillOnline : styles.statusPillOffline}`}
-        >
-          <span className={styles.statusDot} />
-          {statusLoading ? 'Checking...' : serviceOnline ? 'Service online' : 'Service offline'}
-        </div>
+        {(statusLoading || !serviceOnline) && (
+          <div
+            className={`${styles.statusPill} ${statusLoading ? '' : styles.statusPillOffline}`}
+            role="status"
+          >
+            <span className={styles.statusDot} />
+            {statusLoading ? 'Checking Fletcher…' : 'Fletcher offline'}
+          </div>
+        )}
       </div>
 
       <section className={styles.panel} aria-label="Resume input">
@@ -571,7 +570,7 @@ export function FletcherPage() {
                 <label
                   className={`${styles.fileLabel} ${resumeFile ? styles.fileLabelActive : ''}`}
                 >
-                  {resumeFile ? resumeFile.name : 'Choose .pdf or .tex file'}
+                  {resumeFile ? resumeFile.name : 'Choose file'}
                   <input
                     ref={fileRef}
                     id="resume-file"
@@ -596,7 +595,7 @@ export function FletcherPage() {
               </div>
             </div>
             <label className={styles.field}>
-              Job description (for tailoring)
+              Job description
               <textarea
                 className={styles.textarea}
                 value={jobDetails}
@@ -1128,9 +1127,11 @@ function FletcherQueuePanel({
           <div>
             <h2 className={styles.workflowTitle}>Queue</h2>
           </div>
-          <span className={styles.meta}>
-            {activeJobs.length} active job{activeJobs.length === 1 ? '' : 's'}
-          </span>
+          {activeJobs.length > 0 && (
+            <span className={styles.meta}>
+              {activeJobs.length} active job{activeJobs.length === 1 ? '' : 's'}
+            </span>
+          )}
         </div>
         {activeJobs.length ? (
           <div className={styles.batchToolbar}>
@@ -1271,17 +1272,9 @@ function FletcherQueuePanel({
 
       <section className={styles.queuePanel}>
         <div className={styles.queueHeader}>
-          <div>
-            <h2 ref={historyHeading} tabIndex={-1} className={styles.workflowTitle}>
-              Fletcher history
-            </h2>
-            <div className={styles.workflowDesc}>
-              Previous Option B runs are stored in the Hunt DB for this project.
-            </div>
-          </div>
-          <span className={styles.meta}>
-            {historyJobs.length} previous run{historyJobs.length === 1 ? '' : 's'}
-          </span>
+          <h2 ref={historyHeading} tabIndex={-1} className={styles.workflowTitle}>
+            Fletcher history
+          </h2>
           <button
             className={`${styles.btn} ${styles.btnDanger}`}
             ref={cleanupButton}
@@ -1336,9 +1329,11 @@ function FletcherQueuePanel({
                   placeholder="Search title, status, file, error, or time..."
                 />
               </label>
-              <span className={styles.meta}>
-                Showing {visibleHistoryJobs.length} of {historyJobs.length}
-              </span>
+              {normalizedHistorySearch && (
+                <span className={styles.meta}>
+                  Showing {visibleHistoryJobs.length} of {historyJobs.length}
+                </span>
+              )}
             </div>
             <div className={styles.batchToolbar}>
               <label className={styles.checkRow}>
@@ -1449,7 +1444,15 @@ function FletcherQueuePanel({
                       {title}
                     </button>
                     <div className={styles.historyMetaGrid}>
-                      <span>{job.status === 'succeeded' ? 'Completed' : job.status}</span>
+                      <span>
+                        {job.status === 'succeeded' &&
+                        !reviewId &&
+                        typeof job.result?.summary_notice === 'string'
+                          ? `Completed. ${job.result.summary_notice}`
+                          : job.status === 'succeeded'
+                            ? 'Completed'
+                            : job.status}
+                      </span>
                       <span>
                         {formatRunTime(job.finished_at || job.started_at || job.created_at)}
                       </span>
@@ -1583,12 +1586,9 @@ function FletcherJobDetailModal({
     >
       <section className={styles.detailModal} onClick={(e) => e.stopPropagation()}>
         <div className={styles.detailHeader}>
-          <div className={styles.detailHeaderCopy}>
-            <div className={styles.workflowLabel}>{fletcherSourceLabel(job)}</div>
-            <h2 className={styles.detailTitle} id="fletcher-job-detail-title">
-              {title}
-            </h2>
-          </div>
+          <h2 className={styles.detailTitle} id="fletcher-job-detail-title">
+            {title}
+          </h2>
           <button className={styles.btn} onClick={onClose}>
             Close
           </button>
@@ -1668,20 +1668,14 @@ function FletcherJobDetailModal({
                 <strong>{job.status}</strong>
               </div>
               <div>
-                <span>Started</span>
-                <strong>{formatRunTime(job.started_at || job.created_at)}</strong>
-              </div>
-              <div>
-                <span>Finished</span>
-                <strong>{formatRunTime(job.finished_at)}</strong>
+                <span>{job.finished_at ? 'Finished' : job.started_at ? 'Started' : 'Queued'}</span>
+                <strong>
+                  {formatRunTime(job.finished_at || job.started_at || job.created_at)}
+                </strong>
               </div>
               <div>
                 <span>Resume file</span>
                 <strong>{job.input.resume_filename || '-'}</strong>
-              </div>
-              <div>
-                <span>Queue ID</span>
-                <strong>{job.queue_item_id}</strong>
               </div>
               {job.input.job_id ? (
                 <div>

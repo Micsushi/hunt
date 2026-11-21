@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import sqlite3
 
@@ -20,7 +21,11 @@ def client(authenticated=True):
     return TestClient(app)
 
 
-@pytest.mark.parametrize("ats", ["workday", "greenhouse", "lever", "ashby", "workable"])
+@pytest.mark.parametrize("ats", [
+    "workday", "greenhouse", "lever", "ashby", "workable", "bamboohr", "rippling",
+    "jobvite", "recruitee", "canonical", "canada", "amazon", "applytojob", "greenhouse_anz",
+    "smartrecruiters",
+])
 def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
     tmp_path, monkeypatch, ats
 ):
@@ -34,6 +39,16 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
             "greenhouse": f"https://job-boards.greenhouse.io/fixture/jobs/{job_id}",
             "lever": f"https://jobs.lever.co/fixture/11111111-1111-4111-8111-11111111111{job_id}",
             "ashby": f"https://jobs.ashbyhq.com/fixture/11111111-1111-4111-8111-11111111111{job_id}",
+            "bamboohr": f"https://solace.bamboohr.com/careers/{job_id}",
+            "rippling": f"https://ats.rippling.com/exacare/jobs/11111111-1111-4111-8111-11111111111{job_id}/apply",
+            "jobvite": f"https://jobs.jobvite.com/parkland/job/obDXAfw{job_id}/apply",
+            "recruitee": f"https://guarana.recruitee.com/o/developer-{job_id}/c/new",
+            "canonical": f"https://canonical.com/careers/{job_id}/developer/application",
+            "canada": f"https://forms-formulaires.alpha.canada.ca/en/id/application{job_id}",
+            "amazon": f"https://www.amazon.jobs/applicant/jobs/{job_id}/apply",
+            "applytojob": f"https://techinsights.applytojob.com/apply/ycOBoo1em{job_id}",
+            "greenhouse_anz": f"https://job-boards.anz.greenhouse.io/sirion/jobs/{job_id}",
+            "smartrecruiters": f"https://jobs.smartrecruiters.com/GIRO/{job_id}-developer",
         }
         records[job_id] = dict(
             apply_type="external_apply",
@@ -85,6 +100,33 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
     ]
     assert [j["resumeName"] for j in calls] == ["resume-1.pdf", "resume-2.pdf"]
     calls.clear()
+    exported = browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]})
+    assert exported.status_code == 200
+    assert exported.headers["cache-control"] == "no-store"
+    assert "attachment" in exported.headers["content-disposition"]
+    bundle = exported.json()
+    assert bundle["format"] == "hunt-c3-handoff" and bundle["version"] == 1
+    assert [job["sourceJobId"] for job in bundle["jobs"]] == [1, 2]
+    for job in bundle["jobs"]:
+        assert (
+            job["resumeSha256"] == hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
+        )
+    assert calls == [], "export must not queue anything or require a local C3 service"
+    for field, value in [
+        ("enrichment_status", "pending"),
+        ("apply_url", "https://untrusted.example/apply"),
+        ("apply_url", "https://user:password@solace.bamboohr.com/careers/823"),
+        ("apply_url", "https://solace.bamboohr.com:444/careers/823"),
+        ("apply_url", "https://solace.bamboohr.com.evil.example/careers/823"),
+        ("apply_url", "https://solace.bamboohr.com/careers/823%2fapply"),
+        ("apply_url", "https://[malformed/careers/823"),
+    ]:
+        with sqlite3.connect(database) as connection:
+            connection.execute(f"UPDATE jobs SET {field}=? WHERE id=1", (value,))
+        assert browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]}).status_code == 409
+        assert calls == []
+        with sqlite3.connect(database) as connection:
+            connection.execute(f"UPDATE jobs SET {field}=? WHERE id=1", (records[1][field],))
     for statement, parameters in [
         ("UPDATE jobs SET selected_resume_version_id='2' WHERE id=1", ()),
         (
@@ -98,6 +140,7 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
         with sqlite3.connect(database) as connection:
             connection.execute(statement, parameters)
         assert browser.post("/api/c3/handoff", json={"job_ids": [1, 2]}).status_code == 409
+        assert browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]}).status_code == 409
         assert calls == []
         with sqlite3.connect(database) as connection:
             connection.execute(
@@ -141,6 +184,7 @@ def test_handoff_blocks_existing_outcomes_and_discovery_exclusions(tmp_path, mon
 
 def test_c3_gateway_requires_session_and_blocks_cross_site_mutations():
     assert client(False).get("/api/c3/state").status_code == 401
+    assert client(False).post("/api/c3/handoff/export", json={"job_ids": [1]}).status_code == 401
     browser = client()
     assert (
         browser.post(
@@ -160,6 +204,34 @@ def test_c3_gateway_requires_session_and_blocks_cross_site_mutations():
     )
     assert browser.get("/api/c3/arbitrary-private-file").status_code == 404
     assert browser.post("/api/c3/handoff", json=[]).status_code == 400
+    assert browser.post("/api/c3/handoff/export", json=[]).status_code == 400
+    assert (
+        browser.post(
+            "/api/c3/handoff/export",
+            json={"job_ids": [1]},
+            headers={"Origin": "https://other.example"},
+        ).status_code
+        == 403
+    )
+
+
+def test_handoff_export_rejects_oversize_bundle_before_returning_file(monkeypatch):
+    monkeypatch.setattr(c3, "HANDOFF_MAX_BYTES", 1)
+    monkeypatch.setattr(
+        c3,
+        "prepared_jobs",
+        lambda ids: [
+            {
+                "title": "Fixture",
+                "resumeName": "resume.pdf",
+                "resumeVersion": "1",
+                "resumeBase64": base64.b64encode(b"%PDF-fixture").decode(),
+            }
+        ],
+    )
+    result = client().post("/api/c3/handoff/export", json={"job_ids": [1]})
+    assert result.status_code == 413
+    assert "fewer jobs" in result.json()["detail"]
 
 
 def test_upstream_pairing_failure_does_not_expire_hunt_session(monkeypatch):
@@ -180,3 +252,46 @@ def test_upstream_pairing_failure_does_not_expire_hunt_session(monkeypatch):
     response = client().get("/api/c3/state")
     assert response.status_code == 503
     assert "pairing key" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "failure,expected_http,expected_outcome",
+    [
+        ("rejected", 409, "rejected"),
+        ("server_error", 500, "unconfirmed"),
+        ("connection_lost", 503, "unconfirmed"),
+        ("pairing", 503, "rejected"),
+        ("wrong_confirmation", 502, "unconfirmed"),
+    ],
+)
+def test_partial_handoff_preserves_confirmed_jobs_and_never_retries(
+    monkeypatch, failure, expected_http, expected_outcome
+):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(c3, "prepared_jobs", lambda ids: [{"sourceJobId": i} for i in ids])
+    sent = []
+
+    async def forward(method, path, content=b""):
+        job = json.loads(content)["jobs"][0]
+        sent.append(job["sourceJobId"])
+        if job["sourceJobId"] == 1:
+            return JSONResponse([job])
+        if failure == "connection_lost":
+            raise HTTPException(503, "connection lost")
+        if failure == "pairing":
+            raise c3.C3Rejected(503, "pairing key mismatch")
+        if failure == "wrong_confirmation":
+            return JSONResponse([{"sourceJobId": 99}])
+        return JSONResponse({"error": "fixture failure"}, status_code=expected_http)
+
+    monkeypatch.setattr(c3, "forward", forward)
+    response = client().post("/api/c3/handoff", json={"job_ids": [1, 2, 3]})
+    assert response.status_code == expected_http
+    assert sent == [1, 2]
+    assert response.json()["queued"] == [{"sourceJobId": 1}]
+    assert response.json()["outcomes"] == [
+        {"sourceJobId": 1, "status": "confirmed"},
+        {"sourceJobId": 2, "status": expected_outcome},
+        {"sourceJobId": 3, "status": "not_sent"},
+    ]

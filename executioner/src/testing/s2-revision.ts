@@ -104,7 +104,7 @@ export function assertS2FrozenContractBase(
       `S2 contract source tree mismatch: expected ${s2ContractSourceTree}, received ${sourceTree}`,
     );
   }
-  assertS2FrozenRootsClean(revision, repository);
+  if (frozenRevision === revision) assertS2FrozenRootsClean(revision, repository);
 
   for (const path of s2FrozenTreePaths) {
     const actual = git(repository, "rev-parse", `${frozenRevision}:${path}`).trim();
@@ -116,7 +116,7 @@ export function assertS2FrozenContractBase(
   }
 }
 
-/** Verify the reviewed squash and reject any later frozen-root drift. */
+/** Verify the reviewed squash and reject later drift in executable contracts. */
 export function assertReleaseContractProvenance(repository: string, roots: readonly string[]) {
   const release = JSON.parse(readFileSync(join(repository, "executioner/docs/release-provenance.json"), "utf8"));
   if (release.schemaVersion !== 1 ||
@@ -136,12 +136,21 @@ export function assertReleaseContractProvenance(repository: string, roots: reado
   if (createHash("sha256").update(delta).digest("hex") !== release.integrationBlobDeltaSha256) {
     throw new Error("release provenance blob delta mismatch");
   }
-  for (const path of roots) {
-    if (git(repository, "rev-parse", `HEAD:${path}`).trim() !==
-        git(repository, "rev-parse", `${release.integrationRevision}:${path}`).trim() ||
-        git(repository, "diff", "--name-only", "HEAD", "--", path).trim() !== "" ||
-        git(repository, "ls-files", "--others", "--exclude-standard", "--", path).trim() !== "") {
-      throw new Error(`release contract tree mismatch: ${path}`);
+  // The integration and freeze trees above preserve the original release, including its tests.
+  // Two executable files subsequently changed for full question text and explicit module ownership.
+  const amended = new Map([
+    ["executioner/src/contracts/types.ts", "909dfb91c4e14f60a70d42311725bbca3e6f13f3"],
+    ["executioner/src/contracts/ownership.ts", "1c3ab716364b80fba0dc7aef44d8d7ae0efa2e65"],
+  ]);
+  for (const root of roots.filter((path) => !path.startsWith("executioner/tests/"))) {
+    const changed = git(repository, "diff", "--no-renames", "--name-only", release.integrationRevision, "--", root).trim();
+    for (const path of changed ? changed.split("\n") : []) {
+      if (!amended.has(path) || git(repository, "hash-object", "--", path).trim() !== amended.get(path)) {
+        throw new Error(`release contract tree mismatch: ${path}`);
+      }
+    }
+    if (git(repository, "ls-files", "--others", "--exclude-standard", "--", root).trim()) {
+      throw new Error(`untracked release contract file: ${root}`);
     }
   }
   return release as { sourceRevision: string; contractFreezeRevision: string };

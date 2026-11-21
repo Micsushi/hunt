@@ -39,6 +39,7 @@ export function ResumeCheck({
   })
   const current = check.variables?.resume === resume && check.variables?.jobDetails === jobDetails
   const report = current ? check.data : undefined
+  const passedChecks = report?.checks.filter((item) => item.status === 'pass') ?? []
   return (
     <section aria-label="Resume checks">
       <div className={styles.checkActions}>
@@ -51,34 +52,34 @@ export function ResumeCheck({
         </button>
         {children}
       </div>
-      <p className={styles.workflowDesc}>Checked locally; your resume is not edited.</p>
+      <p className={styles.workflowDesc}>Resume checks run locally.</p>
       <div className={styles.checkResults} aria-live="polite" aria-busy={check.isPending}>
         {current && check.error && <p role="alert">{check.error.message}</p>}
         {report && (
           <>
             <h3>
-              {report.passed_checks} of {report.total_checks} checks passed
+              {report.passed_checks} of {report.total_checks} local checks passed
             </h3>
-            <p>Parsing checks, not an employer ATS score.</p>
             <ul>
               {report.checks
                 .filter((item) => item.status !== 'pass')
                 .map((item, index) => (
                   <li key={`${item.id}-${index}`}>
-                    {item.evidence} {item.suggested_fix}
+                    {item.status === 'fail' ? 'Failed' : 'Warning'}: {item.evidence}{' '}
+                    {item.suggested_fix}
                   </li>
                 ))}
             </ul>
-            <details>
-              <summary>All check results</summary>
-              <ul>
-                {report.checks.map((item, index) => (
-                  <li key={`${item.id}-${index}`}>
-                    {item.status}: {item.evidence}
-                  </li>
-                ))}
-              </ul>
-            </details>
+            {passedChecks.length > 0 && (
+              <details>
+                <summary>Passed checks</summary>
+                <ul>
+                  {passedChecks.map((item, index) => (
+                    <li key={`${item.id}-${index}`}>{item.evidence}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </>
         )}
       </div>

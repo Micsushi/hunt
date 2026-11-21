@@ -102,6 +102,7 @@ export function classifyLiveAccountState(
     if (resetRequest) return state("password_reset_request");
     if (resetEmailSent) return state("password_reset_email_sent");
     if (resetSet) return state("password_reset_set");
+    if (traits.has('structural_trait_account_credentials_rejected_v1')) return state('account_state_unknown');
     const signIn = traits.has(LIVE_ENTRY_TRAITS.account.signIn) ||
       traits.has(EMAIL_SIGN_IN_CHOICE_TRAIT);
     const create = traits.has(LIVE_ENTRY_TRAITS.account.create);

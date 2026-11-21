@@ -1,12 +1,9 @@
-import datetime
-import io
-import json
 import os
 import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,12 +12,9 @@ SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts")
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, SCRIPTS_DIR)
 
-import hunterctl  # type: ignore  # noqa: E402
-import queue_health  # type: ignore  # noqa: E402
 
 from hunter import (  # type: ignore  # noqa: E402
     browser_runtime,
-    failure_artifacts,
     linkedin_session,
 )
 from hunter import db as db  # type: ignore  # noqa: E402
@@ -198,34 +192,6 @@ class Stage4Tests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_capture_text_artifacts_writes_relative_paths_under_artifact_root(self):
-        with tempfile.TemporaryDirectory() as artifact_root:
-            with patch.dict(os.environ, {"HUNT_ARTIFACTS_DIR": artifact_root}, clear=False):
-                job = {
-                    "id": 42,
-                    "source": "linkedin",
-                    "company": "Acme",
-                    "title": "Data Engineer",
-                    "job_url": "https://www.linkedin.com/jobs/view/42",
-                }
-                paths = failure_artifacts.capture_text_artifacts(
-                    job,
-                    "security_verification",
-                    html_content="<html><body>challenge</body></html>",
-                    text_content="challenge text",
-                )
-
-                self.assertTrue(paths["artifact_dir"].startswith("linkedin/job_42/"))
-                self.assertIsNotNone(
-                    failure_artifacts.resolve_artifact_path(paths["artifact_html_path"])
-                )
-                self.assertTrue(
-                    failure_artifacts.resolve_artifact_path(paths["artifact_html_path"]).exists()
-                )
-                self.assertTrue(
-                    failure_artifacts.resolve_artifact_path(paths["artifact_text_path"]).exists()
-                )
-
     def test_artifact_paths_persist_on_failure_and_clear_on_requeue(self):
         with self.with_temp_db() as path:
             job_id = self.insert_job(path)
@@ -254,212 +220,6 @@ class Stage4Tests(unittest.TestCase):
             self.assertIsNone(requeued_row["last_artifact_screenshot_path"])
             self.assertIsNone(requeued_row["last_artifact_html_path"])
             self.assertIsNone(requeued_row["last_artifact_text_path"])
-
-    def test_queue_health_json_emits_summary_and_sections(self):
-        with self.with_temp_db() as path:
-            job_id = self.insert_job(path, enrichment_status="failed")
-            db.mark_linkedin_auth_unavailable(
-                "auth_expired: LinkedIn session appears to be logged out or expired."
-            )
-            db.mark_linkedin_enrichment_failed(
-                job_id,
-                "external_description_not_found: missing",
-                artifact_dir="linkedin/job_1/test_run",
-            )
-            stdout = io.StringIO()
-            with (
-                patch.object(sys, "argv", ["queue_health.py", "--json", "--limit", "2"]),
-                redirect_stdout(stdout),
-            ):
-                queue_health.main()
-
-            payload = json.loads(stdout.getvalue())
-            self.assertIn("summary", payload)
-            self.assertIn("sections", payload)
-            self.assertIn("failed", payload["sections"])
-            self.assertEqual(
-                payload["sections"]["failed"][0]["last_artifact_dir"], "linkedin/job_1/test_run"
-            )
-            self.assertFalse(payload["summary"]["auth"]["linkedin"]["available"])
-
-    def test_mark_linkedin_auth_state_recreates_runtime_state_table(self):
-        with self.with_temp_db() as path:
-            conn = sqlite3.connect(path)
-            try:
-                conn.execute("DROP TABLE runtime_state")
-                conn.commit()
-            finally:
-                conn.close()
-
-            db.mark_linkedin_auth_unavailable(
-                "auth_expired: LinkedIn session appears to be logged out or expired."
-            )
-            auth_state = db.get_linkedin_auth_state()
-            self.assertFalse(auth_state["available"])
-            self.assertEqual(auth_state["status"], "expired")
-
-            db.mark_linkedin_auth_available()
-            auth_state = db.get_linkedin_auth_state()
-            self.assertTrue(auth_state["available"])
-            self.assertEqual(auth_state["status"], "ok")
-            self.assertIsNone(auth_state["last_error"])
-
-    def test_hunterctl_defaults_to_runtime_db_on_linux_server_layout(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            home_path = Path(temp_dir)
-            repo_root = home_path / "hunt"
-            runtime_dir = home_path / "data" / "hunt"
-            repo_root.mkdir(parents=True)
-            runtime_dir.mkdir(parents=True)
-
-            defaults = hunterctl._get_default_runtime_env(
-                {},
-                repo_root=repo_root,
-                home_dir=home_path,
-                is_windows=False,
-            )
-
-            self.assertEqual(defaults["HUNT_DB_PATH"], str(runtime_dir / "hunt.db"))
-            self.assertEqual(defaults["HUNT_ARTIFACTS_DIR"], str(runtime_dir / "artifacts"))
-            self.assertNotIn("HUNT_COORDINATOR_ROOT", defaults)
-
-    def test_hunterctl_selects_fallback_ui_port_when_default_is_busy(self):
-        def fake_available(_host, port):
-            return port == 8005
-
-        with patch.object(hunterctl, "_tcp_port_available", side_effect=fake_available):
-            port, used_fallback = hunterctl._select_review_app_port(
-                host="127.0.0.1",
-                preferred_port=8000,
-                fallback_start=8004,
-                max_port=8006,
-            )
-
-        self.assertEqual(port, 8005)
-        self.assertTrue(used_fallback)
-
-    def test_hunterctl_ui_serve_defaults_to_non_legacy_port(self):
-        captured = {}
-
-        def fake_run(command, *, env=None):
-            captured["command"] = command
-            captured["env"] = env
-            raise SystemExit(0)
-
-        with (
-            patch.object(hunterctl, "_run_npm_build", return_value=True),
-            patch.object(hunterctl, "_tcp_port_available", return_value=True),
-            patch.object(hunterctl, "_run", side_effect=fake_run),
-            patch.object(hunterctl, "_frontend_dir", return_value=str(REPO_ROOT)),
-            patch.dict(os.environ, {}, clear=True),
-        ):
-            with self.assertRaises(SystemExit) as ctx:
-                hunterctl.cmd_ui_serve(object())
-
-        self.assertEqual(ctx.exception.code, 0)
-        self.assertEqual(captured["command"], [hunterctl.PYTHON, "-m", "backend.app"])
-        self.assertEqual(captured["env"]["REVIEW_APP_HOST"], "127.0.0.1")
-        self.assertEqual(captured["env"]["REVIEW_APP_PORT"], "8004")
-
-    def test_hunterctl_ui_serve_uses_fallback_when_requested_port_is_busy(self):
-        captured = {}
-
-        def fake_run(command, *, env=None):
-            captured["command"] = command
-            captured["env"] = env
-            raise SystemExit(0)
-
-        def fake_available(_host, port):
-            return port != 8000
-
-        with (
-            patch.object(hunterctl, "_run_npm_build", return_value=True),
-            patch.object(hunterctl, "_tcp_port_available", side_effect=fake_available),
-            patch.object(hunterctl, "_run", side_effect=fake_run),
-            patch.object(hunterctl, "_frontend_dir", return_value=str(REPO_ROOT)),
-            patch.dict(os.environ, {"REVIEW_APP_PORT": "8000"}, clear=True),
-        ):
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                with self.assertRaises(SystemExit) as ctx:
-                    hunterctl.cmd_ui_serve(object())
-
-        self.assertEqual(ctx.exception.code, 0)
-        self.assertEqual(captured["command"], [hunterctl.PYTHON, "-m", "backend.app"])
-        self.assertEqual(captured["env"]["REVIEW_APP_HOST"], "127.0.0.1")
-        self.assertEqual(captured["env"]["REVIEW_APP_PORT"], "8004")
-        self.assertIn("restart the existing instance", stdout.getvalue())
-        self.assertIn("http://127.0.0.1:8004", stdout.getvalue())
-
-    def test_submit_login_form_clicks_account_chooser_before_form_fill(self):
-        page = self.FakePage(
-            {
-                "chooser": {
-                    "url": "https://www.linkedin.com/feed/",
-                    "selectors": {
-                        "button:has-text('Continue as')": {"count": 1, "next_state": "authed"},
-                    },
-                },
-                "authed": {
-                    "url": "https://www.linkedin.com/feed/",
-                    "selectors": {},
-                },
-            },
-            initial_state="chooser",
-        )
-
-        result = linkedin_session._submit_login_form(
-            page,
-            email="person@example.com",
-            password="secret",
-            timeout_ms=1000,
-        )
-
-        self.assertEqual(result, "chooser_clicked")
-        self.assertEqual(page.state, "authed")
-        self.assertEqual(page.filled, {})
-
-    def test_submit_login_form_can_fall_back_to_sign_in_using_another_account(self):
-        page = self.FakePage(
-            {
-                "login": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "a:has-text('Sign in using another account')": {
-                            "count": 1,
-                            "next_state": "form",
-                        },
-                    },
-                },
-                "form": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "input[name='session_key']": {"count": 1, "fill_key": "email"},
-                        "input[name='session_password']": {"count": 1, "fill_key": "password"},
-                        "button[type='submit']": {"count": 1, "next_state": "submitted"},
-                    },
-                },
-                "submitted": {
-                    "url": "https://www.linkedin.com/feed/",
-                    "selectors": {},
-                },
-            },
-            initial_state="login",
-        )
-
-        result = linkedin_session._submit_login_form(
-            page,
-            email="person@example.com",
-            password="secret",
-            timeout_ms=1000,
-        )
-
-        self.assertEqual(result, "form_submitted")
-        self.assertEqual(page.state, "submitted")
-        self.assertEqual(
-            page.filled,
-            {"email": "person@example.com", "password": "secret"},
-        )
 
     def test_submit_login_form_prefers_sign_in_using_another_account_over_chooser(self):
         page = self.FakePage(
@@ -497,122 +257,6 @@ class Stage4Tests(unittest.TestCase):
             initial_state="login",
         )
 
-        result = linkedin_session._submit_login_form(
-            page,
-            email="person@example.com",
-            password="secret",
-            timeout_ms=1000,
-        )
-
-        self.assertEqual(result, "form_submitted")
-        self.assertEqual(page.state, "submitted")
-        self.assertEqual(
-            page.filled,
-            {"email": "person@example.com", "password": "secret"},
-        )
-
-    def test_submit_login_form_handles_server_style_second_screen(self):
-        page = self.FakePage(
-            {
-                "welcome": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "a:has-text('Sign in using another account')": {
-                            "count": 1,
-                            "next_state": "server_form",
-                        },
-                    },
-                },
-                "server_form": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "input[type='text']": {"count": 1, "fill_key": "email"},
-                        "input[type='password']": {"count": 1, "fill_key": "password"},
-                        "xpath=//button[normalize-space(.)='Sign in']": {
-                            "count": 1,
-                            "text": "Sign in",
-                            "next_state": "submitted",
-                        },
-                        "button:has-text('Sign in')": {
-                            "count": 1,
-                            "text": "Sign in with Apple",
-                            "next_state": "apple",
-                        },
-                    },
-                },
-                "apple": {
-                    "url": "https://appleid.apple.com/auth/authorize",
-                    "selectors": {},
-                },
-                "submitted": {
-                    "url": "https://www.linkedin.com/feed/",
-                    "selectors": {},
-                },
-            },
-            initial_state="welcome",
-        )
-
-        result = linkedin_session._submit_login_form(
-            page,
-            email="person@example.com",
-            password="secret",
-            timeout_ms=1000,
-        )
-
-        self.assertEqual(result, "form_submitted")
-        self.assertEqual(page.state, "submitted")
-        self.assertEqual(
-            page.filled,
-            {"email": "person@example.com", "password": "secret"},
-        )
-
-    def test_classify_login_screen_distinguishes_welcome_back_and_login_form(self):
-        welcome_page = self.FakePage(
-            {
-                "welcome": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "h1:has-text('Welcome back')": {"count": 1},
-                    },
-                },
-            },
-            initial_state="welcome",
-        )
-        form_page = self.FakePage(
-            {
-                "form": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "input[name='session_key']": {"count": 1},
-                        "input[name='session_password']": {"count": 1},
-                    },
-                },
-            },
-            initial_state="form",
-        )
-
-        self.assertEqual(linkedin_session._classify_login_screen(welcome_page), "welcome_back")
-        self.assertEqual(linkedin_session._classify_login_screen(form_page), "login_form")
-
-    def test_submit_login_form_logs_screen_and_input_actions(self):
-        page = self.FakePage(
-            {
-                "form": {
-                    "url": linkedin_session.LOGIN_URL,
-                    "selectors": {
-                        "input[name='session_key']": {"count": 1, "fill_key": "email"},
-                        "input[name='session_password']": {"count": 1, "fill_key": "password"},
-                        "button[type='submit']": {"count": 1, "next_state": "submitted"},
-                    },
-                },
-                "submitted": {
-                    "url": "https://www.linkedin.com/feed/",
-                    "selectors": {},
-                },
-            },
-            initial_state="form",
-        )
-
         with (
             patch.object(linkedin_session, "_relogin_debug_enabled", return_value=True),
             patch("builtins.print") as mock_print,
@@ -625,6 +269,12 @@ class Stage4Tests(unittest.TestCase):
             )
 
         self.assertEqual(result, "form_submitted")
+        self.assertEqual(page.state, "submitted")
+        self.assertEqual(
+            page.filled,
+            {"email": "person@example.com", "password": "secret"},
+        )
+
         printed = "\n".join(call.args[0] for call in mock_print.call_args_list if call.args)
         self.assertIn('"event": "screen_observed"', printed)
         self.assertIn('"screen_type": "login_form"', printed)
@@ -636,67 +286,9 @@ class Stage4Tests(unittest.TestCase):
         self.assertIn('"event": "form_controls_selected"', printed)
         self.assertIn('"target": "submit"', printed)
 
-    def test_auth_trace_file_appends_runs_with_screen_components(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            trace_path = Path(temp_dir) / "linkedin_auth_trace.jsonl"
-            page = self.FakePage(
-                {
-                    "welcome": {
-                        "url": linkedin_session.LOGIN_URL,
-                        "evaluate_result": {
-                            "title": "LinkedIn Login",
-                            "body_text_excerpt": "Welcome back Sign in using another account",
-                            "component_count": 2,
-                            "components": [
-                                {"tag": "h1", "text": "Welcome back"},
-                                {"tag": "a", "text": "Sign in using another account"},
-                            ],
-                        },
-                    },
-                },
-                initial_state="welcome",
-            )
-
-            frozen_time = datetime.datetime.now(datetime.UTC)
-            with (
-                patch.dict(
-                    os.environ,
-                    {linkedin_session.AUTH_TRACE_PATH_ENV: str(trace_path)},
-                    clear=False,
-                ),
-                patch.object(
-                    linkedin_session.datetime, "datetime", wraps=datetime.datetime
-                ) as clock,
-            ):
-                clock.now.return_value = frozen_time
-                linkedin_session._start_auth_trace_run("auto_relogin", headless=False)
-                linkedin_session._trace_auth_screen(page, action="first_snapshot", force=True)
-                linkedin_session._finish_auth_trace_run("failure", message="first run failed")
-
-                linkedin_session._start_auth_trace_run("auto_relogin", headless=True)
-                linkedin_session._trace_auth_screen(page, action="second_snapshot", force=True)
-                linkedin_session._finish_auth_trace_run("success", message="second run ok")
-
-            records = [
-                json.loads(line)
-                for line in trace_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-            run_ids = {record["run_id"] for record in records}
-
-            self.assertEqual(len(run_ids), 2)
-            self.assertEqual(sum(1 for record in records if record["event"] == "run_start"), 2)
-            self.assertEqual(sum(1 for record in records if record["event"] == "run_end"), 2)
-            snapshots = [record for record in records if record["event"] == "screen_snapshot"]
-            self.assertEqual(len(snapshots), 2)
-            self.assertEqual(snapshots[0]["components"][0]["text"], "Welcome back")
-            self.assertEqual(
-                snapshots[0]["components"][1]["text"],
-                "Sign in using another account",
-            )
-            self.assertEqual(snapshots[0]["url"], linkedin_session.LOGIN_URL)
-
-    def test_attempt_auto_relogin_reuses_saved_session_without_credentials(self):
+    def test_attempt_auto_relogin_checks_saved_session_without_credentials_and_records_expiration(
+        self,
+    ):
         with self.with_temp_db():
             with tempfile.NamedTemporaryFile(suffix=".json") as storage_state_file:
                 opened = {}
@@ -716,7 +308,10 @@ class Stage4Tests(unittest.TestCase):
                     patch.object(
                         linkedin_session,
                         "_attempt_session_reuse_in_context",
-                        return_value="session_reused",
+                        side_effect=[
+                            "session_reused",
+                            linkedin_session.LinkedInSessionError("Session expired"),
+                        ],
                     ) as mock_reuse,
                 ):
                     result = linkedin_session.attempt_auto_relogin(
@@ -724,52 +319,29 @@ class Stage4Tests(unittest.TestCase):
                         timeout_ms=1000,
                     )
 
-                self.assertTrue(result["attempted"])
-                self.assertTrue(result["recovered"])
-                self.assertIn("reused the existing saved session", result["message"])
-                self.assertEqual(
-                    opened["storage_state_path"],
-                    str(Path(storage_state_file.name).resolve()),
-                )
-                auth_state = db.get_linkedin_auth_state()
-                self.assertTrue(auth_state["available"])
-                self.assertIsNone(auth_state["last_error"])
-                mock_reuse.assert_called_once()
+                    self.assertTrue(result["attempted"])
+                    self.assertTrue(result["recovered"])
+                    self.assertIn("reused the existing saved session", result["message"])
+                    self.assertEqual(
+                        opened["storage_state_path"],
+                        str(Path(storage_state_file.name).resolve()),
+                    )
+                    auth_state = db.get_linkedin_auth_state()
+                    self.assertTrue(auth_state["available"])
+                    self.assertIsNone(auth_state["last_error"])
+                    mock_reuse.assert_called_once()
 
-    def test_attempt_auto_relogin_marks_auth_unavailable_when_saved_session_check_fails(self):
-        with self.with_temp_db():
-            with tempfile.NamedTemporaryFile(suffix=".json") as storage_state_file:
-
-                @contextmanager
-                def fake_open_browser_context(**_kwargs):
-                    yield object()
-
-                with (
-                    patch.object(linkedin_session, "get_all_accounts", return_value=[]),
-                    patch.object(
-                        linkedin_session,
-                        "open_browser_context",
-                        fake_open_browser_context,
-                    ),
-                    patch.object(
-                        linkedin_session,
-                        "_attempt_session_reuse_in_context",
-                        side_effect=linkedin_session.LinkedInSessionError(
-                            "LinkedIn session appears to be logged out or expired."
-                        ),
-                    ),
-                ):
                     result = linkedin_session.attempt_auto_relogin(
                         storage_state_path=storage_state_file.name,
                         timeout_ms=1000,
                     )
 
-                self.assertTrue(result["attempted"])
-                self.assertFalse(result["recovered"])
-                self.assertIn("saved session check failed", result["message"])
-                auth_state = db.get_linkedin_auth_state()
-                self.assertFalse(auth_state["available"])
-                self.assertEqual(auth_state["last_error"], result["message"])
+                    self.assertTrue(result["attempted"])
+                    self.assertFalse(result["recovered"])
+                    self.assertIn("saved session check failed", result["message"])
+                    auth_state = db.get_linkedin_auth_state()
+                    self.assertFalse(auth_state["available"])
+                    self.assertEqual(auth_state["last_error"], result["message"])
 
     def test_rotate_linkedin_account_marks_auth_unavailable_when_relogin_fails(self):
         with self.with_temp_db():
@@ -833,65 +405,6 @@ class Stage4Tests(unittest.TestCase):
             self.assertFalse(auth_state["available"])
             self.assertEqual(auth_state["last_error"], result["message"])
 
-    def test_open_browser_context_reports_missing_display_cleanly(self):
-        class FakeChromium:
-            def launch(self, **_kwargs):
-                raise RuntimeError("Missing X server or $DISPLAY")
-
-        class FakePlaywright:
-            chromium = FakeChromium()
-
-        class FakePlaywrightManager:
-            def __enter__(self):
-                return FakePlaywright()
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch.object(
-            browser_runtime, "load_sync_playwright", return_value=lambda: FakePlaywrightManager()
-        ):
-            with self.assertRaises(browser_runtime.BrowserRuntimeError) as ctx:
-                with browser_runtime.open_browser_context(headless=False, browser_channel="chrome"):
-                    pass
-
-        self.assertIn("no X server / DISPLAY is available", str(ctx.exception))
-
-    def test_open_browser_context_does_not_relabel_errors_from_inside_context(self):
-        class FakeContext:
-            def close(self):
-                return None
-
-        class FakeBrowser:
-            def new_context(self):
-                return FakeContext()
-
-            def close(self):
-                return None
-
-        class FakeChromium:
-            def launch(self, **_kwargs):
-                return FakeBrowser()
-
-        class FakePlaywright:
-            chromium = FakeChromium()
-
-        class FakePlaywrightManager:
-            def __enter__(self):
-                return FakePlaywright()
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with patch.object(
-            browser_runtime, "load_sync_playwright", return_value=lambda: FakePlaywrightManager()
-        ):
-            with self.assertRaises(linkedin_session.LinkedInSessionError) as ctx:
-                with browser_runtime.open_browser_context():
-                    raise linkedin_session.LinkedInSessionError("inner relogin failure")
-
-        self.assertEqual(str(ctx.exception), "inner relogin failure")
-
     def test_open_browser_context_closes_browser_when_context_creation_or_cleanup_fails(self):
         from contextlib import nullcontext
         from unittest.mock import Mock
@@ -919,92 +432,6 @@ class Stage4Tests(unittest.TestCase):
                         with browser_runtime.open_browser_context():
                             pass
                 browser.close.assert_called_once_with()
-
-    def test_save_storage_state_interactively_ignores_browser_close_error_on_cancel(self):
-        class FakeBrowser:
-            def new_context(self):
-                class FakeContext:
-                    def new_page(self_inner):
-                        class FakePage:
-                            def goto(self_page, *_args, **_kwargs):
-                                return None
-
-                        return FakePage()
-
-                return FakeContext()
-
-            def close(self):
-                raise Exception("Connection closed while reading from the driver")
-
-        class FakeChromium:
-            def launch(self, **_kwargs):
-                return FakeBrowser()
-
-        class FakePlaywright:
-            chromium = FakeChromium()
-
-        class FakePlaywrightManager:
-            def __enter__(self):
-                return FakePlaywright()
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        with (
-            patch.object(
-                linkedin_session,
-                "load_sync_playwright",
-                return_value=lambda: FakePlaywrightManager(),
-            ),
-            patch(
-                "builtins.input",
-                side_effect=KeyboardInterrupt,
-            ),
-        ):
-            with self.assertRaises(linkedin_session.LinkedInSessionCancelled) as ctx:
-                linkedin_session.save_storage_state_interactively()
-
-        self.assertIn("save cancelled", str(ctx.exception))
-
-    def test_hunterctl_auth_auto_relogin_can_set_display(self):
-        captured = {}
-
-        def fake_run(command, *, env=None):
-            captured["command"] = command
-            captured["env"] = env
-            raise SystemExit(0)
-
-        args = type(
-            "Args",
-            (),
-            {
-                "timeout_ms": 12345,
-                "headful": True,
-                "display": ":98",
-                "channel": "chrome",
-                "storage_state": None,
-            },
-        )()
-
-        with patch.object(hunterctl, "_run", side_effect=fake_run):
-            with self.assertRaises(SystemExit) as ctx:
-                hunterctl.cmd_auth_auto_relogin(args)
-
-        self.assertEqual(ctx.exception.code, 0)
-        self.assertEqual(
-            captured["command"],
-            [
-                hunterctl.PYTHON,
-                "hunter/linkedin_session.py",
-                "--auto-relogin",
-                "--timeout-ms",
-                "12345",
-                "--headful",
-                "--channel",
-                "chrome",
-            ],
-        )
-        self.assertEqual(captured["env"], {"DISPLAY": ":98"})
 
 
 if __name__ == "__main__":

@@ -9,11 +9,10 @@ function JsonExpander({ value }: { value: unknown }) {
   if (value === null || value === undefined || value === '')
     return <span className={styles.muted}>-</span>
   const text = typeof value === 'string' ? value : JSON.stringify(value)
-  const short = text.length > 96 ? text.slice(0, 96) + '…' : text
   return (
     <span>
-      <button className={styles.expandBtn} onClick={() => setOpen((o) => !o)}>
-        {open ? '▾' : '▸'}
+      <button className={styles.expandBtn} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {open ? 'Hide details' : 'Details'}
       </button>
       {open ? (
         <pre className={styles.jsonPre}>
@@ -25,9 +24,7 @@ function JsonExpander({ value }: { value: unknown }) {
             }
           })()}
         </pre>
-      ) : (
-        <span className={styles.monoSm}>{short}</span>
-      )}
+      ) : null}
     </span>
   )
 }
@@ -57,7 +54,7 @@ export function LogsPage() {
   const [since, setSince] = useState('24h')
   const [limit, setLimit] = useState(100)
   const [autoRefresh, setAutoRefresh] = useState(false)
-  const { data, isFetching, error, dataUpdatedAt, refetch } = useLogs(
+  const { data, isFetching, error, refetch } = useLogs(
     { service: tab, levels, since, limit },
     autoRefresh ? 15_000 : false,
   )
@@ -71,20 +68,17 @@ export function LogsPage() {
   const li = summary?.auth?.linkedin
   const authOk = li?.available === true
   const authMissing = li?.available !== true && li?.available !== false
-  const done =
-    (summary?.counts_by_status['done'] ?? 0) + (summary?.counts_by_status['done_verified'] ?? 0)
-  const failed = summary?.detail_quality_counts?.failed ?? summary?.counts_by_status['failed'] ?? 0
+  const visibleLogs =
+    data?.logs.filter((row) =>
+      `${row.message} ${JSON.stringify(row.detail ?? '')}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    ) ?? []
 
   return (
     <div className={styles.page}>
       <div className={styles.pageHeader}>
-        <div>
-          <h1 className={styles.heroTitle}>Logs &amp; health</h1>
-          <p className={styles.heroMeta}>
-            Auth · queue · runtime state · audit
-            {dataUpdatedAt ? ` · updated ${new Date(dataUpdatedAt).toLocaleTimeString()}` : ''}
-          </p>
-        </div>
+        <h1 className={styles.heroTitle}>Logs &amp; health</h1>
         <button
           className={styles.refreshBtn}
           aria-disabled={isFetching}
@@ -124,30 +118,8 @@ export function LogsPage() {
                   <Link to="/ops">Manage LinkedIn connection</Link>
                 </p>
               )}
-              {li?.updated_at && (
-                <p className={styles.authSub}>Last updated: {timeAgo(li.updated_at)}</p>
-              )}
               {li?.last_error && <p className={styles.authErr}>Last error: {li.last_error}</p>}
             </div>
-          </div>
-
-          {/* Stat row */}
-          <div className={styles.statRow}>
-            {[
-              { label: 'Total', val: summary.total },
-              { label: 'Pending', val: summary.pending_count },
-              { label: 'Processing', val: summary.processing_count },
-              { label: 'Blocked', val: summary.blocked_count },
-              { label: 'Failed', val: failed },
-              { label: 'Done', val: done },
-              { label: 'Stale', val: summary.stale_processing_count },
-              { label: 'Retry due', val: summary.retry_ready_count },
-            ].map(({ label, val }) => (
-              <div key={label} className={styles.statCell}>
-                <span className={styles.statVal}>{val}</span>
-                <span className={styles.statLabel}>{label}</span>
-              </div>
-            ))}
           </div>
 
           <div className={styles.controls}>
@@ -164,6 +136,7 @@ export function LogsPage() {
             </div>
             <input
               className={styles.search}
+              aria-label="Search logs"
               placeholder="Search…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -235,32 +208,24 @@ export function LogsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.logs
-                    .filter(
-                      (row) =>
-                        !search ||
-                        `${row.message} ${JSON.stringify(row.detail ?? '')}`
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
-                    )
-                    .map((row, i) => (
-                      <tr key={`${row.service}-${row.level}-${row.at ?? 'na'}-${i}`}>
-                        <td className={styles.ts} title={row.at ?? undefined}>
-                          {timeAgo(row.at)}
-                        </td>
-                        <td>
-                          <span className={`${styles.levelBadge} ${styles[`level${row.level}`]}`}>
-                            {row.level}
-                          </span>
-                        </td>
-                        <td className={styles.serviceTag}>{row.service.toUpperCase()}</td>
-                        <td>{row.message}</td>
-                        <td>
-                          <JsonExpander value={row.detail} />
-                        </td>
-                      </tr>
-                    ))}
-                  {data.logs.length === 0 ? (
+                  {visibleLogs.map((row, i) => (
+                    <tr key={`${row.service}-${row.level}-${row.at ?? 'na'}-${i}`}>
+                      <td className={styles.ts} title={row.at ?? undefined}>
+                        {timeAgo(row.at)}
+                      </td>
+                      <td>
+                        <span className={`${styles.levelBadge} ${styles[`level${row.level}`]}`}>
+                          {row.level}
+                        </span>
+                      </td>
+                      <td className={styles.serviceTag}>{row.service.toUpperCase()}</td>
+                      <td>{row.message}</td>
+                      <td>
+                        <JsonExpander value={row.detail} />
+                      </td>
+                    </tr>
+                  ))}
+                  {visibleLogs.length === 0 ? (
                     <tr>
                       <td colSpan={5} className={styles.muted}>
                         No log rows match this filter.
@@ -274,24 +239,6 @@ export function LogsPage() {
               Load more
             </button>
           </div>
-
-          {/* Monitoring endpoints */}
-          {tab === 'all' && (
-            <div className={styles.panel}>
-              <h2 className={styles.panelTitle}>Monitoring endpoints</h2>
-              <div className={styles.endpointRow}>
-                <a href="/health" target="_blank" rel="noreferrer" className={styles.endLink}>
-                  GET /health
-                </a>
-                <a href="/api/summary" target="_blank" rel="noreferrer" className={styles.endLink}>
-                  GET /api/summary
-                </a>
-                <a href="/metrics" target="_blank" rel="noreferrer" className={styles.endLink}>
-                  GET /metrics
-                </a>
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>

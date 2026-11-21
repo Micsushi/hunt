@@ -119,7 +119,7 @@ test("WD-UI-SOURCE-SELECT-V1 searches only its owned popup and commits one leaf"
   const variant = await openVariantPage(`
     <div data-automation-id="formField">
       <input role="combobox" aria-label="Source" aria-controls="searched-options"
-        aria-expanded="true" data-hunt-target-token="target-source">
+        aria-expanded="true" value="Company Website" data-hunt-target-token="target-source">
       <input id="source-backing" type="hidden">
     </div>
     <div id="unrelated-options" role="listbox"><div role="option">Company Website</div></div>
@@ -138,7 +138,9 @@ test("WD-UI-SOURCE-SELECT-V1 searches only its owned popup and commits one leaf"
     </script>
   `, "5400000000000000");
   try {
-    await variant.observe();
+    const before = await variant.observe();
+    assert.deepEqual(before.targets.find(({ token }) => token === browserTargetToken("target-source"))?.readback,
+      { kind: "selected", option: null });
     const result = await variant.browser.mutate(admittedMutation(
       variant.sessionId,
       variant.pageId,
@@ -192,22 +194,6 @@ test("WD-UI-SOURCE-SELECT-V1 opens a closed owned popup and waits for delayed le
     ), variant.signal);
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(await variant.page.locator("#source-backing").inputValue(), "company-website");
-  } finally {
-    await variant.close();
-  }
-});
-
-test("WD-UI-SOURCE-SELECT-V1 never treats an uncommitted search query as selected backing state", async () => {
-  const variant = await openVariantPage(`
-    <input role="combobox" aria-label="Source" aria-controls="query-options"
-      aria-expanded="true" value="Company Website" data-hunt-target-token="target-source">
-    <div id="query-options" role="listbox"></div>
-  `, "5600000000000000");
-  try {
-    const source = (await variant.observe()).targets.find(
-      ({ token }) => token === browserTargetToken("target-source"),
-    );
-    assert.deepEqual(source?.readback, { kind: "selected", option: null });
   } finally {
     await variant.close();
   }

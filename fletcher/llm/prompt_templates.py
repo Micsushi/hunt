@@ -48,6 +48,15 @@ OLLAMA_SYSTEM_PROMPT = (
     " DO NOT Make up any information with no evidence."
 )
 
+SUMMARY_GROUNDING_POLICY = (
+    "Every claim, including its strength and scope, must be supported by candidate evidence. "
+    "Listing a skill supports mentioning it, not claiming proficiency or expertise. "
+    "A task alone does not establish complexity, rigor, robustness, scale, or immediate impact. "
+    "Preserve stronger claims when the candidate evidence actually supports them. "
+    "Job requirements and style examples are not evidence of candidate abilities. "
+    "Truthfulness takes priority over polish, keywords, and target length. "
+)
+
 
 def join_values(values: list[str]) -> str:
     return ", ".join(str(value).strip() for value in values if str(value).strip())
@@ -310,6 +319,9 @@ def build_summary_validation_prompt(
         f"Requested keywords: {prompt_json(keywords)}\n"
         f"Summary: {summary}\n"
         "Accept only if summary is coherent, polished, and positioned for this candidate. "
+        f"{SUMMARY_GROUNDING_POLICY}"
+        "Check each claim against that evidence; reject unsupported strengthening even if the tools are listed. "
+        "For each rejection, identify the unsupported claim rather than giving a generic style judgment. "
         "Reject awkward keyword stuffing, copied bullet phrasing, forced domain/tool claims, obvious exaggeration, or banned filler tone. "
         f"Banned phrases: {join_values(summary_banned_phrases)}. "
         "Do not reject because unused keywords exist, we rather have unused keywords than use them badly. "
@@ -362,15 +374,16 @@ def build_summary_generation_prompt(
         f"{existing_line}"
         f"{feedback_line}"
         f"Candidate background: {candidate_context}\n"
+        f"{SUMMARY_GROUNDING_POLICY}\n"
         "Do not copy word for word from Candidate background.\n"
         f"Good summary example: {summary_good_example}\n"
         f"Write {C2_SUMMARY_SENTENCE_RANGE} sentence resume summary, {C2_SUMMARY_WORD_RANGE} words, aiming near {C2_SUMMARY_TARGET_PRINTED_LINES} printed lines. "
-        "Summary should paraphrase candidate background and add in keywords where we can instead of only copying it"
+        "Summary should paraphrase candidate background and add in keywords where we can instead of only copying it. "
         "Start with candidate facts and skills, then job fit. "
         f"{role_instruction}"
         f"No fillers and dont use bloat like: {join_values(summary_banned_phrases)}. "
         "Do not use banned phrases or variants. State what the candidate does, not what they want. "
-        "Do not imply direct domain experience unless it fits the job, we aim for good flow over truthfulness of the candidate's abilities. "
+        "Do not imply direct domain experience unless the candidate evidence supports it. "
         "If strong targeted summary does not fit, return empty summary.\n"
         'Only accepted answer format: {"summary": "...", "keywords_used": ["..."], "keyword_use_reason": "...", "retry_reason": "..."}. '
         "keywords_used must list exact job description keywords used in summary if any. "

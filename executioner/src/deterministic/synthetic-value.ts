@@ -15,6 +15,7 @@ export type SyntheticTextValue =
 
 export function generateSyntheticTextValue(
   constraints: SyntheticTextConstraints | undefined,
+  label = "",
 ): SyntheticTextValue {
   const normalized: Required<SyntheticTextConstraints> = {
     inputType: constraints?.inputType ?? "text",
@@ -26,6 +27,23 @@ export function generateSyntheticTextValue(
     pattern: constraints?.pattern ?? null,
   };
   if (!validBounds(normalized)) return { kind: "unsupported_constraint" };
+  const sentenceCounts = [...label.matchAll(/\b(\d+)(?:\s*(?:[-–—]|to)\s*(\d+))?\s+sentences?\b/giu)];
+  if (sentenceCounts.length > 0) {
+    const count = Number(sentenceCounts[0]![1]);
+    const maximum = Number(sentenceCounts[0]![2] ?? count);
+    if (sentenceCounts.length !== 1 || normalized.inputType !== "text" ||
+        count < 1 || maximum < count || maximum > 10) return { kind: "unsupported_constraint" };
+    const sentences = [
+      "This is a fictional test response for draft validation.",
+      "It does not describe the applicant's experience.",
+      "The applicant must replace it before submitting an application.",
+    ];
+    while (sentences.length < count) sentences.push("This additional test sentence checks the requested response length.");
+    const value = sentences.slice(0, count).join(" ");
+    // Do not truncate or pad a narrative in a way that breaks its sentence count.
+    return fitsLength(value, normalized.minLength, normalized.maxLength) && matchesPattern(value, normalized.pattern)
+      ? { kind: "generated", value } : { kind: "unsupported_constraint" };
+  }
   if (normalized.inputType === "number") return generatedNumber(normalized);
 
   const patterned = normalized.pattern === null

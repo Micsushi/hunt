@@ -49,6 +49,11 @@ export const componentSourceOwners = componentBoundaries.flatMap(
     sourceOwnership.map((pattern) => ({ pattern, owner: feature })),
 );
 
+const productOwners = new Map<string, string>(
+  Object.entries(productBoundary.sourceOwners).flatMap(([component, paths]) =>
+    paths.map((path): [string, string] => [path, component]),
+  ),
+);
 const productImports = new Map<string, ReadonlySet<string>>(
   Object.entries(productBoundary.sourceImports).map(([path, imports]) => [path, new Set(imports)]),
 );
@@ -106,7 +111,10 @@ function owner(path: string): string | undefined {
     return fixedOwner;
   }
 
-  if (productImports.has(path)) return "product";
+  // Chrome executes .js modules and TypeScript reads their adjacent declarations.
+  const productOwner = productOwners.get(path.replace(/\.d\.ts$/, ".js"));
+  if (productOwner !== undefined) return productOwner;
+  if (path.startsWith("src/browser/page-runtime/") || path.startsWith("extension/page-runtime/") || path.startsWith("extension/page-adapters/")) return undefined;
 
   return componentSourceOwners.find(({ pattern }) => {
     const directory = pattern.endsWith("/**")
@@ -124,7 +132,7 @@ function moduleReferences(file: SourceFile): ModuleReference[] {
     file.source,
     ts.ScriptTarget.Latest,
     false,
-    ts.ScriptKind.TS,
+    file.path.endsWith(".js") ? ts.ScriptKind.JS : ts.ScriptKind.TS,
   );
   const references: ModuleReference[] = source.referencedFiles.map(
     ({ fileName }) => ({ kind: "path", path: fileName }),
@@ -168,11 +176,13 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
       return [`${file.path} has no component owner`];
     }
 
+    const extensionRuntime = file.path.startsWith("extension/") && file.path.endsWith(".js");
     return moduleReferences(file).flatMap((reference) => {
       if (reference.kind === "nonliteral-dynamic") {
         return [`${file.path} uses a nonliteral dynamic import`];
       }
       if (reference.kind === "module" && !reference.path.startsWith(".")) {
+        if (extensionRuntime) return [`${file.path} imports non-extension module ${reference.path}`];
         for (const [dependency, consumers] of productRuntimeImports) {
           if ((reference.path === dependency || reference.path.startsWith(`${dependency}/`)) &&
               !consumers.includes(file.path)) {
@@ -189,6 +199,9 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
         return [`${file.path} imports C3 v2 path ${target}`];
       }
 
+      if (extensionRuntime && (!target.startsWith("extension/") || !target.endsWith(".js"))) {
+        return [`${file.path} imports non-extension module ${target}`];
+      }
       const targetOwner = owner(target);
       if (targetOwner === undefined) {
         return [`${file.path} imports unowned source ${target}`];
@@ -217,7 +230,7 @@ export function dependencyViolations(files: readonly SourceFile[]): string[] {
 }
 
 export function sourceFiles(root: string): SourceFile[] {
-  return globSync("**/*.ts", { cwd: root }).map((relativePath) => ({
+  return globSync("**/*.{ts,js}", { cwd: root }).map((relativePath) => ({
     path: posix.join(
       root.replaceAll("\\", "/"),
       relativePath.replaceAll("\\", "/"),

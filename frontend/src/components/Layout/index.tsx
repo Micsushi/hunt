@@ -27,7 +27,6 @@ interface NavItem {
   to: string
   label: string
   exact?: boolean
-  tooltip?: string
   dotKey?: string
 }
 
@@ -109,7 +108,6 @@ export function Layout({ children, username, onLogout, loggingOut }: Props) {
                   to={item.to}
                   end={item.exact}
                   className={({ isActive }) => `${styles.navLink} ${isActive ? styles.active : ''}`}
-                  title={item.tooltip}
                 >
                   {item.label}
                   {item.dotKey && <StatusDot state={dotForKey(item.dotKey)} />}

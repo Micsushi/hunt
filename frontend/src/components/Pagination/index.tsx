@@ -33,7 +33,6 @@ export function Pagination({ page, total, limit, onChange }: Props) {
     <div className={styles.wrap}>
       <span className={styles.info}>
         Page {current} of {totalPages}
-        {total > 0 && <span className={styles.infoCount}> · {total} rows</span>}
       </span>
       <div className={styles.pills}>
         <button
@@ -75,7 +74,6 @@ export function Pagination({ page, total, limit, onChange }: Props) {
             max={totalPages}
             value={jumpVal}
             onChange={(e) => setJumpVal(e.target.value)}
-            placeholder="pg"
             aria-label="Go to page number"
           />
         </form>

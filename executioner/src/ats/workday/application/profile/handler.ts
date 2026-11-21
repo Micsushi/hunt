@@ -25,7 +25,10 @@ import {
   profileInspectionFailureFromError,
 } from "./inspection.ts";
 import { answerLaneAdmitted } from "../../../../form/answers/application-types.ts";
+import { testingQuestionSemanticType } from "../../../../form/answers/testing-policy.ts";
 import { generateSyntheticTextValue } from "../../../../deterministic/synthetic-value.ts";
+import { boundedText } from "../../../../contracts/index.ts";
+import { protectedQuestionCategory, isRecruitmentTermsConsent } from "../questions/protected.ts";
 import type { AnswerFallbackPolicy } from
   "../../../../contracts/application-execution-policy.ts";
 import { boundedOptionalSkillFacts } from "./site-answer-routing.ts";
@@ -180,10 +183,13 @@ export async function completeWorkdayProfilePage(
       page,
       signal,
       syntheticRows,
+      syntheticFallbacks,
+      fallbackEnabled,
     );
     if (result.kind === "blocked") return result;
     verified.push(...result.fields);
     snapshot = result.snapshot;
+    effectivePlan = result.plan;
   }
 
   // Reconcile row-shaped employment and education state before optional
@@ -210,19 +216,14 @@ export async function completeWorkdayProfilePage(
       })
     : [...effectivePlan.fields];
   let hasFreshScalarReadback = false;
+  const skippedOptional = new Set<string>();
   for (const plannedItem of fields) {
     if (plannedItem.answer.kind === "profile_answer_missing") continue;
     const matches = snapshot.controls.filter(({ fieldId }) => fieldId === plannedItem.fieldId);
     if (matches.length === 0) continue;
     const current = matches.length === 1 ? matches[0] : undefined;
+    if (current?.required === false) { skippedOptional.add(plannedItem.fieldId); continue; }
     const item = plannedItem;
-    if (
-      current?.required === false &&
-      item.answerType === "multi_select" &&
-      current.readback !== null &&
-      normalize(current.readback) !== "" &&
-      !readbackMatches(item, current.readback, visibleValue(item))
-    ) continue;
     let reconciledSnapshot = snapshot;
     let firstRead = true;
     const result = await reconcileField(
@@ -260,7 +261,10 @@ export async function completeWorkdayProfilePage(
               syntheticFallbacks,
               `scalar\u0000${plannedItem.fieldId}`,
             );
-            if (rebound !== undefined) page.registerSyntheticField?.(rebound);
+            if (rebound !== undefined) {
+              effectivePlan = withGeneratedSyntheticFields(effectivePlan, [{ field: rebound }]);
+              page.registerSyntheticField?.(rebound);
+            }
             return rebound;
           }
         : undefined,
@@ -268,7 +272,7 @@ export async function completeWorkdayProfilePage(
     if (result.kind === "blocked") {
       const control = snapshot.controls.find(({ fieldId }) => fieldId === item.fieldId);
       if (
-        control?.required === false &&
+        control?.required === false && (control.readback === null || normalize(control.readback) === "") &&
         (result.code === "profile_port_unavailable" ||
           result.code === "profile_commit_unverified")
       ) {
@@ -279,6 +283,7 @@ export async function completeWorkdayProfilePage(
       }
       return result;
     }
+    if (result.kind === "skipped") { skippedOptional.add(item.fieldId); snapshot = reconciledSnapshot; continue; }
     verified.push(result.field);
     if (signal.aborted) return portFailure(signal);
     // Reconcile just independently rescanned the full page for readback. Apply
@@ -291,6 +296,12 @@ export async function completeWorkdayProfilePage(
       const queued = new Set(fields.map(field => field.fieldId));
       fields.push(...adapted.fields.filter(field => !queued.has(field.fieldId)));
       effectivePlan = adapted;
+    }
+    for (const fieldId of skippedOptional) {
+      if (!reconciledSnapshot.controls.some(control => control.fieldId === fieldId && control.required)) continue;
+      const field = effectivePlan.fields.find(field => field.fieldId === fieldId);
+      if (field !== undefined) fields.push(field);
+      skippedOptional.delete(fieldId);
     }
     const preflight = validatePlan(effectivePlan) ?? preflightSnapshot(effectivePlan, reconciledSnapshot);
     if (preflight !== undefined) return preflight;
@@ -314,8 +325,28 @@ export async function completeWorkdayProfilePage(
 
   const final = await inspectAndPreflight(effectivePlan, page, signal);
   if (final.kind === "blocked") return final;
-  if (ownedDuplicateCount(final.snapshot.rows) !== 0) {
+  if (ownedDuplicateCount(final.snapshot.rows.filter(row => row.controls.some(control => control.required))) !== 0) {
     return blocked("profile_row_unverified");
+  }
+  if (effectivePlan.mode === 'live' && final.snapshot.rows.some(row => !row.ownedByC3 && row.controls.some(control => control.required) &&
+      actualFingerprint(row.controls) !== '' &&
+      !effectivePlan.repeatables.some(section => section.section === row.section && section.rows.length > 0))) {
+    return blocked('profile_row_unverified');
+  }
+  const rowKeys = repeatableRowKeys(effectivePlan, final.snapshot.rows);
+  for (const { control, rowKey } of [
+    ...final.snapshot.controls.map(control => ({ control, rowKey: undefined as string | undefined })),
+    ...final.snapshot.rows.flatMap(row => row.controls.map(control => ({ control, rowKey: rowKeys.get(row.rowId) ?? "" }))),
+  ]) {
+    if (!control.required) continue;
+    const fields = rowKey === undefined ? effectivePlan.fields : effectivePlan.repeatables
+      .flatMap(section => section.rows).find(row => row.rowKey === rowKey)?.fields ?? [];
+    const field = fields.find(field => field.fieldId === control.fieldId);
+    if (!field || field.answer.kind !== "answered" ||
+        !verified.some(item => item.fieldId === control.fieldId && item.rowKey === rowKey) ||
+        !readbackMatches(field, control.readback, visibleValue(field), control.uiBehavior)) {
+      return blocked("profile_commit_unverified", { fieldId: control.fieldId });
+    }
   }
   return {
     kind: "verified",
@@ -341,15 +372,18 @@ function committedProfileFields(
         .flatMap(({ fields }) => fields)
         .filter((candidate) => candidate.fieldId === field.fieldId);
     const item = planned[0];
-    if (planned.length !== 1 || item === undefined || item.answer.kind !== "answered" ||
-        item.answer.lane !== "synthetic_test_default") return [];
+    if (planned.length !== 1 || item === undefined || item.answer.kind !== "answered") {
+      throw new TypeError("profile committed plan unavailable");
+    }
     const controls = field.rowKey === undefined
       ? snapshot.controls.filter((control) => control.fieldId === field.fieldId)
       : snapshot.rows.filter(({ rowId }) => rowKeys.get(rowId) === field.rowKey)
         .flatMap(({ controls }) => controls)
         .filter((control) => control.fieldId === field.fieldId);
     const control = controls[0];
-    if (controls.length !== 1 || control === undefined || control.readback === null) {
+    if (controls.length !== 1 || control === undefined || control.readback === null ||
+        item.answer.lane !== "synthetic_test_default" &&
+          !readbackMatches(item, control.readback, visibleValue(item), control.uiBehavior)) {
       throw new TypeError("profile committed readback unavailable");
     }
     const answer = item.answer;
@@ -500,13 +534,20 @@ function withSupportedSyntheticUnknowns(
     ? regionField.optionMapping?.visibleOption ?? regionField.answer.value
     : regionControl?.readback ?? syntheticProfileOption("address.region", regionControl?.allowedOptions ?? []);
   const prepared = plan.fields.filter((field) => !(field.answer.kind === "profile_answer_missing" &&
-    controls.get(field.fieldId) !== undefined && optionalUnknownUnansweredControl(controls.get(field.fieldId)!)))
+    controls.get(field.fieldId) !== undefined && !controls.get(field.fieldId)!.required))
     .map((field): ProfileFieldPlan => {
-    if (field.answer.kind !== "profile_answer_missing") return field;
     const control = controls.get(field.fieldId);
-    return control === undefined
-      ? field
-      : syntheticProfileField(control, fallbacks, `scalar\u0000${field.fieldId}`, field, country, region) ?? field;
+    if (control === undefined) return field;
+    // A saved source category is not necessarily a selectable employer leaf.
+    // Keep any fallback tagged instead of asserting it equals the saved fact.
+    const sourceOptions = field.fieldId === 'source.how_did_you_hear'
+      ? control.allowedOptions?.length ? control.allowedOptions : control.readback ? [control.readback] : []
+      : [];
+    const sourceMissing = field.answer.kind==='answered' && sourceOptions.length>0 &&
+      !sourceOptions.some(option=>normalize(option)===normalize(field.optionMapping?.visibleOption ?? (field.answer.kind==='answered'?field.answer.value:'')));
+    const template = sourceMissing ? {...field,answer:{kind:'profile_answer_missing' as const}} : field;
+    if (template.answer.kind !== "profile_answer_missing") return field;
+    return syntheticProfileField(sourceMissing ? {...control,allowedOptions:sourceOptions} : control, fallbacks, `scalar\u0000${field.fieldId}`, template, country, region) ?? field;
   });
   const planned = new Set(prepared.map(({ fieldId }) => fieldId));
   const generated = snapshot.controls.flatMap((control): ProfileFieldPlan[] => {
@@ -530,8 +571,31 @@ function withSupportedSyntheticUnknowns(
     );
     return field === undefined ? [] : [field];
   });
-  const changed = prepared.length !== plan.fields.length || prepared.some((field, index) => field !== plan.fields[index]);
-  const repeatables = [...plan.repeatables];
+  let changed = prepared.length !== plan.fields.length || prepared.some((field, index) => field !== plan.fields[index]);
+  const rowKeys = repeatableRowKeys(plan, snapshot.rows);
+  const repeatables = plan.repeatables.map(section => ({ ...section, rows: section.rows.map(row => {
+    const observed = snapshot.rows.find(candidate => rowKeys.get(candidate.rowId) === row.rowKey);
+    if (!observed) return row;
+    const fields = [...row.fields];
+    for (const control of observed.controls) {
+      if (!control.required) continue;
+      const index = fields.findIndex(field => field.fieldId === control.fieldId);
+      if (index >= 0 && fields[index]!.answer.kind === "answered") continue;
+      const template = fields[index] ?? profileRepeatableFieldTemplate(control);
+      let field = syntheticProfileField(control, fallbacks, `${observed.rowId}\u0000${control.fieldId}`, template);
+      if (!field) continue;
+      if (/^(?:experience|education)\.end_(?:month|year|date)$/u.test(control.fieldId) && field.answer.kind === "answered") {
+        const value = provisionalRowEndValue(control, observed.controls, row.fields);
+        if (value === undefined) continue;
+        field = { ...field, answer: { ...field.answer, value } };
+        fallbacks.set(`${observed.rowId}\u0000${control.fieldId}`, field);
+      }
+      if (index < 0) fields.push(field);
+      else fields[index] = field;
+      changed = true;
+    }
+    return { ...row, fields };
+  }) }));
   for (const catalog of profileRepeatableCatalog) {
     if (repeatables.some(({ section }) => section === catalog.section)) continue;
     const rows = snapshot.rows.filter((row) => row.section === catalog.section &&
@@ -558,10 +622,46 @@ function withSupportedSyntheticUnknowns(
   };
 }
 
-function optionalUnknownUnansweredControl(control: ProfileControlSnapshot): boolean {
-  return /^unknown\.(?:required|optional)\./u.test(control.fieldId) &&
-    !control.required && (control.uiBehavior === "checkbox" ||
-      control.uiVariant === "workday_empty_optional_date_segment_v1");
+function provisionalRowEndValue(
+  control: ProfileControlSnapshot,
+  controls: readonly ProfileControlSnapshot[],
+  fields: readonly ProfileFieldPlan[],
+): string | undefined {
+  const prefix = control.fieldId.split(".")[0]!;
+  const value = (suffix: string) => {
+    const field = fields.find(field => field.fieldId === `${prefix}.${suffix}`);
+    return field?.answer.kind === "answered" ? field.answer.value :
+      controls.find(control => control.fieldId === `${prefix}.${suffix}`)?.readback ?? undefined;
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const observedStartDate = value("start_date");
+  const legacyDate = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u.exec(observedStartDate ?? "");
+  const startDate = legacyDate
+    ? `${legacyDate[3]}-${legacyDate[1]!.padStart(2, "0")}-${legacyDate[2]!.padStart(2, "0")}`
+    : observedStartDate;
+  if (startDate !== undefined && !validIsoDate(startDate)) return undefined;
+  if (control.fieldId.endsWith("_date")) {
+    return startDate && startDate > today ? startDate : today;
+  }
+  const startYear = Number(value("start_year") ?? startDate?.slice(0, 4));
+  const startMonth = Number(value("start_month") ?? startDate?.slice(5, 7));
+  const yearControl = controls.find(control => control.fieldId === `${prefix}.end_year`);
+  const yearMin = Math.max(1, yearControl?.constraints?.min ?? 1, Number.isInteger(startYear) ? startYear : 1);
+  const yearMax = Math.min(9999, yearControl?.constraints?.max ?? 9999);
+  const endYear = Number(value("end_year") ?? Math.min(yearMax, Math.max(yearMin, Number(today.slice(0, 4)))));
+  if (yearMin > yearMax || endYear < yearMin || endYear > yearMax) return undefined;
+  const isYear = control.fieldId.endsWith("_year");
+  const minimum = isYear ? yearMin : Math.max(1, control.constraints?.min ?? 1,
+    endYear === startYear && Number.isInteger(startMonth) ? startMonth : 1);
+  const maximum = isYear ? yearMax : Math.min(12, control.constraints?.max ?? 12);
+  if (minimum > maximum) return undefined;
+  const preferred = isYear ? endYear : Math.min(maximum, Math.max(minimum, Number(today.slice(5, 7))));
+  const generated = generateSyntheticTextValue({
+    min: preferred, max: preferred, maxLength: control.constraints?.maxLength ?? null,
+    minLength: control.constraints?.minLength, pattern: control.constraints?.pattern ?? null,
+    step: control.constraints?.step, inputType: "number",
+  });
+  return generated.kind === "generated" ? generated.value : undefined;
 }
 
 function syntheticProfileField(
@@ -573,16 +673,24 @@ function syntheticProfileField(
   region?: string,
 ): ProfileFieldPlan | undefined {
   // Optional consent and workflow toggles are observed UI, not inferred answers.
-  if (optionalUnknownUnansweredControl(control)) return undefined;
+  if (!control.required) return undefined;
+  // A draft fallback is not consent to employer terms or a legal attestation.
+  if (control.label && protectedQuestionCategory(boundedText(control.label), undefined) === 'consent' && !isRecruitmentTermsConsent(control.label)) return undefined;
   const unknown = /^unknown\.(?:required|optional)\./u.test(control.fieldId);
   if (!unknown && (template === undefined ||
       template.answer.kind !== "profile_answer_missing")) return undefined;
   const answerType = syntheticProfileAnswerType(control.uiBehavior, template?.answerType);
+  // Selected prompts need not expose their option catalog during a resumed draft.
+  const observedOptions = control.allowedOptions?.length ? control.allowedOptions
+    : control.readback === null ? [] : syntheticProfileSelectedValues(control.readback);
   const options = ["option", "single_select", "multi_select"].includes(answerType ?? "")
-    ? [...control.allowedOptions ?? []].filter((value) => normalize(value) !== "")
+    ? [...observedOptions].filter((value) => normalize(value) !== "")
     : [];
+  const semantic = testingQuestionSemanticType(control.label ?? "");
+  const ownerDefaultNo = unknown && ["prior_employment", "employee_referral"].includes(semantic)
+    ? options.find(option => normalize(option).toLocaleLowerCase("en-US") === "no") : undefined;
   const prior = fallbacks.get(slot);
-  if (prior?.answer.kind === "answered") {
+  if (ownerDefaultNo === undefined && prior?.answer.kind === "answered") {
     const selected = syntheticProfileSelectedValues(prior.answer.value);
     if (selected.length === 0 || selected.every((value) =>
       options.some((option) => normalize(option) === normalize(value))
@@ -593,7 +701,7 @@ function syntheticProfileField(
     : syntheticProfileSelectedValues(control.readback).find((value) =>
       options.some((option) => normalize(option) === normalize(value))
     );
-  const choice = committed ?? syntheticProfileOption(control.fieldId, options);
+  const choice = ownerDefaultNo ?? committed ?? syntheticProfileOption(control.fieldId, options, country);
   const answer = syntheticProfileValue(control, choice, answerType, country, region);
   if (answer === undefined || answerType === undefined) return undefined;
   const field = Object.freeze({
@@ -674,7 +782,7 @@ async function reconcileSupportedSyntheticUnknowns(
       }))),
     ].filter(({ control, rowId, rowKey }) =>
       /^unknown\.(?:required|optional)\./u.test(control.fieldId) &&
-      !optionalUnknownUnansweredControl(control) &&
+      control.required &&
       (rowId === undefined || rowKey !== undefined)
     );
     const pending = candidates.find(({ control, rowKey }) =>
@@ -718,7 +826,7 @@ async function reconcileSupportedSyntheticUnknowns(
       },
     );
     if (result.kind === "blocked") return result;
-    verified.push(pending.rowKey === undefined
+    if (result.kind === "verified") verified.push(pending.rowKey === undefined
       ? result.field
       : { ...result.field, rowKey: pending.rowKey });
     completed.add(`${pending.rowKey ?? "scalar"}\u0000${pending.control.fieldId}`);
@@ -886,7 +994,7 @@ function syntheticProfileValue(
   return generated.kind === "generated" ? generated.value : undefined;
 }
 
-function syntheticProfileOption(fieldId: string, options: readonly string[]): string | undefined {
+function syntheticProfileOption(fieldId: string, options: readonly string[], country?: string): string | undefined {
   if (options.length === 0) return undefined;
   const preferred = fieldId === "employment.previously_worked_for_organization"
     ? [/^no$/iu]
@@ -895,15 +1003,15 @@ function syntheticProfileOption(fieldId: string, options: readonly string[]): st
     : fieldId === "phone.device_type"
     ? [/mobile/iu, /cell/iu]
     : fieldId === "phone.country_code"
-    ? [/united states.*\+?1/iu, /\+1.*united states/iu, /^\+?1$/u]
+    ? /^(canada|ca)$/iu.test(country?.trim() ?? '')
+      ? [/canada.*\+?1/iu, /\+1.*canada/iu, /^\+?1$/u]
+      : [/united states.*\+?1/iu, /\+1.*united states/iu, /^\+?1$/u]
     : [];
   for (const pattern of preferred) {
     const match = options.find((option) => pattern.test(normalize(option)));
     if (match !== undefined) return match;
   }
-  return [...options].sort((left, right) =>
-    normalize(left).localeCompare(normalize(right), "en-US")
-  )[0];
+  return options[0];
 }
 
 function syntheticProfileFile(control: ProfileControlSnapshot): {
@@ -1151,7 +1259,7 @@ async function cleanOwnedRows(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
 ): Promise<ProfilePageSnapshot | undefined> {
-  const remove = ownedRowsToRemove(initial.rows);
+  const remove = ownedRowsToRemove(initial.rows.filter(row => row.controls.some(control => control.required)));
   try {
     for (const row of initial.rows) {
       if (!remove.has(row.rowId)) continue;
@@ -1203,8 +1311,10 @@ async function reconcileSection(
   page: WorkdayProfilePagePort,
   signal: AbortSignal,
   syntheticRows: ReadonlyMap<string, string>,
+  syntheticFallbacks: Map<string, ProfileFieldPlan>,
+  fallbackEnabled: boolean,
 ): Promise<
-  | { readonly kind: "verified"; readonly fields: readonly VerifiedProfileField[]; readonly snapshot: ProfilePageSnapshot }
+  | { readonly kind: "verified"; readonly fields: readonly VerifiedProfileField[]; readonly snapshot: ProfilePageSnapshot; readonly plan: ProfilePagePlan }
   | Extract<ProfilePageCompletionResult, { readonly kind: "blocked" }>
 > {
   let snapshot = initial;
@@ -1217,6 +1327,8 @@ async function reconcileSection(
       : snapshot.rows.find(row => row.section === section && row.rowId === sourceRowId && !used.has(row.rowId));
     if (sourceRowId !== undefined && current === undefined) return blocked("profile_row_unverified");
     if (current === undefined) {
+      if (!snapshot.requiredRepeatableSections?.includes(section) || used.size > 0 ||
+          snapshot.rows.some(row => row.section === section)) continue;
       let rowId: string;
       try {
         rowId = await page.addOwnedRow(section, signal);
@@ -1244,14 +1356,38 @@ async function reconcileSection(
       });
     }
     used.add(current.rowId);
-    for (const item of desired.fields) {
+    const rowVerified = new Map<string, VerifiedProfileField>();
+    let settledRead = false;
+    let attempts = 0;
+    const maxAttempts = desired.fields.length * 2 + 16;
+    for (;;) {
       const rowId: string = current.rowId;
-      // Repeatable rows are one semantic record made from independent controls.
-      // A tenant may omit an optional subfield (for example Location), and a
-      // current-role checkbox may remove the end-date controls after commit.
-      if (!current.controls.some(({ fieldId }) => fieldId === item.fieldId)) continue;
+      const desiredFields = plan.repeatables.find(item => item.section === section)?.rows
+        .find(row => row.rowKey === desired.rowKey)?.fields ?? desired.fields;
+      const item = desiredFields.find(field => !rowVerified.has(field.fieldId) &&
+        current!.controls.some(control => control.fieldId === field.fieldId && control.required));
+      if (!item) {
+        if (settledRead) break;
+        const observed = await inspect(page, signal, false);
+        if (!observed.snapshot) return portFailure(signal);
+        snapshot = observed.snapshot;
+        if (fallbackEnabled) {
+          const adapted = withSupportedSyntheticUnknowns(plan, snapshot, syntheticFallbacks, new Map(syntheticRows));
+          registerGeneratedFields(plan, adapted, page);
+          plan = adapted;
+        }
+        const preflight = preflightSnapshot(plan, snapshot);
+        if (preflight) return preflight;
+        const fresh = snapshot.rows.find(row => row.rowId === rowId);
+        if (!fresh) return blocked("profile_row_unverified");
+        current = fresh;
+        settledRead = true;
+        continue;
+      }
+      if (++attempts > maxAttempts) return blocked("profile_commit_unverified", { fieldId: item.fieldId });
+      settledRead = false;
       const pairedDateField = /_(?:month|year)$/u.test(item.fieldId)
-        ? desired.fields.find(({ fieldId }) => fieldId === item.fieldId.replace(
+        ? desiredFields.find(({ fieldId }) => fieldId === item.fieldId.replace(
           /_(month|year)$/u, (_, part: string) => part === "month" ? "_year" : "_month",
         )) : undefined;
       let reconciledSnapshot = snapshot;
@@ -1261,6 +1397,11 @@ async function reconcileSection(
           // The initial discovery already supplied this row's choice plan.
           // Verify backing without reopening unrelated, still-unfilled popups.
           reconciledSnapshot = await page.inspect(signal, false);
+          if (fallbackEnabled) {
+            const adapted = withSupportedSyntheticUnknowns(plan, reconciledSnapshot, syntheticFallbacks, new Map(syntheticRows));
+            registerGeneratedFields(plan, adapted, page);
+            plan = adapted;
+          }
           return reconciledSnapshot.rows.find((row) => row.rowId === rowId)?.controls ?? [];
         },
         page,
@@ -1271,7 +1412,7 @@ async function reconcileSection(
       if (result.kind === "blocked") {
         const control = current.controls.find(({ fieldId }) => fieldId === item.fieldId);
         if (
-          control?.required === false &&
+          control?.required === false && (control.readback === null || normalize(control.readback) === "") &&
           (result.code === "profile_port_unavailable" ||
             result.code === "profile_commit_unverified")
         ) {
@@ -1283,7 +1424,7 @@ async function reconcileSection(
         }
         return result;
       }
-      verified.push({ ...result.field, rowKey: desired.rowKey });
+      if (result.kind === "verified") rowVerified.set(item.fieldId, { ...result.field, rowKey: desired.rowKey });
       if (signal.aborted) return portFailure(signal);
       // Readback just rescanned the whole page, including newly revealed controls.
       const preflight = preflightSnapshot(plan, reconciledSnapshot);
@@ -1291,10 +1432,17 @@ async function reconcileSection(
       snapshot = reconciledSnapshot;
       current = snapshot.rows.find((row) => row.rowId === rowId) ?? current;
     }
+    verified.push(...rowVerified.values());
+    if (plan.mode === 'live' && current.controls.some(control =>
+        control.required && control.readback !== null && normalize(control.readback) !== '' &&
+        !(control.uiBehavior === 'checkbox' && normalize(control.readback) === 'false') &&
+        !desired.fields.some(field => field.fieldId === control.fieldId && field.answer.kind === 'answered'))) {
+      return blocked('profile_row_unverified');
+    }
   }
   try {
     for (const row of snapshot.rows) {
-      if (row.section !== section || !row.ownedByC3 || used.has(row.rowId)) continue;
+      if (row.section !== section || !row.ownedByC3 || used.has(row.rowId) || !row.controls.some(control => control.required)) continue;
       await page.removeOwnedRow(section, row.rowId, signal);
     }
   } catch {
@@ -1303,7 +1451,13 @@ async function reconcileSection(
   const refreshed = await inspectAndPreflight(plan, page, signal, false);
   if (refreshed.kind === "blocked") return refreshed;
   snapshot = refreshed.snapshot;
-  return { kind: "verified", fields: verified, snapshot };
+  // Resume parsing may seed a foreign row. Never delete it or certify it as the
+  // saved profile merely because all C3-owned rows have been reconciled.
+  if (snapshot.rows.some(row => row.section === section && !row.ownedByC3 &&
+      !used.has(row.rowId) && row.controls.some(control => control.required) && actualFingerprint(row.controls) !== "")) {
+    return {kind:"blocked", code:"profile_row_unverified"};
+  }
+  return { kind: "verified", fields: verified, snapshot, plan };
 }
 
 function selectRepeatableRow(
@@ -1332,6 +1486,7 @@ async function reconcileField(
   pairedDateField?: ProfileFieldPlan,
 ): Promise<
   | { readonly kind: "verified"; readonly field: VerifiedProfileField }
+  | { readonly kind: "skipped" }
   | Extract<ProfilePageCompletionResult, { readonly kind: "blocked" }>
 > {
   let reboundControls: readonly ProfileControlSnapshot[];
@@ -1353,6 +1508,7 @@ async function reconcileField(
     );
   }
   const control = matches[0]!;
+  if (!control.required) return { kind: "skipped" };
   const replanned = replanSynthetic?.(control);
   if (replanSynthetic !== undefined && replanned === undefined) {
     return blocked(syntheticProfileBlockCode(control), {
@@ -1380,7 +1536,7 @@ async function reconcileField(
       effectiveField.fieldId,
     ));
   if (syntheticCommitProofRequired ||
-      !readbackMatches(effectiveField, control.readback, expected)) {
+      !readbackMatches(effectiveField, control.readback, expected, control.uiBehavior)) {
     const syntheticFile = control.uiBehavior === "file" &&
         effectiveField.answer.kind === "answered" &&
         effectiveField.answer.lane === "synthetic_test_default"
@@ -1392,7 +1548,7 @@ async function reconcileField(
     const pairedControl = pairedDateField?.answer.kind === "answered"
       ? reboundControls.filter(({ fieldId }) => fieldId === pairedDateField.fieldId)
       : [];
-    const pairedDate = pairedDateField !== undefined && pairedControl.length === 1 &&
+    const pairedDate = pairedDateField !== undefined && pairedControl.length === 1 && pairedControl[0]!.required &&
         (pairedControl[0]!.uiBehavior === "month" || pairedControl[0]!.uiBehavior === "year")
       ? { controlId: pairedControl[0]!.controlId, uiBehavior: pairedControl[0]!.uiBehavior,
           value: visibleValue(pairedDateField) }
@@ -1400,7 +1556,7 @@ async function reconcileField(
     const request: ProfileCommitRequest = {
       controlId: control.controlId,
       uiBehavior: control.uiBehavior,
-      value: expected,
+      value: choiceTransportValue(effectiveField, control) ?? expected,
       ...(pairedDate === undefined ? {} : { pairedDate }),
       ...(syntheticFile === undefined ? {} : { syntheticFile }),
     };
@@ -1418,7 +1574,7 @@ async function reconcileField(
       );
       if (
         fresh.length !== 1 ||
-        !readbackMatches(effectiveField, fresh[0]!.readback, expected) ||
+        !readbackMatches(effectiveField, fresh[0]!.readback, expected, fresh[0]!.uiBehavior) ||
         !(page.interaction === undefined || profileInteractionEligible(
           control,
           page.interaction(control.controlId),
@@ -1428,7 +1584,7 @@ async function reconcileField(
     } catch {
       try {
         const rebound = (await readControls()).filter(({ fieldId }) => fieldId === effectiveField.fieldId);
-        if (rebound.length === 1 && readbackMatches(effectiveField, rebound[0]!.readback, expected) &&
+        if (rebound.length === 1 && readbackMatches(effectiveField, rebound[0]!.readback, expected, rebound[0]!.uiBehavior) &&
             (page.interaction === undefined || profileInteractionEligible(
               control, page.interaction(control.controlId), true,
             ))) {
@@ -1437,7 +1593,7 @@ async function reconcileField(
         if (rebound.length === 1 && rebound[0]!.readback === null && syntheticFile === undefined) {
           await page.commit(request, signal);
           const retried = (await readControls()).filter(({ fieldId }) => fieldId === effectiveField.fieldId);
-          if (retried.length === 1 && readbackMatches(effectiveField, retried[0]!.readback, expected) &&
+          if (retried.length === 1 && readbackMatches(effectiveField, retried[0]!.readback, expected, retried[0]!.uiBehavior) &&
               (page.interaction === undefined || profileInteractionEligible(
                 control, page.interaction(control.controlId), true,
               ))) {
@@ -1480,7 +1636,25 @@ function verifiedProfileField(
   };
 }
 
+function choiceValues(field: ProfileFieldPlan): readonly string[] | undefined {
+  if (field.answer.kind !== "answered") return undefined;
+  if (field.answerType === "multi_select") return optionList(field.answer.value);
+  return ["text", "option", "single_select"].includes(field.answerType) ? [visibleValue(field)] : undefined;
+}
+
+function choiceTransportValue(field: ProfileFieldPlan, control: ProfileControlSnapshot): string | undefined {
+  if (!["select", "search_select", "radio_group", "multi_select"].includes(control.uiBehavior)) return undefined;
+  const values = choiceValues(field);
+  if (values === undefined) return undefined;
+  return control.uiBehavior === "multi_select" ? JSON.stringify(values) : values.length === 1 ? values[0] : undefined;
+}
+
 function compatible(field: ProfileFieldPlan, control: ProfileControlSnapshot): boolean {
+  // A saved scalar's meaning is independent of whether a tenant renders text or choices.
+  // The choice driver must still select an actual matching option and prove its backing.
+  if (["select", "search_select", "radio_group", "multi_select"].includes(control.uiBehavior)) {
+    return choiceTransportValue(field, control) !== undefined;
+  }
   return (
     (field.answerType === "text" && control.uiBehavior === "text") ||
     (field.answerType === "text" && control.uiBehavior === "textarea") ||
@@ -1492,16 +1666,17 @@ function compatible(field: ProfileFieldPlan, control: ProfileControlSnapshot): b
     (field.answerType === "url" &&
       (control.uiBehavior === "url" || control.uiBehavior === "text")) ||
     (field.answerType === "boolean" && control.uiBehavior === "checkbox") ||
-    (field.answerType === "option" &&
-      (control.uiBehavior === "search_select" || control.uiBehavior === "radio_group")) ||
-    (field.answerType === "single_select" && control.uiBehavior === "select") ||
-    (field.answerType === "multi_select" && control.uiBehavior === "multi_select")
-    || (field.answerType === "file" && control.uiBehavior === "file")
+    (field.answerType === "file" && control.uiBehavior === "file")
   );
 }
 
 function visibleValue(field: ProfileFieldPlan): string {
   if (field.answer.kind !== "answered") return "";
+  if (field.fieldId === "address.postal_code" && /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTVWXYZ]\s?\d[ABCEGHJ-NPRSTVWXYZ]\d$/iu.test(field.answer.value)) {
+    // Canonical spacing preserves the supplied Canadian postal-code identity.
+    const compact = field.answer.value.replace(/\s/gu, "").toUpperCase();
+    return `${compact.slice(0, 3)} ${compact.slice(3)}`;
+  }
   if (field.answerType === "multi_select") return field.answer.value;
   return field.optionMapping?.visibleOption ?? field.answer.value;
 }
@@ -1510,8 +1685,21 @@ function readbackMatches(
   field: ProfileFieldPlan,
   actual: string | null,
   expected: string,
+  behavior: ProfileControlSnapshot["uiBehavior"],
 ): boolean {
   if (actual === null) return false;
+  if (["select", "search_select", "radio_group", "multi_select"].includes(behavior)) {
+    const expectedOptions = field.answerType === "multi_select" ? optionList(expected) : [expected];
+    if (expectedOptions === undefined) return false;
+    const actualOptions = behavior === "multi_select" ? optionList(actual) ?? [actual] : [actual];
+    const alias = sharedUiKnownSemanticAliasMatches(
+      field.fieldId,
+      actualOptions.length === 1 ? actualOptions[0]! : JSON.stringify(actualOptions),
+      expectedOptions.length === 1 ? expectedOptions[0]! : JSON.stringify(expectedOptions),
+    );
+    if (alias !== undefined) return alias;
+    return sameNormalizedOptions(actualOptions, expectedOptions);
+  }
   const aliasMatch = sharedUiKnownSemanticAliasMatches(field.fieldId, actual, expected);
   if (aliasMatch !== undefined) return aliasMatch;
   if (field.answerType === "phone") {
@@ -1611,9 +1799,16 @@ function rowMatches(row: ProfileRowSnapshot, desired: readonly ProfileFieldPlan[
     const controls = row.controls.filter(({ fieldId }) => fieldId === field.fieldId);
     return controls.length === 1 ? [{ field, control: controls[0]! }] : [];
   });
-  return visibleIdentity.length > 0 && visibleIdentity.every(({ field, control }) =>
-    readbackMatches(field, control.readback, visibleValue(field))
+  if (visibleIdentity.length > 0) return visibleIdentity.every(({ field, control }) =>
+    readbackMatches(field, control.readback, visibleValue(field), control.uiBehavior)
   );
+  // A reduced tenant row can expose only dates. Reuse it only when every
+  // populated field is planned and every planned field semantically matches.
+  return desired.length > 0 && desired.every(field => {
+    const controls = row.controls.filter(control => control.fieldId === field.fieldId);
+    return controls.length === 1 && readbackMatches(field, controls[0]!.readback, visibleValue(field), controls[0]!.uiBehavior);
+  }) && row.controls.every(control => !control.readback || normalize(control.readback) === "" ||
+    desired.some(field => field.fieldId === control.fieldId));
 }
 
 function desiredFingerprint(fields: readonly ProfileFieldPlan[]): string {
