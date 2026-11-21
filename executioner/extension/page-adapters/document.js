@@ -55,14 +55,23 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
       return true;
     }};
   };
-  // This phone component publishes its validation result when the field loses focus.
-  const finishPhoneWrite = element => {
+  // The phone component snapshots its initial value on focus and validates the edit on blur.
+  const writePhone = (element, value, write) => {
     if (element.type !== 'tel' || document.activeElement !== document.body ||
-        !composedClosest(element, 'spl-phone-field') || !current() || region(element) !== owner) return;
+        !composedClosest(element, 'spl-phone-field') || !current() || region(element) !== owner) return false;
     element.focus({preventScroll:true});
-    if (element.getRootNode().activeElement === element) element.blur();
+    try {
+      if (!current() || region(element) !== owner || !element.isConnected ||
+          element.getRootNode().activeElement !== element || element.disabled || element.readOnly) {
+        throw new Error('The phone field changed before the edit.');
+      }
+      write(element,value);
+    } finally {
+      if (element.getRootNode().activeElement === element) element.blur();
+    }
+    return true;
   };
-  return {owner, region, current, upload, finishPhoneWrite};
+  return {owner, region, current, upload, writePhone};
 }
 
 export function observeCurrentDocument() {

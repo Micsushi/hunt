@@ -59,7 +59,11 @@ test('the SmartRecruiters phone validates on blur and preserves focus in another
         const root = document.querySelector('spl-phone-field')!.attachShadow({ mode: 'open' });
         root.innerHTML = '<input required type=tel aria-label="Phone number" aria-invalid=true>';
         const phone = root.querySelector('input')!;
-        phone.onblur = () => phone.setAttribute('aria-invalid', String(!phone.value));
+        let original = '';
+        phone.onfocus = () => { original = phone.value; };
+        phone.onblur = () => {
+          if (phone.value !== original) phone.setAttribute('aria-invalid', String(!phone.value));
+        };
       });
       if (focusedElsewhere) await page.locator('#first').focus();
       const status = await page.evaluate(fillVisibleFields, { facts, action: 'status' as const });

@@ -182,8 +182,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (checkedStep && (!insideStep(element,checkedStep) || state.resumeAttempt?.acknowledgedPanel?.() !== checkedStep)) {
       throw new Error('The control moved outside the checked application step.');
     }
-    nativeWrite(element,value);
-    checkedForm?.finishPhoneWrite?.(element);
+    if (!checkedForm?.writePhone(element,value,nativeWrite)) nativeWrite(element,value);
   };
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
   const readChange = (e,change) => change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
