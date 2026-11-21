@@ -201,6 +201,13 @@ Compatibility alias:
 
 - `python check.py ...` still works, but `python quality.py ...` is now the preferred name.
 
+## Frontend development
+
+From `frontend/`, use `npm run dev:ui` for the mock-backed UI or
+`npm run dev:c0`, `npm run dev:c1`, `npm run dev:c2`, or `npm run dev` for the
+Docker-backed modes. These scripts use the repository's Node launcher and do
+not require PowerShell; the container modes still require Docker.
+
 ## Definition Of Done
 
 Before saying work is done:
