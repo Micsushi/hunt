@@ -512,6 +512,7 @@ export const productBoundary = {
     field_recognition: [
       "extension/page-adapters/jazz-address.js",
       "extension/page-adapters/required-markers.js",
+      "extension/page-adapters/rippling-phone.js",
       "extension/page-adapters/smartrecruiters-city.js",
       "extension/page-adapters/workday-choice.js",
       "extension/question-context.js",
@@ -597,6 +598,7 @@ export const productBoundary = {
       "extension/page-adapters/fabric-control.js",
       "extension/page-adapters/jazz-address.js",
       "extension/page-adapters/required-markers.js",
+      "extension/page-adapters/rippling-phone.js",
       "extension/page-adapters/smartrecruiters-city.js",
       "extension/page-adapters/workday-choice.js",
       "extension/page-runtime/composite-control-actions.js",

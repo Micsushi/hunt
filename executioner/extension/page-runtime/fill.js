@@ -330,7 +330,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       };
       const sample=(stage,details={})=>diagnostic.samples.push({stage,elapsedMs:Date.now()-began,connected:e.isConnected,valueUnchanged:e.value===value,expanded:e.getAttribute('aria-expanded')==='true',...details});
       const previousFocus=document.activeElement;
-      let proof=null;
+      let proof=null, restoreScroll;
       sample('before_open');
       try {
         if(!wasOpen){checkDeadline();e.focus();e.click();}
@@ -352,9 +352,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             sample('selected_option',{...details,...renderDetails(list),optionCount:options.length,selectedCount:selected.length,labelUnique,tokenMatches});
             break;
           }
+          if (!wasOpen && !restoreScroll && !selected.length && options.length && dialComposite(e)) {
+            restoreScroll = adapters.revealRipplingPhoneSelection(e,list);
+          }
           sample('menu_observation',{...details,...renderDetails(list),optionCount:options.length,selectedCount:selected.length});
         }while(Date.now()-started<1200);
       } finally {
+        restoreScroll?.();
         if(!wasOpen && e.isConnected && regionFor(e)===region && e.value===value) {
           e.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true,composed:true}));
           await new Promise(resolve=>setTimeout(resolve,100));

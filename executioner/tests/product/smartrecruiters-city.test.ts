@@ -23,7 +23,7 @@ test('OneClick city search verifies the selected location and supports Undo and 
     await page.evaluate(() => {
       const host = document.querySelector('spl-autocomplete')!;
       const root = host.attachShadow({mode:'open'});
-      root.innerHTML = '<input aria-label="City" required role=combobox aria-autocomplete=list aria-controls="city-list" aria-expanded=false aria-invalid=true>' +
+      root.innerHTML = '<input aria-label="City*" required role=combobox aria-autocomplete=list aria-controls="city-list" aria-expanded=false aria-invalid=true>' +
         '<spl-icon role=button aria-label="Clear City value" hidden>Clear</spl-icon><div id="city-list" role=listbox hidden></div>';
       const input = root.querySelector('input')!, menu = root.querySelector<HTMLElement>('[role=listbox]')!, clear = root.querySelector<HTMLElement>('spl-icon')!;
       const close = () => { input.setAttribute('aria-expanded','false'); menu.hidden = true; };
@@ -33,17 +33,21 @@ test('OneClick city search verifies the selected location and supports Undo and 
         if (!input.value) { close(); return; }
         input.setAttribute('aria-expanded','true'); menu.hidden = false;
         for (const label of ['Example, Ontario, Canada','Example, Ohio, United States']) {
-          const item = document.createElement('spl-dropdown-item');
-          item.innerHTML = '<div class="c-spl-autocomplete-default-option"><div data-sr-id="example-content"><spl-truncate></spl-truncate></div></div>';
-          const title = item.querySelector<HTMLElement>('spl-truncate')!;
+          const option = document.createElement('spl-select-option');
+          option.innerHTML = '<div class="c-spl-autocomplete-default-option"><div data-sr-id="example-content"><spl-truncate></spl-truncate></div></div>';
+          const title = option.querySelector<HTMLElement>('spl-truncate')!;
           title.title = label; title.textContent = label;
+          const item = document.createElement('spl-dropdown-item');
+          const forwardingRoot = option.attachShadow({mode:'open'});
+          forwardingRoot.append(item);
+          item.append(document.createElement('slot'));
           const shadow = item.attachShadow({mode:'open'});
           shadow.innerHTML = '<div role=option aria-disabled=false><slot></slot></div>';
           shadow.querySelector('div')!.onclick = () => {
             input.value = label; host.setAttribute('value','[object Object]');
             clear.hidden = false; input.setAttribute('aria-invalid','false'); close();
           };
-          menu.append(item);
+          menu.append(option);
         }
       });
       clear.onclick = () => {
@@ -53,7 +57,7 @@ test('OneClick city search verifies the selected location and supports Undo and 
     });
     const city = async () => {
       const status = await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
-      const row = status.matching?.find(field => field.question === 'City');
+      const row = status.matching?.find(field => field.question === 'City*');
       assert.ok(row, JSON.stringify(status.matching?.map(r=>r.question)));
       return row;
     };
@@ -69,7 +73,7 @@ test('OneClick city search verifies the selected location and supports Undo and 
     const answer = 'Example, Ontario, Canada';
     assert.equal(selection.answer,answer);
     const filled = await page.evaluate(fillVisibleFields,{facts,matchingPlans:[selection]});
-    assert.deepEqual(filled.filled,['City'],JSON.stringify(filled.skipped));
+    assert.deepEqual(filled.filled,['City*'],JSON.stringify(filled.skipped));
     assert.equal((await city()).selected,answer);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.equal(await page.locator('input[role=combobox]').inputValue(),'');
