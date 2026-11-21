@@ -45,6 +45,45 @@ test('a native phone field can reformat the planned number without losing the en
     }
   } finally { await browser.close(); }
 });
+test('the SmartRecruiters phone validates on blur and preserves focus in another field', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const app = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
+    await page.route(app, route => route.fulfill({ contentType: 'text/html', body:
+      '<main><oc-oneclick-form><h2>Personal information</h2><label>First name<input id="first"></label><label>Email<input type=email></label>' +
+      '<spl-phone-field></spl-phone-field><oc-resume-upload><spl-dropzone data-test=resume-upload><label>Resume<input type=file></label></spl-dropzone></oc-resume-upload></oc-oneclick-form></main>' }));
+    for (const focusedElsewhere of [false, true]) {
+      await page.goto(app);
+      await page.evaluate(() => {
+        const root = document.querySelector('spl-phone-field')!.attachShadow({ mode: 'open' });
+        root.innerHTML = '<input required type=tel aria-label="Phone number" aria-invalid=true>';
+        const phone = root.querySelector('input')!;
+        phone.onblur = () => phone.setAttribute('aria-invalid', String(!phone.value));
+      });
+      if (focusedElsewhere) await page.locator('#first').focus();
+      const status = await page.evaluate(fillVisibleFields, { facts, action: 'status' as const });
+      const phone = status.matching?.find(field => field.question === 'Phone number');
+      assert.ok(phone);
+      const result = await page.evaluate(fillVisibleFields, { facts, matchingPlans: [{
+        fieldId: phone.fieldId, signature: phone.signature, provisional: false, reason: 'test_fact', answer: '6135550100',
+      }] });
+      assert.equal(result.filled.includes('Phone number'), !focusedElsewhere, JSON.stringify(result.skipped));
+      const field = page.locator('input[type=tel]');
+      if (focusedElsewhere) {
+        assert.equal(await page.locator('#first').evaluate(el => el === document.activeElement), true);
+        assert.equal(await field.inputValue(), '');
+      } else {
+        assert.equal(await field.getAttribute('aria-invalid'), 'false');
+        await page.evaluate(fillVisibleFields, { action: 'undo' as const });
+        assert.equal(await field.inputValue(), '');
+        assert.equal(await field.getAttribute('aria-invalid'), 'true');
+        await page.evaluate(fillVisibleFields, { action: 'redo' as const });
+        assert.equal(await field.getAttribute('aria-invalid'), 'false');
+      }
+    }
+  } finally { await browser.close(); }
+});
 const widget = (options = '', phone = '') => `<!doctype html>
 <form>
   <label>First Name<input name="first"></label>

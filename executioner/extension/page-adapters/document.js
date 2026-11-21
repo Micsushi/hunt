@@ -55,7 +55,14 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
       return true;
     }};
   };
-  return {owner, region, current, upload};
+  // This phone component publishes its validation result when the field loses focus.
+  const finishPhoneWrite = element => {
+    if (element.type !== 'tel' || document.activeElement !== document.body ||
+        !composedClosest(element, 'spl-phone-field') || !current() || region(element) !== owner) return;
+    element.focus({preventScroll:true});
+    if (element.getRootNode().activeElement === element) element.blur();
+  };
+  return {owner, region, current, upload, finishPhoneWrite};
 }
 
 export function observeCurrentDocument() {
