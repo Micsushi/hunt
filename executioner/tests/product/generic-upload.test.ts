@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium, type Page} from 'playwright';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {prepareCurrentPage} from '../../src/product/current-page-workflow.ts';
+import {applicantProfile} from '../../src/product/sources.ts';
 
 const selected=Buffer.from('%PDF-selected-private-fixture');
 const facts=[{factId:'given_name',value:'Fixture'},{factId:'email_address',value:'fixture@example.invalid'},
@@ -204,13 +206,24 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
           if(mode==='late-login')document.querySelector('main')!.insertAdjacentHTML('beforeend','<input type="password">');
         });
       },mode);
+      if (mode==='preexisting') {
+        // The employer restored the file row on reload. C3 has no upload receipt in this document.
+        await assert.rejects(prepareCurrentPage(page, {
+          url: app, profile: applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'}), resume:selected,
+        }, AbortSignal.timeout(5000), ()=>{}), /employer shows the matching filename\. PDF contents unverified/);
+        assert.equal(await page.evaluate('uploads'), 0);
+      }
       if (mode.startsWith('late-')) await assert.rejects(fill(page),/application form or attachment changed/);
       else {
         const updated=await fill(page);
         assert.equal(updated.resume,'unverified',mode);
+        assert.equal(updated.skipped.some(row=>row.reason==='resume_filename_visible_contents_unverified'),
+          mode==='acknowledged' || mode==='preexisting', mode);
         if(mode==='acknowledged'){
           assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).sent))),[...selected]);
-          assert.equal((await fill(page)).resume,'unverified');
+          const retried=await fill(page);
+          assert.equal(retried.resume,'unverified');
+          assert.ok(retried.skipped.some(row=>row.reason==='resume_filename_visible_contents_unverified'));
         }
       }
       assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),mode==='acknowledged'?'Fixture':'',mode);

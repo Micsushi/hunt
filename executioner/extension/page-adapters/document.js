@@ -36,21 +36,25 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
     const items=()=>root.querySelectorAll('li.c-spl-file-list-item');
     const occupied=items().length>0;
     let acknowledgedItem;
-    return {occupied, acknowledged(name) {
-      if (occupied || !current() || !zone.isConnected || zone.shadowRoot!==root || deepQuery(owner,'oc-resume-upload').length!==1 ||
+    const matchingItem = name => {
+      if (!current() || !zone.isConnected || zone.shadowRoot!==root || deepQuery(owner,'oc-resume-upload').length!==1 ||
           composedClosest(zone,'oc-resume-upload')!==uploadOwner || composedClosest(uploadOwner,'oc-oneclick-form')!==owner ||
           deepQuery(uploadOwner,'spl-dropzone[data-test=resume-upload]').length!==1 || !zone.matches('[data-test=resume-upload]') ||
           composedClosest(zone,'[hidden],[inert],[aria-hidden=true],[aria-busy=true],[aria-invalid=true]') ||
           deepQuery(uploadOwner,'[aria-busy=true],[role=progressbar],[aria-invalid=true],[role=alert]').some(visible) ||
           deepQuery(root,'*').some(node=>visible(node) && /\b(?:uploading|upload failed|upload error|invalid file)\b/i.test(node.innerText||''))) return false;
       const entries=items(), entry=entries[0];
-      if (entries.length!==1 || !entry.parentElement?.matches('ul.c-spl-file-list') || !visible(entry) ||
-          acknowledgedItem && acknowledgedItem!==entry) return false;
+      if (entries.length!==1 || !entry.parentElement?.matches('ul.c-spl-file-list') || !visible(entry)) return false;
       const names=entry.querySelectorAll('.c-spl-file-list-item-label-container span.c-spl-file-list-item-name');
       const buttons=deepQuery(entry,'button');
       if (names.length!==1 || !visible(names[0]) || names[0].textContent.trim()!==name || buttons.length!==1 ||
           !visible(buttons[0]) || buttons[0].disabled || buttons[0].getAttribute('aria-disabled')==='true' ||
           !composedClosest(buttons[0],'spl-button') || buttons[0].getAttribute('aria-label')!=='Delete file '+name) return false;
+      return entry;
+    };
+    return {occupied, filenameVisible:name=>!!matchingItem(name), acknowledged(name) {
+      const entry = !occupied && matchingItem(name);
+      if (!entry || acknowledgedItem && acknowledgedItem !== entry) return false;
       acknowledgedItem=entry;
       return true;
     }};

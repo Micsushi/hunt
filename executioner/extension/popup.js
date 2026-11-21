@@ -86,6 +86,7 @@ async function partial(action){
   const conflicts=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason)).length;
   if(conflicts){$('status').dataset.error='true';$('status').textContent+=` ${conflicts} ${conflicts===1?'field differs':'fields differ'} from saved answers or changed after filling. Check them before continuing.`;}
   if((result.skipped||[]).some(item=>item.reason==='resume_attachment_not_verified')){$('status').dataset.error='true';$('status').textContent+=' The resume attachment was not confirmed.';}
+  if((result.skipped||[]).some(item=>item.reason==='resume_filename_visible_contents_unverified')){$('status').dataset.error='true';$('status').textContent+=' The employer shows the matching resume filename. PDF contents unverified.';}
   if(result.needsOwnerReview)$('status').textContent+=' Suggested answers and uncertain matches need review.';
   if (result.componentFailure) {
     const {component, operation} = result.componentFailure;

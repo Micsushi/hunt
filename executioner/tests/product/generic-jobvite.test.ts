@@ -6,6 +6,7 @@ import {join,resolve} from 'node:path';
 import {chromium,type Page} from 'playwright';
 import {proveJobviteResumeInput} from '../../extension/jobvite-resume.js';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {fillApplication} from '../../src/product/engine.ts';
 import {fillGenericApplication} from '../../src/product/generic-application.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 
@@ -103,6 +104,53 @@ test('queued Jobvite path uses the proof but preserves an existing manual resume
     if(manual)assert.ok(result.skipped.some(item=>item.reason==='existing_attachment_preserved'));
     assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.evaluate('submits'),0);await page.close();
   }}finally {await browser.close();}
+});
+
+test('queued Jobvite advances once from the acknowledged first step and stops before submission', async () => {
+  const browser = await chromium.launch({headless:true});
+  const profile = applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'});
+  const input = {url, profile, resume:Buffer.from(resume.base64,'base64')};
+  try {
+    for (const mode of ['advance','invalid','submit','stall']) {
+      const page = await browser.newPage();
+      await fixture(page,true);
+      await page.evaluate(mode => {
+        const form = document.querySelector('form')!;
+        const article = document.createElement('article');
+        article.setAttribute('ng-controller','JVApply');
+        form.replaceWith(article); article.append(form);
+        form.name='scopeData.applyForm';form.setAttribute('ng-submit','submitApplication()');
+        form.onsubmit = e => {e.preventDefault(); (window as any).submits++;};
+        const first = document.createElement('section');
+        first.setAttribute('ng-form','scopeData.step1'); first.setAttribute('ng-if','showStep(1)');
+        first.append(...form.childNodes); form.append(first);
+        first.querySelector('button[onclick]')!.remove();
+        const trigger=first.querySelector('#resume-trigger')!,owner=trigger.parentElement!;
+        owner.id='attachResume';owner.setAttribute('ng-controller','JVApplyWith');
+        trigger.setAttribute('on-success','sendResume(type, res)');
+        const file=document.querySelector<HTMLInputElement>('#file-input-0')!;
+        file.addEventListener('change',()=>owner.insertAdjacentHTML('beforeend',
+          '<ul><li ng-if="resumeName"><span jv-focus-on="resumeName" ng-click="editOrPreviewResume()">Resume.pdf</span> <a href="" ng-click="removeResume()">Remove</a></li></ul>'));
+        if (mode==='invalid') first.insertAdjacentHTML('beforeend','<input required value="" aria-invalid=true>');
+        const next=document.createElement('button');
+        next.type=mode==='submit'?'submit':'button';next.textContent='Next';next.setAttribute('ng-click','nextStep()');
+        form.append(next);(window as any).advances=0;
+        next.onclick=()=>{
+          (window as any).advances++;
+          if(mode==='stall')return;
+          first.remove();next.remove();
+          form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
+        };
+      },mode);
+      const attempt=()=>fillApplication(page,input,AbortSignal.timeout(15000),()=>{});
+      const stop = mode==='advance'?/Review the screening step/:mode==='stall'?/clicked Next once/:/has not advanced/;
+      await assert.rejects(attempt(),stop);
+      if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
+      if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
+      assert.deepEqual(await page.evaluate('([advances,submits,uploads])'),[mode==='advance'||mode==='stall'?1:0,0,1]);
+      await page.close();
+    }
+  } finally { await browser.close(); }
 });
 
 test('actual extension page action runs Jobvite proof and shared history in the same isolated world',{timeout:45000},async()=>{

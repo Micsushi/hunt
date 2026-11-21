@@ -162,8 +162,12 @@ export function createPageAnswerPlanner(
     const binaryChoices = binary && row.widget !== 'multi-checkbox' && ['radio', 'select', 'listbox'].includes(row.control)
       ? row.options.filter(option => option.toLowerCase() === binary) : [];
     const city = facts.find(fact => fact.factId === 'city')?.value;
-    const locationIndex = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox' &&
-      typeof city === 'string'
+    const locationChoice = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox';
+    if (locationChoice && row.queryable && !populated && !row.searchQuery && !row.options.length &&
+        typeof city === 'string' && city.trim() && [...city].length <= MAX_BROWSER_READBACK_CODE_POINTS) {
+      return {...binding, answer:null, query:city, provisional:false, reason:'choice_options_query', lane:'profile_fact'};
+    }
+    const locationIndex = locationChoice && typeof city === 'string'
       ? matchLocationOption(row.options, city, facts.find(fact => fact.factId === 'region')?.value,
           facts.find(fact => fact.factId === 'country')?.value)
       : -1;

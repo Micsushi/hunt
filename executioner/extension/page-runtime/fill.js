@@ -61,7 +61,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
   const { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
-  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = createSearchChoiceReader(regionFor);
+  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.smartRecruitersCityChoices(
+    createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
   const pendingChoice = widget => {
     if(!widget?.widget)return null;
@@ -453,6 +454,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       const resumeFields = deepQuery(document, 'input[type=file]').filter(e =>
         applicationRegions.includes(regionFor(e)) && fileBinding(e));
       const targets = resumeFields.filter(isRequired);
+      const customUpload = targets.length === 1 ? customForm?.upload?.(targets[0]) : null;
+      const reportAttachment = (label, reason) => addSkip(label,
+        customUpload?.filenameVisible(resume.name) ? 'resume_filename_visible_contents_unverified' : reason,
+        'uploads', 'verify_attachment');
       if (!targets.length && resumeFields.length && !uploadReceipt) result.resume='optional';
       if (uploadReceipt) {
         // Retain the attempted upload even when a site clears/replaces its input.
@@ -472,15 +477,14 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           e.files?.length===1 && read(e)===uploadReceipt.file && e.validity.valid && e.getAttribute('aria-invalid')!=='true' ? 'verified' : 'unverified';
         if (checkedStep && result.resume !== 'verified') result.incomplete = true;
         if (result.resume==='verified') addSkip('Resume', 'selected_resume_already_present');
-          else addSkip('Resume', 'resume_upload_already_attempted_review_attachment', 'uploads', 'verify_attachment');
+        else reportAttachment('Resume', 'resume_upload_already_attempted_review_attachment');
         parserPending = parserBusy() || !checkedStep && uploadReceipt.externalized && !ownedUploadCompleted(uploadReceipt) && !ownedAttachmentPresent(e) && !uploadReceipt.parserCompleted && !parserComplete();
         if (parserComplete()) uploadReceipt.parserCompleted=true;
       } else if (targets.length === 1) {
         const e = targets[0], label = fileBinding(e).label, fileRegion = regionFor(e);
         result.resume = 'unverified';
-        const customUpload = customForm?.upload?.(e);
         if (customUpload?.occupied || externalAttachment(e)) {
-          addSkip(label, 'existing_remote_attachment_requires_review', 'uploads', 'verify_attachment');
+          reportAttachment(label, 'existing_remote_attachment_requires_review');
           parserPending=customUpload?.occupied || parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
         } else if ((e.files?.length ?? 0) > 1 && replaceExistingResume) {
           addSkip(label, 'ambiguous_resume_attachment', 'uploads', 'verify_attachment');
@@ -523,7 +527,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             } else {
               // Native File undo cannot remove a server-side upload. Preserve the
               // receipt and pause for attachment review, without a fake rollback.
-              addSkip(label, uploadReceipt.externalized?'uploaded_attachment_requires_review':'attachment_not_verified_native_file_retained', 'uploads', 'verify_attachment');
+              reportAttachment(label, uploadReceipt.externalized?'uploaded_attachment_requires_review':'attachment_not_verified_native_file_retained');
             }
             if (firstStep && uploadReceipt.acknowledgedPanel?.() === firstStep) checkedStep = firstStep;
             if (checkedStep && result.resume !== 'verified') result.incomplete = true;

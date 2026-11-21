@@ -97,9 +97,10 @@ export function watchJobviteScreening(receipt, binding, state) {
   first.addEventListener('click', event => {
     if (attachment && event.target.closest?.('[ng-click="removeResume()"],[jv-add-attachment][attachment-label="Resume"]')) invalidate();
   },options);
+  let queuedClick = false, queuedAttempted = false;
   next.addEventListener('click', event => {
     observe(observer.takeRecords());
-    if (!event.isTrusted || state.busy || controller.signal.aborted || !attachment || !accepted() || !active() ||
+    if (!(event.isTrusted || queuedClick) || state.busy || controller.signal.aborted || !attachment || !accepted() || !active() ||
         next.disabled || next.type !== 'button' || next.form !== form || next.getAttribute('ng-click') !== 'nextStep()' ||
         (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() !== 'next' ||
         !first.matches(firstSelector) || form.querySelectorAll(firstSelector).length !== 1 ||
@@ -117,5 +118,22 @@ export function watchJobviteScreening(receipt, binding, state) {
         jobviteScreeningPanel() !== undefined) return null;
     const current = jobviteResumeAcknowledgment(owner,receipt.file.name);
     return current?.label === attachment.label && current.remove === attachment.remove ? first : null;
+  };
+  // Only queued preparation asks this receipt to advance its original, acknowledged first step.
+  receipt.advanceJobviteScreening = selectedHash => {
+    if (queuedAttempted || pending || state.busy || selectedHash !== receipt.fileSha256 ||
+        receipt.acknowledgedPanel() !== first || next.form !== form || !form.contains(next) ||
+        form.querySelectorAll('button[ng-click="nextStep()"]').length !== 1 ||
+        next.type !== 'button' || next.getAttribute('ng-click') !== 'nextStep()' ||
+        next.hasAttribute('formaction') || next.disabled || next.getAttribute('aria-disabled') === 'true' ||
+        (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() !== 'next') return false;
+    const visible = el => el.getClientRects().length && getComputedStyle(el).visibility === 'visible' &&
+      !el.closest('[hidden],[inert],[aria-hidden=true]');
+    if (!visible(next) || [...document.querySelectorAll('[role=dialog],dialog[open]')].some(visible) ||
+        [...first.querySelectorAll('input:invalid,select:invalid,textarea:invalid,[aria-invalid=true],[aria-busy=true]')].some(visible) ||
+        [...form.querySelectorAll('button[type=submit],input[type=submit]')].some(visible)) return false;
+    queuedAttempted = queuedClick = true;
+    try { next.click(); } finally { queuedClick = false; }
+    return true;
   };
 }
