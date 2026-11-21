@@ -1,7 +1,8 @@
 import { boundedText, browserTargetToken, fieldId, optionId, MAX_BROWSER_READBACK_CODE_POINTS } from '../contracts/index.ts';
 import { createApplicationAnswerResolver } from '../form/answers/resolver.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
-import { inspectQuestionMatch } from '../form/questions/catalog.ts';
+import { inspectQuestionMatch, resolveQuestion } from '../form/questions/catalog.ts';
+import { contractApprovedPrivacyChoices, protectedQuestionCategory } from '../form/questions/protected.ts';
 import { normalizeCatalogText } from '../form/questions/normalize.ts';
 import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equivalence.ts';
 import { canonicalCanadianRegion } from '../composition/private/s2-derived-profile-country.ts';
@@ -25,7 +26,7 @@ function provinceResidenceAnswer(question: string, canadianRegion: string | unde
 }
 
 export interface PageQuestion extends MatchingObservation {
-  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
+  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
 type PeerQuestion = Pick<PageQuestion, 'question' | 'selected' | 'frameId' | 'formId'>;
 export interface PageAnswerPlan {
@@ -185,7 +186,18 @@ export function createPageAnswerPlanner(
 
   return async (row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal) => {
     try {
-      return await planAnswer(row, observations, signal);
+      const plan = await planAnswer(row, observations, signal);
+      if (row.widget === 'native-multiple' && row.required && !row.selected && plan.provisional && typeof plan.answer === 'string') {
+        const question = resolveQuestion(row.question, company ? [company] : []);
+        const sensitive = protectedQuestionCategory(row.question, question.kind === 'resolved' ? question.id : undefined) ||
+          /\b(?:nationalit(?:y|ies)|citizenships?|ethnic|medical|diagnosis|religion|orientation|ancestry|racial)\b/u.test(normalizeCatalogText(row.question));
+        if (!sensitive) return plan;
+        const neutral = row.options.filter(option => contractApprovedPrivacyChoices.some(
+          choice => normalizeCatalogText(option) === normalizeCatalogText(choice)));
+        return {...plan, answer: neutral.length === 1 ? neutral[0]! : null,
+          reason: neutral.length === 1 ? 'neutral_disclosure' : 'multiple_choice_requires_owner_answer'};
+      }
+      return plan;
     } catch (error) {
       if (!signal.aborted) recordComponentFailure(error, 'answer_matching', 'plan_answer');
       throw error;

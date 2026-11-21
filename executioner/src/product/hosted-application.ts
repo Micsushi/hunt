@@ -155,6 +155,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           if (typeof city !== 'string') throw new ApplicationPause('Add your location to the profile.');
           if (f.valid && f.value && (f.kind === 'combobox' || await loc.evaluate(e =>
             location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]')))) {
+            matching.record({...matchObservation, observedAnswer:f.value, provisional:true, outcome:'unconfirmed', reason:'existing_selection_preserved'});
             known.set(identity, `existing:${f.value}`);
             continue;
           }

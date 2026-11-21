@@ -117,6 +117,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return matches.length===1 ? matches[0] : null;
   };
   const read = e => isMenuToggle(e) ? e.getAttribute('aria-label') ?? '' :
+    e.type === 'select-multiple' ? selection(e) :
     e.type === 'file' ? e.files?.[0] ?? null : e.type === 'radio' || e.type === 'checkbox' ? e.checked : e.value;
   const pendingControlChange = e => {
     const pending=state.unconfirmedControls?.find(change=>regionFor(e)===change.region && currentElement(change)===e);
@@ -142,7 +143,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if (next==='after') state.resumeAttempt=change.uploadReceipt;
     }
   };
-  const { write, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause } = createControlInteraction({ state, checkDeadline, boundChoice, editable, visible, choiceState });
+  const { write, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause, optionKey, selection } = createControlInteraction({ state, checkDeadline, boundChoice, editable, visible, choiceState });
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
   const readChange = (e,change) => change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
   const unchangedChange = (e,change,value) => change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
@@ -195,7 +196,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           written++;
         }
         await new Promise(resolve => setTimeout(resolve, 100));
-        if (changes.some(c => {const e=currentElement(c);if(e)c.element=e;if(action==='undo' && c.matchingDynamic && (!e || !visible(e)) && (c[next]==='' || c[next]===false))return false;return !e || readChange(e,c)!==c[next];})) throw new Error('The website did not keep the restored values. Check the form.');
+        if (changes.some(c => {
+          const e=currentElement(c);
+          if(e)c.element=e;
+          const restoredBlank=c[next]==='' || c[next]===false || c.element.type==='select-multiple' && c[next]==='[]';
+          if(action==='undo' && c.matchingDynamic && (!e || !visible(e)) && restoredBlank)return false;
+          return !e || readChange(e,c)!==c[next];
+        })) throw new Error('The website did not keep the restored values. Check the form.');
       } catch (error) {
         await new Promise(resolve => setTimeout(resolve, 100));
         // Transfer only verified writes; the untouched remainder stays retryable.
@@ -333,7 +340,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       for (let depth = 0; depth < 3 && parent && parent !== document.body; depth++, parent = parent.parentElement) candidates.push(parent);
       return own.some(f => /e.?mail/i.test(f.label)) && ![...region.querySelectorAll('input[type=password]')].some(visible) &&
         (state.resumeAttempt?.url===location.href && state.resumeAttempt.region===region && (ownedUploadCompleted(state.resumeAttempt) || ownedAttachmentPresent(state.resumeAttempt.element)) ||
-        candidates.some(container => deepQuery(container, 'input[type=file]').length || /submit application|apply for|job application|candidature/i.test(container.innerText ?? '')));
+        candidates.some(container => deepQuery(container, 'input[type=file]').length || /submit application|apply for|job application|candidature/i.test(container.innerText ?? '')) ||
+        deepQuery(document, 'input[type=file]').some(input => verifiedDialogUpload(input)?.region === region));
     });
     };
     let applicationRegions = identifyApplicationRegions(fields);
@@ -610,7 +618,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const same=String(row.selected)===String(value) || row.control==='text' && typeof value==='string' && sameText(e,row.question,value);
           reportExisting(row, plan, same, skip);continue;
         }
-        if (row.control==='listbox' || e.multiple) {skip('custom_choice_not_reversible', 'browser_interaction', 'operate_choice');reportMatch(row,plan,'unconfirmed','custom_choice_not_reversible',row.selected);continue;}
+        if (row.control==='listbox' || (e.multiple && e.type!=='select-multiple')) {skip('custom_choice_not_reversible', 'browser_interaction', 'operate_choice');reportMatch(row,plan,'unconfirmed','custom_choice_not_reversible',row.selected);continue;}
         if (row.control==='radio') {
           const group=composedClosest(e,'fieldset,[role=radiogroup]');
           const radios=deepQuery(group,'input[type=radio]').filter(editable);
@@ -618,9 +626,17 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           if (matches.length!==1 || !radios.every(radio=>radio.name===e.name)) {skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique');continue;}
           e=matches[0];value=true;
         } else if (row.control==='select') {
-          const options=[...e.options].filter(o=>!o.disabled && o.value && o.textContent.trim()===value);
+          const options=[...e.options].filter(o=>o.value && (e.multiple
+            ? !o.matches(':disabled') && !o.closest('[hidden]') && o.label.trim()===value
+            : !o.disabled && o.textContent.trim()===value));
           if (options.length!==1) {skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique');continue;}
-          value=options[0].value;
+          if (e.multiple && e.selectedOptions.length) {
+            skip('existing_value_preserved');reportMatch(row,plan,'unconfirmed','existing_value_preserved',row.selected);continue;
+          }
+          if (e.multiple && [...e.options].filter(option=>option.value===options[0].value).length!==1) {
+            skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique',row.selected);continue;
+          }
+          value=e.multiple ? JSON.stringify([optionKey(options[0])]) : options[0].value;
         }
         if (e.type!=='checkbox' && row.control!=='radio') value=String(value);
         if (read(e)===value && row.valid) {reportMatch(row,plan,'verified','existing_value_confirmed',row.selected);continue;}
@@ -629,7 +645,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         write(e,value);const immediate=currentElement(change),written=read(immediate??e);await new Promise(resolve=>setTimeout(resolve,100));
         e=currentElement(change);
         if (!e || !editable(e) || !unchanged(e,value) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
-          if(e && editable(e) && unchanged(e,written)) {
+          if(e && editable(e) && unchanged(e,e.type==='select-multiple' ? value : written)) {
             write(e,change.before);await new Promise(resolve=>setTimeout(resolve,100));e=currentElement(change);
           }
           const restored=!!e && unchanged(e,change.before);

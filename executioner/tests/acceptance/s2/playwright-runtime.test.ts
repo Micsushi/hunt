@@ -53,7 +53,7 @@ import {
 } from
   "../../../src/browser/playwright-live/private/workday-application-runtime.ts";
 
-test("Workday Review admits only its exact omitted composites and canonical display aliases", () => {
+test("Workday Review checks saved display values and every selected skills row", async () => {
   assert.deepEqual([
     "identity.middle_name",
     "address.line2",
@@ -75,6 +75,53 @@ test("Workday Review admits only its exact omitted composites and canonical disp
   assert.equal(reviewAnswerCandidates("Direct Sourcing").has("Recruiter"), true);
   assert.equal(reviewAnswerCandidates("Recruiter Outreach").has("Recruiter"), true);
   assert.equal(reviewAnswerCandidates("Direct Mail").has("Recruiter"), false);
+
+  const browser = await chromium.launch();
+  const now = "2026-08-05T12:00:00.000Z";
+  const operationId = generatedOperationId("operation_review_skills_01");
+  const session = {
+    schemaVersion: 1 as const,
+    journeyId: journeyId("journey_review_skills_01"),
+    sessionId: "live_session_review_skills_01" as LiveSessionId,
+    profileLeaseId: "profile_lease_review_skills_01" as ProfileLeaseId,
+    target: {} as never,
+    leaseExpiresAt: "2026-08-05T13:00:00.000Z",
+  };
+  const runtime = new OwnedWorkdayApplicationRuntime({
+    request: {} as never, acceptances: { record() {} },
+    nextOperationId: () => operationId, timeoutMs: 1_000,
+    initialReviewExpected: ["TypeScript", "Python"].map((value, index) => ({
+      fieldId: `skills.values.selection.${index}`,
+      rowIdentity: `formField-skills.values.selection.${index}`,
+      provenance: "owner_provided", valueSha256: createHash("sha256").update(value).digest("hex"),
+    })),
+    authorizationExpiresAt: session.leaseExpiresAt, now: () => now,
+  });
+  try {
+    runtime.bindSession(session);
+    const page = await browser.newPage();
+    await page.setContent(`<main data-automation-id="applyFlowPage">
+      <div data-automation-id="progressBarActiveStep">Review</div>
+      <section data-automation-id="applyFlowReviewPage">
+        <div data-automation-id="formField-"><div role="group" aria-labelledby="skills-section">
+          <ul data-automation-id="skills"><li>TypeScript</li></ul>
+          <button type="button" onclick="this.previousElementSibling.insertAdjacentHTML('beforeend','<li>Python</li>');this.remove()">MORE (1)</button>
+        </div></div>
+        <button onclick="document.body.dataset.submitted='true'">Submit</button>
+      </section></main>`);
+    const capture = () => runtime.run(page as never, {
+      schemaVersion: 1, journeyId: session.journeyId, sessionId: session.sessionId,
+      target: session.target, operationId, now,
+    }, { kind: "capture_review" }, new AbortController().signal);
+    await capture();
+    assert.deepEqual(await page.locator("li").allTextContents(), ["TypeScript", "Python"]);
+    await page.locator("li").last().evaluate(element => element.remove());
+    await assert.rejects(capture(), /Review field mismatch|Review field hidden/);
+    assert.equal(await page.locator("body").getAttribute("data-submitted"), null);
+  } finally {
+    runtime.dispose();
+    await browser.close();
+  }
 });
 
 test("a supported unknown revealed after a profile commit is reconciled in the same live transport", async () => {

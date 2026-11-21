@@ -79,13 +79,17 @@ export async function inspectHostedFields(page: Page) {
       const ashbyButtons = e.matches('.ashby-application-form-input-yesno');
       let ambiguousTitles: Element[] | undefined;
       let ashbyEntryRequired = false;
-      const ashbyEntry = e.closest('.ashby-application-form-field-entry[data-field-entry-id][data-field-path]');
+      const bareFieldset = location.hostname === 'jobs.ashbyhq.com' && e.matches('input.ashby-application-form-input-autocomplete[role=combobox]')
+        ? e.closest('fieldset') : null;
+      const ashbyEntry = e.closest('.ashby-application-form-field-entry[data-field-entry-id][data-field-path]') ?? bareFieldset;
       if (ashbyEntry && (ashbyButtons || e.matches('input[role=combobox]'))) {
         // Ashby titles can refer to an ID that is absent from the rendered entry.
-        const activeInEntry = (node: Element) => node.closest('.ashby-application-form-field-entry') === ashbyEntry &&
+        const isBare = ashbyEntry === bareFieldset;
+        const activeInEntry = (node: Element) => node.closest(isBare ? 'fieldset,.ashby-application-form-field-entry' : '.ashby-application-form-field-entry') === ashbyEntry &&
           visible(node) && !node.closest('[hidden],[inert],[aria-hidden=true]');
-        const titles = [...ashbyEntry.querySelectorAll<HTMLLabelElement>('label.ashby-application-form-question-title')].filter(activeInEntry);
-        const widgets = [...ashbyEntry.querySelectorAll('.ashby-application-form-input-yesno,input[role=combobox]')].filter(activeInEntry);
+        const titles = [...ashbyEntry.querySelectorAll<HTMLLabelElement>(isBare ? ':scope > label.ashby-application-form-question-title' : 'label.ashby-application-form-question-title')].filter(activeInEntry);
+        const widgetSelector = isBare ? 'input:not([type=hidden]),select,textarea,.ashby-application-form-input-yesno' : '.ashby-application-form-input-yesno,input[role=combobox]';
+        const widgets = [...ashbyEntry.querySelectorAll(widgetSelector)].filter(activeInEntry);
         if (widgets.includes(e)) {
           ashbyEntryRequired = !!ashbyEntry.querySelector(':scope > .ashby-application-form-field-required');
           if (ashbyEntryRequired && (widgets.length > 1 || titles.length > 1)) return null;

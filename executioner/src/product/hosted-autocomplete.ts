@@ -73,6 +73,7 @@ export async function verifyAshbyAutocomplete(input: Locator, expected: string) 
     await element.fill(query);
     if (await element.inputValue() !== query) throw new ApplicationPause('The employer did not display the dropdown search.');
     await element.press('Escape');
+    if (await element.inputValue() !== query) throw new ApplicationPause('The dropdown search changed before its selection could be verified.');
     await element.evaluate(e => e.blur());
     const restored = await element.evaluate((e, expected) => {
       if (!e.isConnected || e === document.activeElement || e.getAttribute('aria-expanded') !== 'false' ||

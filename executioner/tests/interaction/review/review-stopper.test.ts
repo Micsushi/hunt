@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { chromium } from "playwright";
 
 import {
   browserPageId,
@@ -46,40 +47,39 @@ const state = Object.freeze({
   revision: 7,
 }) satisfies DurableJourneyState;
 
-test("a Submit outside the exact Workday page footer cannot satisfy the signature", async () => {
-  const absent = {
-    count: () => Promise.resolve(0),
-    isVisible: () => Promise.resolve(false),
-    isEnabled: () => Promise.resolve(false),
-    getByRole: () => absent,
-  };
-  const outsideSubmit = {
-    count: () => Promise.resolve(1),
-    isVisible: () => Promise.resolve(true),
-    isEnabled: () => Promise.resolve(true),
-    getByRole: () => outsideSubmit,
-  };
-  const root = {
-    count: () => Promise.resolve(1),
-    isVisible: () => Promise.resolve(true),
-    isEnabled: () => Promise.resolve(false),
-    getByRole: () => absent,
-  };
-  const pageWithOutsideSubmit = {
-    locator: (selector: string) => selector.includes("pageFooter")
-      ? absent
-      : selector.includes("applyFlowReviewPage")
-      ? selector.includes("error") ? absent : root
-      : root,
-    getByRole: () => outsideSubmit,
-  };
-  const observed = await inspectWorkdayReview(pageWithOutsideSubmit);
+test("Workday Review requires a scoped Submit and a matching final step", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 778, height: 446 } });
+    const review = '<section data-automation-id="applyFlowReviewPage">Review</section>';
+    const footer = '<div data-automation-id="pageFooter"><button>Submit</button></div>';
+    await page.setContent(`<main data-automation-id="applyFlowPage">${review}</main>${footer}`);
+    assert.deepEqual((await inspectWorkdayReview(page)).finalSubmit, {
+      count: 0, visible: false, enabled: false,
+    });
 
-  assert.deepEqual(observed.finalSubmit, {
-    count: 0,
-    visible: false,
-    enabled: false,
-  });
+    const completed = '<li data-automation-id="progressBarCompletedStep">Completed</li>';
+    const active = (position: string) =>
+      `<li data-automation-id="progressBarActiveStep"><label aria-live="polite">current step ${position}</label></li>`;
+    for (const [steps, sameFlow, accepted] of [
+      [completed + completed + active("3 of 3"), true, true],
+      [completed + completed + active("2 of 3"), true, false],
+      [completed + active("3 of 3") + completed, true, false],
+      [completed + active("3 of 3") + active("3 of 3"), true, false],
+      [completed + completed + active("7 of 7"), true, false],
+      [completed + completed + active("3 of 3"), false, false],
+    ] as const) {
+      const progress = `<ol data-automation-id="progressBar">${steps}</ol>`;
+      await page.setContent(sameFlow
+        ? `<main data-automation-id="applyFlowPage">${progress}${review}${footer}</main>`
+        : `<main data-automation-id="applyFlowPage">${progress}</main><main data-automation-id="applyFlowPage">${review}${footer}</main>`);
+      const observed = await inspectWorkdayReview(page);
+      assert.deepEqual(observed.activeStep, { count: accepted ? 1 : 0, visible: accepted });
+      assert.equal(observed.finalSubmit.enabled, true);
+    }
+  } finally {
+    await browser.close();
+  }
 });
 
 test("verified Review returns only structural Submit facts and a terminal transition", async () => {

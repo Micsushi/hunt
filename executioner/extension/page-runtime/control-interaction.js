@@ -1,4 +1,8 @@
 export function createControlInteraction({ state, checkDeadline, boundChoice, editable, visible, choiceState }) {
+  // select.value exposes only the first selected option. Journal the whole set
+  // so an additional owner selection prevents a subsequent undo.
+  const optionKey = option => JSON.stringify([option.value, option.label.trim()]);
+  const selection = select => JSON.stringify([...select.selectedOptions].map(optionKey).sort());
   const write = (e, value) => {
     if (e.type === 'file') {
       const transfer = new DataTransfer();
@@ -18,8 +22,21 @@ export function createControlInteraction({ state, checkDeadline, boundChoice, ed
       } finally {document.removeEventListener('input',capture,true);document.removeEventListener('change',capture,true);}
       return;
     }
-    const proto = e instanceof HTMLSelectElement ? HTMLSelectElement.prototype : e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, typeof value === 'boolean' ? 'checked' : 'value').set.call(e, value);
+    if (e.type === 'select-multiple') {
+      const wanted = JSON.parse(value);
+      const options = [...e.options];
+      if (!Array.isArray(wanted) || wanted.some(key => {
+        const matches = options.filter(option => optionKey(option) === key);
+        return matches.length !== 1 || matches[0].matches(':disabled') || matches[0].closest('[hidden]') ||
+          options.filter(option => option.value === matches[0].value).length !== 1;
+      })) {
+        throw new Error('The website changed the available choices.');
+      }
+      for (const option of options) option.selected = wanted.includes(optionKey(option));
+    } else {
+      const proto = e instanceof HTMLSelectElement ? HTMLSelectElement.prototype : e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, typeof value === 'boolean' ? 'checked' : 'value').set.call(e, value);
+    }
     e.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     e.dispatchEvent(new Event('change', { bubbles: true }));
   };
@@ -99,5 +116,5 @@ export function createControlInteraction({ state, checkDeadline, boundChoice, ed
     }
     if(choiceState(boundChoice(change))!==value)throw new Error('The website did not keep the restored selection.');
   };
-  return { write, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause };
+  return { write, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause, optionKey, selection };
 }

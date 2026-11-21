@@ -35,6 +35,10 @@ test('Jobvite portal transition binds Resume despite duplicate dialog IDs, with 
   const browser=await chromium.launch({headless:true});
   try {for(const form of [true,false]){
     const page=await browser.newPage();await fixture(page,false,form);
+    if (form) {
+      // The live first step has only Next, and its file chooser sits outside the form.
+      await page.getByRole('button',{name:'Submit application'}).evaluate(button => { button.textContent='Next'; });
+    }
     assert.equal(await proof(page),true);assert.deepEqual(await counts(page),[0,0]);
     const result=await fill(page);assert.equal(result.resume,'verified');assert.ok(result.filled.includes('Resume'));
     assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.locator('#file-input-0').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),'%PDF-selected-jobvite-fixture');
