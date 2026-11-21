@@ -91,9 +91,31 @@ test('Ashby autocomplete opens its unique toggle without treating focus as an op
     await fieldset.locator('label').evaluate(e=>e.classList.remove('_required_fixture_91'));
     assert.equal((await sourceField())?.required,false);
     await fieldset.locator('label').evaluate(e=>e.classList.add('_required_fixture_91'));
+    await fieldset.evaluate(e=>{
+      e.setAttribute('class','ashby-application-form-field-entry');
+      e.setAttribute('data-field-entry-id','owned');
+      e.setAttribute('data-field-path','owned');
+      const wrapper=document.createElement('div');
+      const label=e.querySelector('label')!;
+      label.replaceWith(wrapper);
+      wrapper.append(label);
+    });
+    assert.equal((await sourceField())?.required,true);
     await page.locator('#choice').fill('');await page.locator('#toggle').evaluate(e=>e.after(e.cloneNode(true)));
     await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{}),/opener is ambiguous/);
     assert.equal(await page.locator('#choice').inputValue(),'');
+    await page.reload();
+    await page.locator('label[for=choice]').evaluate(e=>{e.textContent='How did you hear about Example Employer?';});
+    await page.locator('#choices').evaluate(e=>{e.innerHTML='<div role=option>Company Website</div><div role=option>Job Board</div><div role=option>LinkedIn</div>';});
+    await page.evaluate(id=>{
+      const data=document.createElement('script');
+      data.type='application/ld+json';
+      data.textContent=JSON.stringify({'@type':'JobPosting',identifier:{value:id},hiringOrganization:{'@type':'Organization',name:'Example Employer'}});
+      document.head.append(data);
+    },id);
+    const defaults=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'});
+    await fillApplication(page,{url,profile:defaults,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
+    assert.equal(await page.locator('#choice').inputValue(),'Job Board');
   }finally{await browser.close();}
 });
 

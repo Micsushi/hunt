@@ -537,6 +537,7 @@ export const productBoundary = {
       "extension/shared-choice-widget.js",
       "extension/page-runtime/control-interaction.js",
       "extension/page-runtime/fill.js",
+      "src/product/hosted-autocomplete.ts",
       "src/product/extension-bridge.ts",
     ],
     uploads: [
@@ -562,6 +563,7 @@ export const productBoundary = {
       "src/product/current-page-workflow.ts",
       "src/product/engine.ts",
       "src/product/generic-application.ts",
+      "src/product/bamboo-application-entry.ts",
       "src/product/handoff.ts",
       "src/product/hosted-application.ts",
       "src/product/mcp.ts",
@@ -722,6 +724,7 @@ export const productBoundary = {
       "src/product/workday-sign-in.ts",
     ],
     "src/product/generic-application.ts": [
+      "src/product/bamboo-application-entry.ts",
       "extension/form-page.js",
       "extension/generic-fill.js",
       "extension/jobvite-resume.js",
@@ -737,7 +740,9 @@ export const productBoundary = {
       "src/product/target.ts",
     ],
     "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts"],
+    "src/product/hosted-autocomplete.ts": ["src/product/application-contract.ts"],
     "src/product/hosted-application.ts": [
+      "src/product/hosted-autocomplete.ts",
       "extension/page-adapters/document.js",
       "extension/form-page.js",
       "src/product/hosted-field-observation.ts",
@@ -757,6 +762,7 @@ export const productBoundary = {
       "src/form/questions/normalize.ts",
     ],
     "src/product/page-answer-planner.ts": [
+      "src/form/questions/protected.ts",
       "src/product/component-diagnostics.ts",
       "src/composition/private/s2-derived-profile-country.ts",
       "src/form/answers/resolver.ts",

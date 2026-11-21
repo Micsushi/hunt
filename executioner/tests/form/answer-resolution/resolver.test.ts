@@ -264,6 +264,31 @@ test("Canadian authorization and sponsorship use only their scoped saved answers
 
 
 test("only approved recruitment terms use saved consent; required unknown declarations use authorized provisional fallback", async () => {
+  const privacy = "Please confirm that you have read and agree to Canonical's Recruitment Privacy Notice and Privacy Policy.";
+  const acknowledgement = {id: optionId("acknowledgement"), label: boundedText("Acknowledge/Confirm")};
+  const observedSelect = field(privacy, "select", [
+    {id: optionId("placeholder"), label: boundedText("Please select")}, acknowledgement,
+  ]);
+  const ownerConsent = (value: boolean) => resolverWith({
+    kind: "answered", provenance: "owner_provided", lane: "live_owner_fact", value,
+  }).resolver;
+  const signal = new AbortController().signal;
+  const select = await ownerConsent(true).resolve(request(observedSelect), signal);
+  assert.ok(select.ok && select.value.kind === "resolved" && select.value.intent.kind === "choice");
+  assert.equal(select.value.lane, "live_owner_fact");
+  assert.equal(select.value.intent.optionId, acknowledgement.id);
+  assert.equal(select.value.intent.expectedOption, acknowledgement.label);
+  assert.equal(select.value.intent.provenance, "owner_provided");
+  for (const other of [
+    {...observedSelect, options: [...observedSelect.options, {id:optionId("other"), label:boundedText("Other")}]},
+    {...observedSelect, required:false},
+    {...observedSelect, label:boundedText("During this application process I agree to use only my own words.")},
+  ]) {
+    const answer = await ownerConsent(true).resolve(request(other), signal);
+    assert.ok(!answer.ok || answer.value.kind !== "resolved");
+  }
+  const denied = await ownerConsent(false).resolve(request(observedSelect), signal);
+  assert.ok(!denied.ok || denied.value.kind !== "resolved");
   const approvedLabels = new Set(['Yes, I have read and consent to the terms and conditions*','Applicant Privacy Notice','Privacy Policy','Terms','Terms & Conditions','Accept terms','I have read the terms']);
   for (const label of ["Yes, I have read and consent to the terms and conditions*", "I Agree",
     "Applicant Privacy Notice", "Privacy Policy", "Terms", "Terms & Conditions", "Accept terms", "I have read the terms", "I have read and understood",

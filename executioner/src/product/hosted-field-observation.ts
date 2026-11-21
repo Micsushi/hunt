@@ -81,10 +81,11 @@ export async function inspectHostedFields(page: Page) {
       let ashbyEntryRequired = false;
       const bareFieldset = location.hostname === 'jobs.ashbyhq.com' && e.matches('input.ashby-application-form-input-autocomplete[role=combobox]')
         ? e.closest('fieldset') : null;
-      const ashbyEntry = e.closest('.ashby-application-form-field-entry[data-field-entry-id][data-field-path]') ?? bareFieldset;
+      const fullEntry = e.closest('.ashby-application-form-field-entry[data-field-entry-id][data-field-path]');
+      const ashbyEntry = fullEntry ?? bareFieldset;
       if (ashbyEntry && (ashbyButtons || e.matches('input[role=combobox]'))) {
         // Ashby titles can refer to an ID that is absent from the rendered entry.
-        const isBare = ashbyEntry === bareFieldset;
+        const isBare = !fullEntry;
         const activeInEntry = (node: Element) => node.closest(isBare ? 'fieldset,.ashby-application-form-field-entry' : '.ashby-application-form-field-entry') === ashbyEntry &&
           visible(node) && !node.closest('[hidden],[inert],[aria-hidden=true]');
         const titles = [...ashbyEntry.querySelectorAll<HTMLLabelElement>(isBare ? ':scope > label.ashby-application-form-question-title' : 'label.ashby-application-form-question-title')].filter(activeInEntry);

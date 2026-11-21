@@ -43,8 +43,8 @@ Important limit:
 1. Run local verification first: `python ci.py shared` plus the component-specific target you changed.
 2. Verify the repo-native runtime command you expect the host to run: for example `python deploy.py c1 --mode server --env-file .env.server2 --dry-run`.
    If you run it manually on `server2`, include `--project-name hunt-server2` so Docker Compose manages the same project Ansible owns.
-3. Preview the remote deploy wrapper: `.\scripts\deploy_server2.ps1 -Stages 6 -PrintOnly`
-4. Optional Ansible check mode: `.\scripts\deploy_server2.ps1 -Stages 6 -Check`
+3. Preview the application release with `.\scripts\deploy_server2.ps1 -Stages 6,7 -PrintOnly`.
+4. Use `.\scripts\deploy_server2.ps1 -Stages 6,7 -Check` for an Ansible dry run. The hosted CI check runs when activating the release.
 5. Run the combined app deploy, or select a single stage when you intend full mode.
 6. Run the relevant `server2` smoke checks before calling the deploy complete.
 

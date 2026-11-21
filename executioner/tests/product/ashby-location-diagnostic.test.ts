@@ -96,6 +96,28 @@ test('Location selection clears a fixed header and reports a persistent obstruct
     await page.locator('#location').blur();
     await assert.rejects(hostedReviewSnapshot(page), /Required or invalid fields/);
 
+    // This selection predates C3's receipt and differs from the saved city.
+    await page.locator('#location').fill('Toronto');
+    await page.locator('[role=option]').evaluate(e=>{e.textContent='Toronto, Ontario, Canada';});
+    await page.locator('[role=option]').click();
+    assert.equal(await ashbyValue(),'');
+    await fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
+    assert.equal(await ashbyValue(),'Toronto, Ontario, Canada');
+
+    const location = page.locator('#location');
+    await location.fill('Unfinished search');
+    await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),/unfinished search/);
+    assert.equal(await location.inputValue(),'Unfinished search');
+    // A restored tab can also have query text while the widget is unfocused.
+    await location.press('Escape');
+    await location.blur();
+    await location.evaluate((e:HTMLInputElement)=>{e.value='Unfinished search';});
+    await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),/did not restore/);
+    assert.equal(await location.inputValue(),'Unfinished search');
+    assert.equal(await ashbyValue(),'');
+    await location.blur();
+    assert.equal(await location.inputValue(),'Toronto, Ontario, Canada');
+
     const lever = 'https://jobs.lever.co/fixture/11111111-1111-4111-8111-111111111111/apply';
     await page.route(lever, route=>route.fulfill({contentType:'text/html',body:`
       <form><label>Email<input type="email" required></label><label>Name<input required></label>
@@ -105,23 +127,22 @@ test('Location selection clears a fixed header and reports a persistent obstruct
       <button>Submit application</button></form>
       <script>
         const input=document.querySelector('#location-input'), menu=document.querySelector('.dropdown-results');
-        input.oninput=()=>{menu.hidden=!input.value};
-        document.querySelector('form').onsubmit=e=>{window.submitted=true;e.preventDefault()};
-        input.onkeydown=e=>{
-          const active=menu.querySelector('.dropdown-location-active');
-          if(e.key==='ArrowDown'){
-            e.preventDefault();
-            const next=active?.nextElementSibling||menu.firstElementChild;
-            active?.classList.remove('dropdown-location-active');
-            next.classList.add('dropdown-location-active');
-          }
-          if(e.key==='Enter'&&active){
-            input.value=active.textContent;
-            document.querySelector('#selected-location').value=JSON.stringify({name:active.textContent});
-            menu.hidden=true;
+        input.oninput=async()=>{
+          menu.hidden=true;
+          if(input.value==='Edmonton'){
+            await fetch('/searchLocations?text=Edmonton');
+            menu.hidden=false;
           }
         };
+        document.addEventListener('keydown',e=>{if(e.key==='Enter')input.form.requestSubmit()});
+        document.querySelector('form').onsubmit=e=>{window.submitted=true;e.preventDefault()};
+        menu.onmousedown=e=>{
+          input.value=e.target.textContent;
+          document.querySelector('#selected-location').value=JSON.stringify({name:input.value});
+          menu.hidden=true;
+        };
       </script>`}));
+    await page.route('**/searchLocations?text=Edmonton',route=>route.fulfill({json:[]}));
     await page.goto(lever);
     await fillApplication(page,{url:lever,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
     assert.equal(await page.locator('#location-input').inputValue(),'Edmonton, AB, CAN');

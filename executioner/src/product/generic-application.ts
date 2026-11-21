@@ -9,6 +9,7 @@ import { annotateQuestionContext } from '../../extension/question-context.js';
 import { proveJobviteResumeInput } from '../../extension/jobvite-resume.js';
 import { genericApplicationTarget } from './target.ts';
 import { fillMatchedPage } from './page-matching.ts';
+import { openBambooApplication } from './bamboo-application-entry.ts';
 import { effectiveProfileFacts } from './sources.ts';
 
 interface ChooserProbes {
@@ -124,8 +125,9 @@ export async function fillGenericApplication(
   const expected = genericApplicationTarget(expectedUrl);
   const current = genericApplicationTarget(page.url());
   if (current.key !== expected.key) throw new Error('Open the application form for this exact posting before filling.');
-  const expiresAt=Date.now()+15_000;
   const boundUrl=page.url();
+  await openBambooApplication(page, boundUrl, signal);
+  const expiresAt=Date.now()+15_000;
   const probes = await chooserProbes(page);
   try {
     const interruption = await probes.evaluate(async (driver, request) => {

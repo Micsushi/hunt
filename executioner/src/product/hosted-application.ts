@@ -1,7 +1,7 @@
 import { applicationAttachmentControls } from '../../extension/page-adapters/document.js';
 import { observeFormDocument } from '../../extension/form-page.js';
 import { createHash } from 'node:crypto';
-import { chooseLeverLocation, verifyAshbyAutocomplete } from './hosted-autocomplete.ts';
+import { preserveAshbyChoices, searchLeverLocation, verifyAshbyAutocomplete } from './hosted-autocomplete.ts';
 import { inspectHostedFields } from './hosted-field-observation.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,7 +80,19 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
   let resumeUpload=input.resumeUpload;
   let pendingPreview: {error: AttachmentPreviewUnavailable; documentKey: string} | undefined;
   const history: {label:string;kind:string;required:boolean;options:string[];result:string;question:ReturnType<typeof resolveQuestion>;answerKind?:string;lane?:string}[] = [];
-  const planAnswer = createPageAnswerPlanner(sources, facts, matching.company);
+  const postingEmployer = target.ats === 'ashby' ? await page.locator('script[type="application/ld+json"]').evaluateAll((scripts, id) => {
+    const names = new Set<string>();
+    for (const script of scripts) {
+      try {
+        const job = JSON.parse(script.textContent ?? '');
+        if (job?.['@type'] === 'JobPosting' && job.identifier?.value === id &&
+            job.hiringOrganization?.['@type'] === 'Organization' && typeof job.hiringOrganization.name === 'string' &&
+            job.hiringOrganization.name.trim()) names.add(job.hiringOrganization.name.trim());
+      } catch { /* Other structured data does not identify this posting. */ }
+    }
+    return names.size === 1 ? [...names][0] : undefined;
+  }, target.posting.split('/')[1]) : undefined;
+  const planAnswer = createPageAnswerPlanner(sources, facts, matching.company, postingEmployer);
   const fact = (id: string) => facts.find(f => f.factId === id)?.value;
   const known = new Map<string,string>();
   const cookieDialog=page.getByRole('dialog',{name:'Cookie Consent',exact:true});
@@ -95,6 +107,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
       if (pendingPreview && pendingPreview.documentKey !== pageObservation.documentKey) throw pendingPreview.error;
       progress('Filling application');
       const fields = (await inspectHostedFields(page)).sort((a,b)=>Number(b.kind==='file')-Number(a.kind==='file'));
+      if (target.ats === 'ashby') await preserveAshbyChoices(page, fields);
       if (!resumeExpected && await hasHostedResume(page, fields)) {
         input.onResumeObserved?.();
         resumeExpected = true;
@@ -150,19 +163,22 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           changed = true;
           break;
         }
+        if (f.valid && f.value && (f.kind === 'combobox' || f.kind === 'location' && await loc.evaluate(e =>
+          location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]')))) {
+          matching.record({...matchObservation, observedAnswer:f.value, provisional:true, outcome:'unconfirmed', reason:'existing_selection_preserved'});
+          known.set(identity, `existing:${f.value}`);
+          continue;
+        }
         if (f.kind === 'location' || f.kind === 'combobox' && (/location.*city|^(?:current )?location$/i.test(f.label) || await loc.evaluate(e=>e.closest('[data-field-path="_systemfield_location"]')!==null))) {
           const city = fact('city');
           if (typeof city !== 'string') throw new ApplicationPause('Add your location to the profile.');
-          if (f.valid && f.value && (f.kind === 'combobox' || await loc.evaluate(e =>
-            location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]')))) {
-            matching.record({...matchObservation, observedAnswer:f.value, provisional:true, outcome:'unconfirmed', reason:'existing_selection_preserved'});
-            known.set(identity, `existing:${f.value}`);
-            continue;
-          }
           let searchText = city;
-          await loc.fill('');if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city);
+          const leverSearch = target.host === 'jobs.lever.co' && await loc.evaluate(e => e.matches('#location-input.location-input[name=location]'));
+          if (leverSearch) await searchLeverLocation(loc, city);
+          else { await loc.fill(''); if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city); }
           const choiceOwner = await loc.getAttribute('aria-controls');
-          const choices = f.kind === 'location' ? page.locator('.dropdown-results .dropdown-location:visible')
+          const choices = leverSearch ? loc.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " application-field ")][1]').locator('.dropdown-results > div.dropdown-location:visible:not(:has(button,a[href],input,select,textarea))')
+            : f.kind === 'location' ? page.locator('.dropdown-results .dropdown-location:visible')
             : choiceOwner ? page.locator(`[id=${JSON.stringify(choiceOwner)}] [role=option]:visible`)
             : page.locator('[role=listbox]:visible [role=option]:visible');
           try { await choices.first().waitFor({state:'visible',timeout:10000}); }
@@ -170,7 +186,8 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
             const qualified=[city,fact('region'),fact('country')].filter(value=>typeof value==='string'&&value.trim()).join(', ');
             if(qualified===city)throw new ApplicationPause('The employer did not return location suggestions. Choose your location on the employer page, then retry.');
             searchText = qualified;
-            await loc.fill('');await loc.pressSequentially(qualified,{delay:30});
+            if (leverSearch) await searchLeverLocation(loc, qualified);
+            else { await loc.fill('');await loc.pressSequentially(qualified,{delay:30}); }
             try { await choices.first().waitFor({state:'visible',timeout:10000}); }
             catch { throw new ApplicationPause('The employer did not return location suggestions. Choose your location on the employer page, then retry.'); }
           }
@@ -231,8 +248,9 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
               if (placement === 'changed') throw new ApplicationPause('The location menu changed. Inspect the selected location before retrying.');
               if (placement === 'blocked') throw new Error('Another element intercepts pointer events on the location choice.');
               assertTarget();
-              if (exact >= 0 && await loc.evaluate(e => location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]'))) {
-                await chooseLeverLocation(loc, labels, index, searchText);
+              if (leverSearch) {
+                if (exact < 0 || await loc.inputValue() !== searchText || await choice.count() !== 1) throw new ApplicationPause('The location choice changed.');
+                await choice.click({timeout:10000});
               } else await target.click({timeout:3000});
             } finally { await target.dispose(); }
           }
@@ -260,11 +278,6 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           if((await inspectHostedFields(page)).find(x=>x.key===f.key)?.value!==expected)throw new ApplicationPause('The location selection did not persist.');
           if(f.kind==='location' && !await page.locator('#selected-location').inputValue())throw new ApplicationPause('Location backing value is missing.');
           known.set(identity,expected);changed=true;continue;
-        }
-        if (f.kind === 'combobox' && f.value && f.valid &&
-            await loc.evaluate(e=>!!e.closest('.select__control')?.querySelector('[class*=single-value],.select__multi-value__label'))) {
-          matching.record({...matchObservation,observedAnswer:f.value,provisional:true,outcome:'unconfirmed',reason:'existing_selection_preserved'});
-          known.set(identity,`existing:${f.value}`); continue;
         }
         let options = f.options;
         let popup: ReturnType<Page['locator']> | undefined;

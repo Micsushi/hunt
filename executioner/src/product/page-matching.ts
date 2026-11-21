@@ -63,7 +63,9 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
           ...(observed.componentFailure && {componentFailure: observed.componentFailure}),
           canUndo: observed.canUndo,
           canRedo: observed.canRedo,
-          incomplete: observed.matching?.some(row => row.required && row.valid === false) === true ||
+          incomplete: observed.matching?.some(row => row.required && (!row.valid ||
+            (typeof row.selected === 'string' && !row.selected.trim()))) === true ||
+            result.resume === 'unverified' ||
             observed.incomplete === true || result.incomplete === true &&
             (!result.frames?.some(frame => frame.status === 'unavailable') || !!result.componentFailure),
         };

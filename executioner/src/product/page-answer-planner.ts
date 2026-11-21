@@ -54,7 +54,9 @@ export function createPageAnswerPlanner(
   sources: ReturnType<typeof productSources>,
   facts: ReturnType<typeof effectiveProfileFacts>,
   company: string | null,
+  postingEmployer?: string,
 ) {
+  const employerNames = [company, postingEmployer].filter((name): name is string => !!name);
   const narrative = facts.find(fact => fact.factId === 'configured_narrative')?.value;
   const resolver = createApplicationAnswerResolver(sources.profileQuery, typeof narrative === 'string' ? narrative : undefined);
   const ownerFact = (id: string) => facts.find(f=>f.factId===id&&f.provenance==='owner_provided'&&f.lane==='live_owner_fact')?.value;
@@ -114,7 +116,7 @@ export function createPageAnswerPlanner(
       return {...binding, answer: number, phoneCountry: country, ...(numericDial && {phoneDial: numericDial}), provisional: inferred,
         reason: inferred ? 'phone_country_inferred_from_residence' : 'answer_resolved'};
     }
-    const questionFact=inspectQuestionMatch(row.question, company ? [company] : []).factId;
+    const questionFact=inspectQuestionMatch(row.question, employerNames).factId;
     let addressCountryConflict=false;
     if (questionFact==='postal_code' && row.formId) {
       const savedCountry=facts.find(fact=>fact.factId==='country')?.value;
@@ -136,7 +138,7 @@ export function createPageAnswerPlanner(
     const resolution=await resolver.resolve({field,mode:sources.profilePlan.mode,
       answerFallbackPolicy:sources.executionPolicy.answerFallbackPolicy,profileId:sources.profileId,profileRevision:sources.profileRevision,
       resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,
-      employerNames:company ? [company] : []},signal);
+      employerNames:employerNames},signal);
     const resolved=resolution.ok&&resolution.value.kind==='resolved'?resolution.value:undefined;
     if (unbounded) {
       const intent = resolved?.intent;
@@ -188,12 +190,12 @@ export function createPageAnswerPlanner(
     try {
       const plan = await planAnswer(row, observations, signal);
       if (row.widget === 'native-multiple' && row.required && !row.selected && plan.provisional && typeof plan.answer === 'string') {
-        const question = resolveQuestion(row.question, company ? [company] : []);
+        const question = resolveQuestion(row.question, employerNames);
         const sensitive = protectedQuestionCategory(row.question, question.kind === 'resolved' ? question.id : undefined) ||
-          /\b(?:nationalit(?:y|ies)|citizenships?|ethnic|medical|diagnosis|religion|orientation|ancestry|racial)\b/u.test(normalizeCatalogText(row.question));
-        if (!sensitive) return plan;
+          /\b(?:nationalit(?:y|ies)|citizenships?|ethnic(?:ity|ities)?|medical|diagnos(?:is|es)|disabilit(?:y|ies)|disabled|religio(?:n|ns|us)|faith|pronouns?|gender|orientation|ancestry|racial)\b/u.test(normalizeCatalogText(row.question));
         const neutral = row.options.filter(option => contractApprovedPrivacyChoices.some(
           choice => normalizeCatalogText(option) === normalizeCatalogText(choice)));
+        if (!sensitive && !neutral.length) return plan;
         return {...plan, answer: neutral.length === 1 ? neutral[0]! : null,
           reason: neutral.length === 1 ? 'neutral_disclosure' : 'multiple_choice_requires_owner_answer'};
       }

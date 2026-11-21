@@ -476,7 +476,15 @@ export function createApplicationAnswerResolver(
           const consent = await query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal);
           if (!consent.ok) return consent;
           if (consent.value.kind==='answered' && consent.value.provenance==='owner_provided' && typeof consent.value.value==='boolean') {
-            return success(intentFor(field, undefined, consent.value.value, consent.value.provenance, 'live_owner_fact'));
+            let answer: boolean | string = consent.value.value;
+            if (answer && field.behavior === "select") {
+              const choices = field.options.filter(({label}) =>
+                label.trim() && !placeholderOption.test(normalizeCatalogText(label)) && !isEmptyCatalogMessage(label));
+              if (choices.length === 1 && normalizeCatalogText(choices[0]!.label) === "acknowledge confirm") {
+                answer = choices[0]!.label;
+              }
+            }
+            return success(intentFor(field, undefined, answer, consent.value.provenance, 'live_owner_fact'));
           }
         }
         if (!field.rawOptions) return provisionalAnswer();
