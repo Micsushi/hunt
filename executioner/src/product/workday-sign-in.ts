@@ -230,7 +230,11 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
       }
       await delay(500, undefined, { signal });
     }
-    throw new ApplicationPause(latestObservation ? `Account access is unconfirmed. The last observed employer state was ${latestObservation.kind.replaceAll('_',' ')}. Inspect the tab before retrying; C3 will not repeat the credential click automatically.` : 'Account access is unconfirmed. The employer page did not settle; inspect the tab before retrying.');
+    const pageState = latestObservation ? `The last observed employer state was ${latestObservation.kind.replaceAll('_',' ')}.` : 'The employer page did not settle.';
+    const accountAction = attempted || creationAttempted
+      ? 'A sign-in or registration was attempted. Inspect the tab before retrying.'
+      : 'C3 did not attempt sign-in or registration during this run. Inspect the tab before retrying.';
+    throw new ApplicationPause(`Account access is unconfirmed. ${pageState} ${accountAction}`);
   } catch (error) {
     if ((attempted || creationAttempted) && !authenticated && !rejected) record(creationAttempted && !attempted ? 'creation_uncertain' : 'sign_in_uncertain');
     throw error;
