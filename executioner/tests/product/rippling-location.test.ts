@@ -20,11 +20,13 @@ test('Rippling location commits a matched suggestion, reverses it and preserves 
           <input id="city" aria-required="true" aria-labelledby="city-label" aria-label="textbox" aria-autocomplete="list" aria-haspopup="listbox">
         </div><label>Resume<input type=file></label></form>`}));
     const answer='Example, ON, Canada';
-    for(const original of ['', 'Example', answer]){
+    for(const scenario of ['', 'Example', answer, 'open city search']){
+      const original=scenario==='open city search'?'Example':scenario;
       await page.goto(url);
       await page.evaluate(({original,answer})=>{
         const input=document.querySelector<HTMLInputElement>('#city')!, owner=input.parentElement!;
-        const close=()=>{owner.querySelector('ul')?.remove();input.removeAttribute('aria-controls');};
+        const close=()=>{owner.querySelector('ul')?.remove();input.setAttribute('aria-controls','city-list');};
+        close();
         input.value=original;
         input.onkeydown=e=>{if(e.key==='Escape')close();};
         input.oninput=()=>{
@@ -39,6 +41,7 @@ test('Rippling location commits a matched suggestion, reverses it and preserves 
           }
         };
       },{original,answer});
+      if(scenario==='open city search') await page.locator('#city').dispatchEvent('input');
       const status=async()=>{
         const result=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
         const row=result.matching?.find(r=>r.widget==='rippling-location');assert.ok(row,JSON.stringify(result.matching?.map(r=>r.question)));return row;
@@ -51,7 +54,8 @@ test('Rippling location commits a matched suggestion, reverses it and preserves 
         const result=await apply();assert.ok(result.skipped.some(s=>s.reason==='existing_search_query_preserved'));
         assert.equal((await status()).selected,'');continue;
       }
-      await apply();const selected=await apply();
+      if(scenario!=='open city search')await apply();
+      const selected=await apply();
       assert.ok(selected.filled.includes('Location'),JSON.stringify(selected.skipped));assert.equal((await status()).selected,answer);
       await page.evaluate(fillVisibleFields,{action:'undo' as const});
       assert.equal(await page.locator('#city').inputValue(),original);

@@ -13,9 +13,11 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
       return {...result,reason:'ambiguous_location_widget'};
     }
     const menuId = input.getAttribute('aria-controls');
-    if (menuId) {
-      const lists = root.querySelectorAll('[id="'+CSS.escape(menuId)+'"]');
-      if (lists.length !== 1 || !widget.contains(lists[0]) || !lists[0].matches('ul[role=listbox][data-testid=menuList]') ||
+    const lists = menuId ? root.querySelectorAll('[id="'+CSS.escape(menuId)+'"]') : [];
+    if (widget.querySelectorAll('[role=listbox]').length > lists.length || lists.length > 1) return {...result,reason:'ambiguous_location_menu'};
+    // The closed widget can retain aria-controls after the results have unmounted.
+    if (lists.length) {
+      if (!widget.contains(lists[0]) || !lists[0].matches('ul[role=listbox][data-testid=menuList]') ||
           lists[0].getAttribute('aria-labelledby') !== labelId) return {...result,reason:'ambiguous_location_menu'};
       if (visible(lists[0])) {
         result.popup=lists[0];result.popupStatus=lists[0].getAttribute('aria-busy')==='true'?'loading':'ready';
@@ -35,13 +37,15 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
       for(let attempt=0;attempt<20;attempt++) {
         await pause();
         if (!input.isConnected || regionFor(input)!==owner || input.closest('[data-testid=location]')!==widget) return;
-        if (input.value===value && !input.hasAttribute('aria-controls')) break;
+        const current=locationChoice(input);
+        if (input.value===value && current?.valid && !current.popup) break;
       }
-      if(input.value!==value || input.hasAttribute('aria-controls'))return;
+      const clicked=locationChoice(input);
+      if(input.value!==value || !clicked?.valid || clicked.popup)return;
       if(root.activeElement===input)input.blur();
       await pause();
       if(!input.isConnected || input.closest('[data-testid=location]')!==widget || regionFor(input)!==owner ||
-          input.value!==value || input.hasAttribute('aria-controls') || input.getAttribute('aria-invalid')==='true' || !input.validity.valid)return;
+          input.value!==value || !locationChoice(input)?.valid || locationChoice(input)?.popup || input.getAttribute('aria-invalid')==='true' || !input.validity.valid)return;
       receipts.set(input,{widget,value});
       input.addEventListener('input',()=>receipts.delete(input),{once:true});
     };

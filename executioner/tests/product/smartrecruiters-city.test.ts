@@ -106,13 +106,16 @@ test('only the queued OneClick personal footer advances and the final action rem
         document.querySelector('button')!.onclick = () => { (globalThis as any).submissions++; };
       });
     });
-    const report = {skipped:[{reason:'resume_filename_visible_contents_unverified'}],resume:'unverified'};
+    const report = {skipped:[{reason:'resume_filename_visible_contents_unverified'}],resume:'unverified',
+      componentFailure:{component:'uploads' as const,operation:'verify_attachment'}};
     const signal = new AbortController().signal;
     const next = page.locator('spl-button button');
     await next.evaluate((e:HTMLButtonElement)=>{ e.type='submit'; });
     assert.equal(await advanceSmartRecruiters(page,url,report,signal),undefined);
     await next.evaluate((e:HTMLButtonElement)=>{ e.type='button'; });
     assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[{reason:'value_not_accepted'}]},signal),undefined);
+    assert.equal(await advanceSmartRecruiters(page,url,{...report,componentFailure:{component:'uploads',operation:'upload'}},signal),undefined);
+    assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[...report.skipped,{reason:'value_not_accepted'}]},signal),undefined);
     assert.match(await advanceSmartRecruiters(page,url,report,signal)??'',/employer Review screen/);
     assert.match(await advanceSmartRecruiters(page,url,report,signal)??'',/employer Review screen/);
     assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);

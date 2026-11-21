@@ -716,6 +716,9 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/target.ts",
     ],
+    "src/product/smartrecruiters-workflow.ts": [
+      "src/product/component-diagnostics.ts",
+    ],
     "src/product/current-page-workflow.ts": [
       "src/product/component-diagnostics.ts",
     ],

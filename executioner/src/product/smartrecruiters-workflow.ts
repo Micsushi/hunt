@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import type { ComponentFailure } from './component-diagnostics.ts';
 import { ApplicationPause } from './application-contract.ts';
 import { pause } from './application-wait.ts';
 
@@ -8,7 +9,7 @@ const safeSkips = new Set(['optional_field','saved_value_already_present','selec
   'resume_filename_visible_contents_unverified']);
 
 export async function advanceSmartRecruiters(page:Page, url:string, report:{
-  skipped:{reason:string}[]; resume?:string; componentFailure?:unknown;
+  skipped:{reason:string}[]; resume?:string; componentFailure?:ComponentFailure;
 }, signal:AbortSignal): Promise<string | undefined> {
   const target = new URL(url);
   if (target.origin !== 'https://jobs.smartrecruiters.com' || !oneClickPath.test(target.pathname) || page.url() !== url) return;
@@ -25,8 +26,11 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
   };
   const end = await terminal();
   if (end) return end;
-  if (report.componentFailure || report.skipped.some(item => !safeSkips.has(item.reason)) ||
-      !['verified','optional'].includes(report.resume ?? '') && !report.skipped.some(item => item.reason === 'resume_filename_visible_contents_unverified')) return;
+  const filenameOnly = report.resume === 'unverified' && report.skipped.some(item => item.reason === 'resume_filename_visible_contents_unverified');
+  const failure = report.componentFailure;
+  if (failure && !(filenameOnly && failure.component === 'uploads' && failure.operation === 'verify_attachment')) return;
+  if (report.skipped.some(item => !safeSkips.has(item.reason)) ||
+      !filenameOnly && !['verified','optional'].includes(report.resume ?? '')) return;
   const personal = owner.locator('oc-personal-information');
   const host = footer.locator('oc-button[data-test=footer-next] spl-button');
   const next = host.locator('button[type=button]');

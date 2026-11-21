@@ -613,7 +613,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         }
         state.choiceDrafts??=new WeakMap();
         const draft=state.choiceDrafts.get(searchChoice.widget),ownedDraft=draft && boundChoice(draft.change) && choiceState(searchChoice)===draft.change.after;
-        const resumeSameCity = searchChoice.kind==='rippling_location' && searchChoice.query===plan.query && !searchChoice.query.includes(',');
+        const resumeSameCity = searchChoice.kind==='rippling_location' && searchChoice.query === fact('city') && !searchChoice.query.includes(',') &&
+          (searchChoice.query === plan.query || plan.reason === 'profile_answer' && typeof plan.answer === 'string' &&
+            plan.answer.split(',').length === 3 && norm(plan.answer.split(',')[0]) === norm(searchChoice.query) && row.options.includes(plan.answer));
         if(searchChoice.query && !ownedDraft && !resumeSameCity) {skip('existing_search_query_preserved');reportMatch(row,plan,'unconfirmed','existing_search_query_preserved',row.selected);continue;}
         const querying=typeof plan.query==='string' && plan.query.length>0 && plan.answer==null;
         if(!querying && (typeof plan.answer!=='string' || !row.options.includes(plan.answer))) {skip(plan.reason, 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;}
