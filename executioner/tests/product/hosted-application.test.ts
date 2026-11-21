@@ -298,9 +298,8 @@ test('Ashby nested optional consent stays separate from required Phone and legal
     await fillApplication(p,input,AbortSignal.timeout(15000),()=>{});
     assert.equal(await p.locator('[name=consent1][value=no]').isChecked(),true);
     await p.locator('[name=consent0]').evaluateAll(es=>es.forEach(e=>(e as HTMLInputElement).required=true));
-    const requiredConsent=await fillApplication(p,input,AbortSignal.timeout(15000),()=>{});
-    assert.equal(requiredConsent.needsOwnerReview,true);
-    assert.equal(await p.locator('[name=consent0]:checked').count(),1);
+    await assert.rejects(fillApplication(p,input,AbortSignal.timeout(15000),()=>{}), /requires a consent decision/);
+    assert.equal(await p.locator('[name=consent0]:checked').count(),0);
     assert.equal(await p.locator('[name=consent1][value=no]').isChecked(),true);
     assert.equal(await p.evaluate('submits'),0);
   } finally { await b.close(); }
