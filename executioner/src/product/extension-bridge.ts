@@ -284,7 +284,17 @@ export class ExtensionBridge {
           url:target.url,
           allow:async () => {
             if (this.tabs.get(tabId) !== tab) throw new Error('The selected application tab changed.');
-            await this.call('screeningTransition',{tabId,binding,url:target.url});
+            transportEvent('screening_transition_requested',tabId);
+            try {
+              const grant=await this.call('screeningTransition',{tabId,binding,url:target.url});
+              transportEvent('screening_transition_granted',tabId,{screening:grant.screening===true,resampled:grant.resampled===true});
+            } catch (error) {
+              const message=error instanceof Error ? error.message : '';
+              const reason=message.includes('document changed')?'document_changed':message.includes('verified application route')?'route_changed':
+                message.includes('did not settle')?'route_unsettled':message.includes('does not belong')?'binding_changed':'unavailable';
+              transportEvent('screening_transition_rejected',tabId,{reason});
+              throw error;
+            }
           },
         } : null);
       return { tabId, page, browser, ...(target.ats==='generic'?{applicationUrl:target.url}:{}) };

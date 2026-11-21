@@ -28,7 +28,7 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     const index=values.indexOf(value);
     const selected=index>=0 && element.value===options[index] && element.getAttribute('aria-invalid')!=='true' ? options[index] : '';
     return {host,question:rows[0].label,control:'listbox',options,values,selected,value:value??'',
-      coherent:!!selected || !element.value && !host.hasAttribute('value'),required:rows[0].required===true && element.getAttribute('aria-required')==='true',valid:!!selected};
+      coherent:!!selected || !element.value && (backing==null || backing==='') && !host.getAttribute('value'),required:rows[0].required===true && element.getAttribute('aria-required')==='true',valid:!!selected};
   };
   const label = element => {
     if (!form?.screening || form.region(element)!==form.owner) return '';
@@ -55,7 +55,7 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     return {host,question,control:'radio',options,choices,values,selected:coherent && selected.length?selected[0].getAttribute('label').trim():'',
       value,coherent,required:element.getAttribute('aria-required')==='true',valid:coherent && selected.length===1};
   };
-  const select = async (element, observed, answer, checkDeadline) => {
+  const select = async (element, observed, answer, checkDeadline, onChoiceClick) => {
     const before = read(element);
     if (!before?.coherent || before.host!==observed.host || before.selected || !form.current()) return false;
     const index = before.options.indexOf(answer);
@@ -78,6 +78,7 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
       }
       if (!option) return false;
       checkDeadline();
+      onChoiceClick?.();
       option.click();
     } else {
       if (before.choices[index]!==observed.choices[index]) return false;
@@ -92,5 +93,43 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     }
     return false;
   };
-  return {label,read,select};
+  const currentChoice = (element, original) => {
+    if (!element.isConnected || !form?.current()) return null;
+    const current = read(element);
+    if (current?.control !== 'listbox' || !current.coherent || current.host !== original.host ||
+        current.question !== original.question || current.options.length !== original.options.length ||
+        current.options.some((label,i) => label !== original.options[i] || current.values[i] !== original.values[i])) return null;
+    return current;
+  };
+  const clearButton = host => {
+    const buttons = deepQuery(host,'spl-icon[role=button][aria-label],button[aria-label]').filter(node =>
+      composedClosest(node,'spl-autocomplete')===host && node.getAttribute('aria-label')?.trim().replace(/\s+/g,' ')==='Clear value' &&
+      visible(node) && !node.disabled && !composedClosest(node,'[inert],[aria-disabled=true],[aria-hidden=true]') &&
+      !(node instanceof HTMLButtonElement && node.form && node.type==='submit'));
+    return buttons.length===1 ? buttons[0] : null;
+  };
+  const historyValue = (element, original) => {
+    const current = currentChoice(element,original);
+    // A radio has no supported way back to unanswered. Only journal choices with an employer-provided inverse.
+    return current && (!current.selected || clearButton(current.host)) ? current.value : null;
+  };
+  const restore = async (element, original, from, to, checkDeadline) => {
+    if (historyValue(element,original)!==from) throw new Error('The screening choice changed. Your edits were preserved.');
+    checkDeadline();
+    if (to) {
+      const answer = original.options[original.values.indexOf(to)];
+      if (answer && await select(element,original,answer,checkDeadline) && historyValue(element,original)===to) return;
+    } else {
+      clearButton(original.host).click();
+      for (let attempt=0; attempt<10; attempt++) {
+        await new Promise(resolve=>setTimeout(resolve,50));
+        checkDeadline();
+        const value = historyValue(element,original);
+        if (value==='') return;
+        if (value!==from) break;
+      }
+    }
+    throw new Error('The employer did not confirm the restored screening choice.');
+  };
+  return {label,read,select,historyValue,restore};
 }

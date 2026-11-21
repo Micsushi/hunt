@@ -111,7 +111,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
   const profile = applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'});
   const input = {url, profile, resume:Buffer.from(resume.base64,'base64')};
   try {
-    for (const mode of ['advance','invalid','submit','stall','conflict','rejected','twice','ambiguous-disclosure','foreign-disclosure']) {
+    for (const mode of ['advance','slow','invalid','submit','stall','conflict','rejected','expanded-conflict','twice','ambiguous-disclosure','foreign-disclosure']) {
       const page = await browser.newPage();
       await fixture(page,true);
       await page.evaluate(mode => {
@@ -139,7 +139,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
         next.onclick=event=>{
           if (!event.isTrusted) throw new Error('Expected trusted browser input');
           (window as any).advances++;
-          if (['rejected','twice','ambiguous-disclosure','foreign-disclosure'].includes(mode) &&
+          if (['rejected','expanded-conflict','twice','ambiguous-disclosure','foreign-disclosure'].includes(mode) &&
               ((window as any).advances===1 || mode==='twice')) {
             for(const label of first.querySelectorAll('label'))label.hidden=true;
             const box=document.createElement('div');box.className='jv-apply-form-actions';
@@ -149,26 +149,31 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
             for(const link of box.querySelectorAll('a'))link.onclick=e=>{
               e.preventDefault();(window as any).expands++;box.remove();
               for(const label of first.querySelectorAll('label'))label.hidden=false;
+              if(mode==='expanded-conflict') first.querySelector<HTMLInputElement>('[name=first]')!.value='Other';
             };
             return;
           }
           if(mode==='stall')return;
-          first.remove();next.remove();
-          form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
+          const showScreening=()=>{
+            first.remove();next.remove();
+            form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
+          };
+          if(mode==='slow') setTimeout(showScreening,4100); else showScreening();
         };
       },mode);
       const inspection=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
       assert.equal((inspection as {jobviteFirstStep?:boolean}).jobviteFirstStep===true,mode!=='submit');
-      const attempt=()=>fillApplication(page,input,AbortSignal.timeout(15000),()=>{});
-      const stop = ['advance','rejected'].includes(mode) ? /Jobvite acknowledged the selected resume\. The employer PDF contents remain unverified\. Review the screening step\. C3 stopped before submission\./ :
+      const attempt=()=>fillApplication(page,input,AbortSignal.timeout(25_000),()=>{});
+      const stop = ['advance','slow','rejected'].includes(mode) ? /Jobvite acknowledged the selected resume\. The employer PDF contents remain unverified\. Review the screening step\. C3 stopped before submission\./ :
+        mode==='expanded-conflict' ? /saved profile differs.*C3 clicked Next and opened the full Jobvite form\. Review the first step/ :
         ['stall','ambiguous-disclosure','foreign-disclosure'].includes(mode) ? /clicked Next once/ :
         mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /stayed on the first step/ : /has not advanced/;
       await assert.rejects(attempt(),stop);
       if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
       if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
       if (mode==='twice') await assert.rejects(attempt(),/has not advanced|stayed on the first step/);
-      const count=['rejected','twice'].includes(mode)?2:['advance','stall','ambiguous-disclosure','foreign-disclosure'].includes(mode)?1:0;
-      assert.deepEqual(await page.evaluate('([advances,expands,submits,uploads])'),[count,['rejected','twice'].includes(mode)?1:0,0,1]);
+      const count=['rejected','twice'].includes(mode)?2:['advance','slow','stall','expanded-conflict','ambiguous-disclosure','foreign-disclosure'].includes(mode)?1:0;
+      assert.deepEqual(await page.evaluate('([advances,expands,submits,uploads])'),[count,['rejected','twice','expanded-conflict'].includes(mode)?1:0,0,1]);
       await page.close();
     }
   } finally { await browser.close(); }

@@ -1,8 +1,6 @@
-import { verifiedScreeningTransition } from './extension-bridge.ts';
 import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 import type { Page } from 'playwright';
 import type { ComponentFailure } from './component-diagnostics.ts';
-import { ApplicationPause } from './application-contract.ts';
 import { pause } from './application-wait.ts';
 
 const firstFooter = 'oc-nav-first-page footer[data-test=footer]';
@@ -11,7 +9,7 @@ const safeSkips = new Set(['optional_field','saved_value_already_present','selec
 
 export async function advanceSmartRecruiters(page:Page, url:string, report:{
   skipped:{reason:string}[]; resume?:string; componentFailure?:ComponentFailure;
-}, signal:AbortSignal): Promise<string | {screeningUrl:string} | undefined> {
+}, signal:AbortSignal, screeningTransition?: (url:string) => () => Promise<void>): Promise<string | {screeningUrl:string} | undefined> {
   const target = new URL(url);
   const publication = smartRecruitersPublication(target);
   if (!publication || page.url() !== url) return;
@@ -30,7 +28,7 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
   };
   const end = await terminal();
   if (end) return end;
-  if (publication.screening) return;
+  if (publication.screening || !screeningTransition) return;
   const filenameOnly = report.resume === 'unverified' && report.skipped.some(item => item.reason === 'resume_filename_visible_contents_unverified');
   const failure = report.componentFailure;
   if (failure && !(filenameOnly && failure.component === 'uploads' && failure.operation === 'verify_attachment')) return;
@@ -45,11 +43,12 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
       await page.locator('[role=dialog]:visible,dialog[open]:visible').count()) return;
   const handle = await next.elementHandle();
   if (!handle) return;
-  let clicked = false;
+  let sent = false, clicked = false;
   try {
     await handle.scrollIntoViewIfNeeded({timeout:2000});
     signal.throwIfAborted();
-    const allowScreening = verifiedScreeningTransition(page,url);
+    const allowScreening = screeningTransition(url);
+    sent = true;
     clicked = await handle.evaluate((node,url) => {
       const button = node as HTMLButtonElement;
       const host = (button.getRootNode() as ShadowRoot).host as HTMLElement | undefined;
@@ -77,22 +76,28 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
       button.click();
       return true;
     }, url);
-    if (clicked) await allowScreening();
-  } finally { await handle.dispose(); }
-  if (!clicked) return;
-  const deadline = Date.now() + 4000;
-  do {
-    await pause(signal);
-    if (page.url() !== url) {
-      const current = new URL(page.url()), next = smartRecruitersPublication(current);
-      if (next?.screening && next.base === publication.base && current.search === target.search) return {screeningUrl:current.href};
-      break;
+    if (!clicked) return;
+    await allowScreening();
+    const deadline = Date.now() + 4000;
+    do {
+      await pause(signal);
+      if (page.url() !== url) {
+        const current = new URL(page.url()), next = smartRecruitersPublication(current);
+        if (next?.screening && next.base === publication.base && current.search === target.search) return {screeningUrl:current.href};
+        break;
+      }
+      const end = await terminal();
+      if (end) return end;
+    } while (Date.now() < deadline);
+    if (page.url() === url && await owner.count() === 1 && !await personal.count() && !await next.count()) {
+      return 'C3 clicked Next and the personal-information step closed. Inspect the new employer step.';
     }
-    const end = await terminal();
-    if (end) return end;
-  } while (Date.now() < deadline);
-  if (page.url() === url && await owner.count() === 1 && !await personal.count() && !await next.count()) {
-    return 'C3 clicked Next and the personal-information step closed. Inspect the new employer step.';
+  } catch (error) {
+    if (!sent) throw error;
+    if (!clicked) return 'C3 attempted Next. Check which employer step is open before retrying.';
+  } finally {
+    // Releasing a handle from the previous document cannot undo a click or invalidate its observation.
+    await handle.dispose().catch(()=>{});
   }
-  throw new ApplicationPause('C3 clicked Next once. The employer step change could not be confirmed. Inspect the draft before retrying.');
+  return 'C3 clicked Next once. Check the employer screening step before retrying.';
 }

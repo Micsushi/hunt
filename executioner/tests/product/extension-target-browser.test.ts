@@ -69,6 +69,16 @@ test('real extension binds Rippling documents and only permits the verified Smar
         else await page.evaluate(path=>history.pushState({},'',path),destination);
         if (destination===screening) {
           await assert.rejects(bridge.call('info',{tabId}),/document changed/);
+          await worker.evaluate(({tabId,personal})=>{
+            // The tab API briefly still reports the personal page after CDP observes the screening route.
+            const tabs=(globalThis as any).chrome.tabs, original=tabs.get.bind(tabs);
+            tabs.get=async (id:number)=>{
+              const snapshot=await original(id);
+              if (id!==tabId) return snapshot;
+              tabs.get=original;
+              return {...snapshot,url:personal};
+            };
+          },{tabId,personal});
           await grant();
           assert.equal((await bridge.call('info',{tabId})).url,screening);
           assert.equal(await bound.page.locator('main').textContent(),'Fixture application');
@@ -77,7 +87,7 @@ test('real extension binds Rippling documents and only permits the verified Smar
           await page.evaluate(path=>history.pushState({},'',path),personal);
           await assert.rejects(bridge.call('info',{tabId}),/document changed/);
         } else {
-          await assert.rejects(grant(),/does not belong|document changed/);
+          await assert.rejects(grant(),/left the verified application route|document changed/);
           await assert.rejects(bridge.call('info',{tabId}),/document changed/);
         }
       } finally {await bridge.release(tabId);await bound.browser.close();}

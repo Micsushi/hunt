@@ -173,26 +173,44 @@ async function executeCommand(method, params, connection) {
     if(cleanupFailed)throw new Error(viewportCleanupPending);
     return {};
   }
-  const tab = await chrome.tabs.get(tabId);
+  let tab = await chrome.tabs.get(tabId);
   if (owned.genericUrl) {
-    const url=exactGenericUrl(tab.url), frame=(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame;
-    if (frame?.loaderId!==owned.documentId || attached.get(tabId)!==owned || owned.connection!==connection) throw new Error('The application document changed. Inspect it before retrying.');
-    if (method==='screeningTransition') {
-      const transition=owned.screening;
-      if (!transition?.binding || params.binding!==transition.binding || params.url!==owned.genericUrl ||
-          ![owned.genericUrl,transition.url].includes(url) || exactGenericUrl(frame.url)!==url) throw new Error('The screening transition does not belong to this application.');
+    const transition=owned.screening;
+    const granting=method==='screeningTransition';
+    if (granting && (!transition?.binding || params.binding!==transition.binding || params.url!==owned.genericUrl)) {
+      throw new Error('The screening transition does not belong to this application.');
+    }
+    let url, frameUrl, retries=0;
+    while (true) {
+      const frame=(await chrome.debugger.sendCommand({tabId},'Page.getFrameTree')).frameTree?.frame;
+      if (frame?.loaderId!==owned.documentId || attached.get(tabId)!==owned || owned.connection!==connection) throw new Error('The application document changed. Inspect it before retrying.');
+      url=exactGenericUrl(tab.url);
+      frameUrl=exactGenericUrl(frame.url);
+      if (!granting && !(transition?.expires>Date.now())) {
+        if (transition?.expires && url!==frameUrl) throw new Error('The application document changed. Inspect it before retrying.');
+        break;
+      }
+      if (![owned.genericUrl,transition.url].includes(url) || ![owned.genericUrl,transition.url].includes(frameUrl)) {
+        throw new Error('The screening transition left the verified application route.');
+      }
+      if (url===frameUrl) break;
+      // Chrome's tab and debugger APIs can publish a same-document route change at different times.
+      if (retries++ === 12) throw new Error('The screening route did not settle in the selected tab.');
+      await new Promise(resolve=>setTimeout(resolve,25));
+      tab=await chrome.tabs.get(tabId);
+    }
+    if (granting) {
       transition.binding=null;
       transition.expires=Date.now()+4000;
     }
     if (url!==owned.genericUrl) {
-      const transition=owned.screening;
-      if (!transition?.expires || Date.now()>transition.expires || url!==transition.url || exactGenericUrl(frame.url)!==url) {
+      if (!transition?.expires || Date.now()>transition.expires || url!==transition.url || frameUrl!==url) {
         throw new Error('The application document changed. Inspect it before retrying.');
       }
       owned.genericUrl=url;
       delete owned.screening;
     }
-    if (method==='screeningTransition') return {};
+    if (granting) return {screening:url===transition.url,resampled:retries>0};
     if(method==='cdp'&&['Page.navigate','Page.reload','Page.navigateToHistoryEntry'].includes(params.method))throw new Error('Unfamiliar applications must stay on the current page.');
   } else if (!supported(tab.url) || new URL(tab.url).hostname !== owned.host) throw new Error('The selected tab left its supported job site.');
   if (method === 'info') return { targetId: owned.targetId, browserContextId: 'c3-default', type: 'page', title: tab.title || '', url: tab.url, attached: true, canAccessOpener: false };

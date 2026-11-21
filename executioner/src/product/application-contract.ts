@@ -12,6 +12,8 @@ export interface ProductInput {
   verifyEmail?: (page: Page, since: number, signal: AbortSignal) => Promise<void>;
   /** Internal queue-owned path; never accepted from an HTTP application request. */
   learningRoot?: string;
+  /** Queue-owned authorization for the selected browser document. */
+  screeningTransition?: (url:string) => () => Promise<void>;
   /** Queue-owned durable recorder. Absence forbids account mutation. */
   recordAccountAction?: (event: AccountEvent, trace?: string) => void;
   resumeExpected?: boolean;

@@ -9,11 +9,12 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
   progress("Filling this unfamiliar application page");
   const fill = () => fillGenericApplication(page, input.url, input.profile, input.resume, signal, input.learningRoot);
   let advanced = false;
+  let jobviteStop: string | undefined;
   try {
     const url = page.url();
     let report = await fill();
     signal.throwIfAborted();
-    const smartStep = await advanceSmartRecruiters(page,url,report,signal);
+    const smartStep = await advanceSmartRecruiters(page,url,report,signal,input.screeningTransition);
     let smartStop = typeof smartStep === 'string' ? smartStep : undefined;
     if (smartStep && typeof smartStep !== 'string') {
       advanced = true;
@@ -35,11 +36,13 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     };
     let jobvite = await advanceJobviteScreening(page, url, input.resume, report, signal);
     if (jobvite==='expanded') {
+      jobviteStop = 'C3 clicked Next and opened the full Jobvite form. Review the first step before continuing.';
       progress('Checking the full Jobvite application');
       await repeatFill();
       jobvite = await advanceJobviteScreening(page, url, input.resume, report, signal);
     }
     if (jobvite==='screening') {
+      jobviteStop = 'Review the screening step. C3 stopped before submission.';
       advanced = true;
       progress('Filling the Jobvite screening step');
       await repeatFill();
@@ -88,14 +91,14 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     if (unresolved.length > 4) warnings.push(`${unresolved.length - 4} more fields need review`);
     const resumeStatus=jobvite==='screening' ? 'Jobvite acknowledged the selected resume. The employer PDF contents remain unverified.'
       : report.resume==='verified' ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.';
-    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeStatus}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? (advanced ? 'Review the screening step. C3 stopped before submission.' : 'Review the draft. C3 has not advanced or submitted.')}`);
+    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeStatus}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? jobviteStop ?? 'Review the draft. C3 has not advanced or submitted.'}`);
     if (report.componentFailure) {
       recordComponentFailure(paused, report.componentFailure.component, report.componentFailure.operation);
     }
     throw paused;
   } catch (error) {
     if (error instanceof ApplicationPause) throw error;
-    const wrapped = new ApplicationPause(advanced ? "C3 clicked Next once. Inspect the application before retrying." : "This unfamiliar application needs review. Open its exact application form before retrying; C3 has not advanced or submitted.");
+    const wrapped = new ApplicationPause(jobviteStop ?? (advanced ? "C3 clicked Next once. Inspect the application before retrying." : "This unfamiliar application needs review. Open its exact application form before retrying; C3 has not advanced or submitted."));
     const boundary = componentFailure(error);
     if (boundary) recordComponentFailure(wrapped, boundary.component, boundary.operation);
     throw wrapped;

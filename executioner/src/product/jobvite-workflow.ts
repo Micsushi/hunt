@@ -48,14 +48,15 @@ export async function advanceJobviteScreening(page:Page, url:string, resume:Buff
   }
   const hash = createHash('sha256').update(resume).digest('hex');
   if (!await clickOwnedControl(page,url,hash,false,verified,signal)) return;
-  const deadline = Date.now() + 3500;
+  const deadline = Date.now() + 15_000;
   do {
     signal.throwIfAborted();
     const result = await page.evaluate(url=>{
       if (location.href!==url) return 'changed';
       const receipt=(globalThis as any).__huntC3PartialFill?.resumeAttempt;
       if (receipt?.acknowledgedPanel?.()?.matches('[ng-form="scopeData.step2"]')) return 'screening';
-      return receipt?.jobviteRejected?.() ? 'rejected' : 'waiting';
+      if (receipt?.jobviteRejected?.()) return 'rejected';
+      return receipt?.jobviteNextPending?.() ? 'waiting' : 'expired';
     },url);
     if (result==='screening') return 'screening';
     if (result==='rejected') {
@@ -68,7 +69,7 @@ export async function advanceJobviteScreening(page:Page, url:string, resume:Buff
       }
       throw new ApplicationPause('Jobvite stayed on the first step and requested more information. Review the employer’s full application form. The attached PDF contents remain unverified.');
     }
-    if (result==='changed') break;
+    if (result!=='waiting') break;
     await pause(signal);
   } while (Date.now()<deadline);
   throw new ApplicationPause('C3 clicked Next once. The employer screening step could not be confirmed. Inspect the draft before retrying.');

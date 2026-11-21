@@ -98,7 +98,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return false;
     };
-  const changeEditable = (e,change) => change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
+  const changeEditable = (e,change) => change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
     ? editable(e) && e===change.phoneCountry.input && regionFor(e)===change.region && phoneState(change.phoneCountry)!==null
     : provinceMenu.savedContext(change) ? editable(e) && provinceMenu.same(e,provinceMenu.savedContext(change))
       : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region : editable(e);
@@ -111,6 +111,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return JSON.stringify([e.tagName,e.type,e.name,norm(rawLabelFor(e)),e.autocomplete??'',e.placeholder??'']);
   };
   const resolveElement = change => {
+    if(change.screeningChoice)return location.href===change.url && change.element.isConnected && regionFor(change.element)===change.region ? change.element : null;
     if(change.choiceWidget)return boundChoice(change)?.input??null;
     if (change.region && change.element.isConnected && regionFor(change.element)!==change.region) return null;
     if(change.element.isConnected && (!change.identity || identity(change.element)===change.identity))return change.element;
@@ -189,8 +190,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (!checkedForm?.writePhone(element,value,nativeWrite)) nativeWrite(element,value);
   };
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
-  const readChange = (e,change) => change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
-  const unchangedChange = (e,change,value) => change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
+  const readChange = (e,change) => change.screeningChoice ? screeningFields.historyValue(e,change.screeningChoice) : change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
+  const unchangedChange = (e,change,value) => change.screeningChoice || change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
   const { selectPhone } = createCompositeControlActions({
     phoneState, phoneOptions, changeEditable, checkDeadline, visible, editable, write
   });
@@ -236,6 +237,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const e=currentElement(c);
           if(!e || !changeEditable(e,c) || !unchangedChange(e,c,c[previous]))throw new Error('Fields changed since C3 filled them. Your edits were preserved.');
           c.element=e;
+          if (c.screeningChoice) {
+            // Include an interrupted attempt in the catch block's independent before/after readback.
+            written++;
+            await screeningFields.restore(e,c.screeningChoice,c[previous],c[next],checkDeadline);
+            continue;
+          }
           if (c.choiceWidget) await restoreChoice(c,c[next]);
           else if (c.fabric) await selectFabric(c,c[next]);
           else if (c.phoneCountry) await selectPhone(c,c[next]);
@@ -621,7 +628,18 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const reason = !queuedScreening ? 'screening_choice_requires_queue' : plan.reason;
           skip(reason); reportMatch(row,plan,'unconfirmed',reason,row.selected); continue;
         }
-        if (await screeningFields.select(e,screenControl,plan.answer,checkDeadline)) {
+        let confirmed, clickedListOption=false;
+        try {
+          confirmed = await screeningFields.select(e,screenControl,plan.answer,checkDeadline,()=>{clickedListOption=true;});
+        } finally {
+          if (clickedListOption) {
+            const after = screenControl.values[screenControl.options.indexOf(plan.answer)];
+            if (after && screeningFields.historyValue(e,screenControl)===after) {
+              changes.push({element:e,region:f.region,label:row.question,url:location.href,screeningChoice:screenControl,before:'',after});
+            }
+          }
+        }
+        if (confirmed) {
           result.filled.push(row.question);reportMatch(row,plan,'verified','product_readback_confirmed',plan.answer);
         } else {
           skip('screening_choice_not_confirmed','browser_interaction','verify_selection');

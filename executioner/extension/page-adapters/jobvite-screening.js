@@ -105,7 +105,7 @@ export function watchJobviteScreening(receipt, binding, state) {
   first.addEventListener('click', event => {
     if (attachment && event.target.closest?.('[ng-click="removeResume()"],[jv-add-attachment][attachment-label="Resume"]')) invalidate();
   },options);
-  let queuedAttempts = 0, disclosureOpened = false;
+  let queuedAttempts = 0, disclosureOpened = false, queuedClick;
   next.addEventListener('click', event => {
     observe(observer.takeRecords());
     if (!event.isTrusted || state.busy || controller.signal.aborted || !attachment || !accepted() || !active() ||
@@ -115,8 +115,10 @@ export function watchJobviteScreening(receipt, binding, state) {
         !first.isConnected || jobviteScreeningPanel() !== undefined) return;
     pending = true;
     clearTimeout(timer);
-    timer = setTimeout(() => { pending = false; if (!first.isConnected && !second) invalidate(); }, 3000);
+    timer = setTimeout(() => { pending = false; if (!first.isConnected && !second) invalidate(); }, queuedClick === event ? 10_000 : 3000);
+    queuedClick = null;
   }, options);
+  receipt.jobviteNextPending = () => pending && !controller.signal.aborted && active() && accepted();
   receipt.acknowledgedPanel = () => {
     const records = observer.takeRecords();
     if (records.length) observe(records);
@@ -154,7 +156,7 @@ export function watchJobviteScreening(receipt, binding, state) {
     const stop = event => {event.preventDefault();event.stopImmediatePropagation();};
     window.addEventListener('click',event=>{
       if (clicked || !event.isTrusted || !event.composedPath().includes(button) || !ready()) { stop(event); return; }
-      clicked = true; onClick();
+      clicked = true; onClick(event);
     },opts);
     window.addEventListener('submit',stop,opts);
     const timeout=setTimeout(()=>guard.abort(),5000);
@@ -180,6 +182,6 @@ export function watchJobviteScreening(receipt, binding, state) {
       return queuedAttempts===1 && receipt.jobviteExpanded() && fields.length===Object.keys(verifiedFields).length &&
         fields.every(e=>e.validity.valid && e.getAttribute('aria-invalid')!=='true' && !!e.value.trim() &&
           verifiedFields[state.matchingIds?.get(e)] === e.value);
-    },()=>{queuedAttempts++;});
+    },event=>{queuedAttempts++; queuedClick=event;});
   };
 }

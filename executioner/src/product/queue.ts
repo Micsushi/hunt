@@ -8,7 +8,7 @@ import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, re
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
-import { AttachmentFailure } from './extension-bridge.ts';
+import { AttachmentFailure, verifiedScreeningTransition } from './extension-bridge.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
 
 import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
@@ -367,6 +367,7 @@ export class ApplicationQueue {
       this.changed(job);
       const executionUrl=productApplicationTarget(job.url).ats==='generic' ? session.applicationUrl ?? job.url : job.url;
       const result = await this.fill(session.page, { url: executionUrl, profile: input.profile, learningRoot: join(this.root, "learning", job.id, runId),
+        screeningTransition: url => verifiedScreeningTransition(session.page,url),
         resume: Buffer.from(input.resume, "base64"), resumeExpected: job.resumeExpected,
         onResumeObserved: () => { job.resumeExpected = true; this.changed(job); },
         resumeUpload: job.resumeUpload, onResumeUpload: receipt => { job.resumeUpload = receipt; this.changed(job); },

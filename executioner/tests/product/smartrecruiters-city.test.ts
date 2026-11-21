@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { parseApplicationProfile } from '../../src/profile/application-profile.ts';
 import { chromium } from 'playwright';
+import { verifiedScreeningTransition } from '../../src/product/extension-bridge.ts';
 import { prepareCurrentPage } from '../../src/product/current-page-workflow.ts';
 import { advanceSmartRecruiters } from '../../src/product/smartrecruiters-workflow.ts';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
@@ -97,38 +98,58 @@ test('only the queued OneClick personal footer advances and the final action rem
     await page.route(url,route=>route.fulfill({contentType:'text/html',body:
       '<main><oc-oneclick-form><oc-personal-information></oc-personal-information><oc-nav-first-page>' +
       '<footer data-test=footer><oc-button data-test=footer-next><spl-button>Next</spl-button></oc-button></footer></oc-nav-first-page></oc-oneclick-form></main>'}));
-    await page.goto(url);
-    await page.evaluate(() => {
-      const host = document.querySelector('spl-button')!;
-      host.attachShadow({mode:'open'}).innerHTML = '<button type=button><slot></slot></button>';
-      (globalThis as any).__huntC3PartialFill = {busy:false,undo:[],redo:[]};
-      (globalThis as any).submissions = 0;
-      host.addEventListener('click', () => {
-        history.pushState({},'',location.pathname+'/screening');
-        document.querySelector('main')!.innerHTML = '<oc-screening-questions><h2>Preliminary questions</h2><oc-screening-questions-form>' +
-          '<label>Years of experience<input required></label></oc-screening-questions-form><oc-nav-screening-questions>' +
-          '<oc-button data-test=footer-submit><spl-button>Submit</spl-button></oc-button></oc-nav-screening-questions></oc-screening-questions>';
-        document.querySelector('spl-button')!.attachShadow({mode:'open'}).innerHTML='<button type=button><slot></slot></button>';
-        document.querySelector('spl-button')!.shadowRoot!.querySelector('button')!.onclick = () => { (globalThis as any).submissions++; };
+    const openPersonal = async () => {
+      await page.goto(url);
+      await page.evaluate(() => {
+        const host = document.querySelector('spl-button')!;
+        host.attachShadow({mode:'open'}).innerHTML = '<button type=button><slot></slot></button>';
+        (globalThis as any).__huntC3PartialFill = {busy:false,undo:[],redo:[]};
+        (globalThis as any).submissions = 0;
+        host.addEventListener('click', () => {
+          history.pushState({},'',location.pathname+'/screening');
+          document.querySelector('main')!.innerHTML = '<oc-screening-questions><h2>Preliminary questions</h2><oc-screening-questions-form>' +
+            '<label>Years of experience<input required></label></oc-screening-questions-form><oc-nav-screening-questions>' +
+            '<oc-button data-test=footer-submit><spl-button>Submit</spl-button></oc-button></oc-nav-screening-questions></oc-screening-questions>';
+          document.querySelector('spl-button')!.attachShadow({mode:'open'}).innerHTML='<button type=button><slot></slot></button>';
+          document.querySelector('spl-button')!.shadowRoot!.querySelector('button')!.onclick = () => { (globalThis as any).submissions++; };
+        });
       });
-    });
+    };
+    await openPersonal();
     const report = {skipped:[{reason:'resume_filename_visible_contents_unverified'}],resume:'unverified',
       componentFailure:{component:'uploads' as const,operation:'verify_attachment'}};
     const signal = new AbortController().signal;
+    const screeningTransition=(url:string)=>verifiedScreeningTransition(page,url);
     const next = page.locator('spl-button button');
     await next.evaluate((e:HTMLButtonElement)=>{ e.type='submit'; });
-    assert.equal(await advanceSmartRecruiters(page,url,report,signal),undefined);
+    assert.equal(await advanceSmartRecruiters(page,url,report,signal,screeningTransition),undefined);
     await next.evaluate((e:HTMLButtonElement)=>{ e.type='button'; });
-    assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[{reason:'value_not_accepted'}]},signal),undefined);
-    assert.equal(await advanceSmartRecruiters(page,url,{...report,componentFailure:{component:'uploads',operation:'upload'}},signal),undefined);
-    assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[...report.skipped,{reason:'value_not_accepted'}]},signal),undefined);
-    assert.deepEqual(await advanceSmartRecruiters(page,url,report,signal),{screeningUrl:url+'/screening'});
+    assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[{reason:'value_not_accepted'}]},signal,screeningTransition),undefined);
+    assert.equal(await advanceSmartRecruiters(page,url,{...report,componentFailure:{component:'uploads',operation:'upload'}},signal,screeningTransition),undefined);
+    assert.equal(await advanceSmartRecruiters(page,url,{...report,skipped:[...report.skipped,{reason:'value_not_accepted'}]},signal,screeningTransition),undefined);
+    assert.equal(await advanceSmartRecruiters(page,url,report,signal),undefined);
+    assert.equal(page.url(),url);
+    assert.deepEqual(await advanceSmartRecruiters(page,url,report,signal,screeningTransition),{screeningUrl:url+'/screening'});
     const field = (await page.evaluate(fillVisibleFields,{action:'status' as const})).matching?.find(row=>row.question==='Years of experience');
     assert.ok(field);
     const result=await page.evaluate(fillVisibleFields,{matchingPlans:[{fieldId:field.fieldId,signature:field.signature,answer:'3',provisional:false,reason:'test_fact'}]});
     assert.deepEqual(result.filled,['Years of experience']);
     assert.equal(result.resume,'unverified');
     assert.match(String(await advanceSmartRecruiters(page,page.url(),report,signal)??''),/final submission button/);
+    assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
+    await openPersonal();
+    await next.evaluate((button:HTMLButtonElement)=>{
+      const click=button.click.bind(button);
+      button.click=()=>{click();throw new Error('fixture lost action acknowledgement');};
+    });
+    assert.match(String(await advanceSmartRecruiters(page,url,report,signal,screeningTransition)),/attempted Next.*employer step/);
+    assert.equal(page.url(),url+'/screening');
+    assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
+    await openPersonal();
+    const interrupted = new AbortController();
+    page.once('framenavigated',()=>interrupted.abort());
+    assert.match(String(await advanceSmartRecruiters(page,url,report,interrupted.signal,screeningTransition)),/clicked Next once.*screening step/);
+    assert.equal(page.url(),url+'/screening');
     assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
   } finally { await browser.close(); }
 });
@@ -162,9 +183,14 @@ test('queued screening choices require independent backing and the popup preserv
         {id:'past',label:'Former employee?',type:'select',required:true,fields:[{multipleChoice:false,questionsFieldValues:rows}]}]}));
       const host=document.querySelector('spl-autocomplete')!;
       const root=host.attachShadow({mode:'open'});
-      root.innerHTML='<input role=combobox id=question_past aria-required=true aria-invalid=false aria-controls=menu aria-expanded=false><div id=menu role=listbox hidden></div>';
+      root.innerHTML='<input role=combobox id=question_past aria-required=true aria-invalid=false aria-controls=menu aria-expanded=false><spl-icon role=button aria-label="Clear value" hidden>Clear</spl-icon><div id=menu role=listbox hidden></div>';
       const input=root.querySelector('input')!, menu=root.querySelector<HTMLElement>('[role=listbox]')!;
       input.onclick=()=>{input.setAttribute('aria-expanded','true');menu.hidden=false;};
+      const clear=root.querySelector<HTMLElement>('[aria-label="Clear value"]')!;
+      clear.onclick=()=>{
+        input.value='';(host as HTMLElement & {value:unknown}).value=undefined;
+        host.removeAttribute('value');clear.hidden=true;
+      };
       for (const row of rows) {
         const node=document.createElement('spl-dropdown-item');
         node.innerHTML='<div class="c-spl-autocomplete-default-option"><div class="c-spl-autocomplete-option-content"><spl-truncate></spl-truncate></div></div>';
@@ -174,7 +200,7 @@ test('queued screening choices require independent backing and the popup preserv
         node.onclick=()=>{
           input.value=row.label;input.setAttribute('aria-expanded','false');menu.hidden=true;
           (host as HTMLElement & {value:unknown}).value={value:row.id};
-          host.setAttribute('value','[object Object]');
+          host.setAttribute('value','[object Object]');clear.hidden=false;
         };
         menu.append(node);
       }
@@ -192,6 +218,42 @@ test('queued screening choices require independent backing and the popup preserv
     const selected=await snapshot();
     assert.equal(selected.find(row=>row.control==='radio')?.selected,'Yes');
     assert.equal(selected.find(row=>row.control==='listbox')?.selected,'Non | No');
+    const undoChoice=()=>page.evaluate(fillVisibleFields,{action:'undo' as const});
+    const redoChoice=()=>page.evaluate(fillVisibleFields,{action:'redo' as const});
+    const choice=page.locator('spl-autocomplete input');
+    assert.deepEqual((await undoChoice()).filled,['Former employee?']);
+    assert.equal(await choice.inputValue(),'');
+    assert.equal((await snapshot()).find(row=>row.control==='radio')?.selected,'Yes');
+    assert.deepEqual((await redoChoice()).filled,['Former employee?']);
+    assert.equal(await choice.inputValue(),'Non | No');
+    const clearChoice=page.getByRole('button',{name:'Clear value'});
+    await clearChoice.evaluate(button=>button.setAttribute('aria-disabled','true'));
+    await assert.rejects(undoChoice(),/edits were preserved/);
+    await clearChoice.evaluate(button=>button.removeAttribute('aria-disabled'));
+    await page.evaluate(()=>history.pushState({},'',location.pathname+'?another-draft'));
+    await assert.rejects(undoChoice(),/edits were preserved/);
+    await page.evaluate(()=>history.replaceState({},'',location.pathname));
+    await choice.click();
+    await page.getByRole('option',{name:'Oui | Yes'}).click();
+    await assert.rejects(undoChoice(),/edits were preserved/);
+    assert.equal(await choice.inputValue(),'Oui | Yes');
+    await choice.click();
+    await page.getByRole('option',{name:'Non | No'}).click();
+    await undoChoice();
+
+    // Stop the C3 run immediately after the employer commits the selection.
+    const expiresAt=await page.evaluate(()=>{
+      const deadline=Date.now()+60000;
+      (globalThis as any).savedNow=Date.now;
+      document.querySelector('spl-autocomplete')!.shadowRoot!.querySelector('spl-dropdown-item')!
+        .addEventListener('click',()=>{Date.now=()=>deadline+1;},{once:true});
+      return deadline;
+    });
+    await assert.rejects(page.evaluate(fillVisibleFields,{matchingPlans:plans,queuedScreening:true,expiresAt}),/expired/);
+    await page.evaluate(()=>{Date.now=(globalThis as any).savedNow;});
+    assert.equal(await choice.inputValue(),'Non | No');
+    assert.deepEqual((await undoChoice()).filled,['Former employee?']);
+    await redoChoice();
     const checkbox=selected.find(row=>row.control==='checkbox')!;
     const consent=await page.evaluate(fillVisibleFields,{matchingPlans:[{fieldId:checkbox.fieldId,signature:checkbox.signature,answer:true,provisional:false,reason:'saved_consent'}]});
     assert.deepEqual(consent.filled,['Employer privacy notice']);
