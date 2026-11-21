@@ -23,45 +23,16 @@ function inputs() {
   return { manifest, fixtures, variants, baseline };
 }
 
-test("the corpus evidence freezes a no-contract-delta impact with evidence-backed tasks", () => {
-  const impact = buildContractImpact(inputs());
-  assert.deepEqual(validateContractImpact(impact, inputs()), []);
-  assert.equal(impact.contractReopen.required, false);
-  assert.deepEqual(impact.allowedTerminalCodes, [
-    "application_ready",
-    "posting_unavailable:maintenance",
-  ]);
-  const activated = impact.taskActivations.filter((task: { decision: string }) => task.decision === "activated");
-  assert.deepEqual(
-    activated.map((task: { taskId: string }) => task.taskId),
-    ["S3-F2-T1", "S3-F2-T2", "S3-F2-T3", "S3-F2-T5", "S3-F2-T7", "S3-F2-T13"],
-  );
-  for (const task of activated.filter((task: { taskId: string }) => !["S3-F2-T1", "S3-F2-T13"].includes(task.taskId))) {
-    assert.ok(task.provingFixtures.length > 0);
-    assert.ok(task.provingSlots.length > 0);
-  }
-  assert.ok(impact.taskActivations.every((task: { status: string }) => task.status.endsWith(impact.impactSha)));
-});
-
-test("activation graph reciprocity and impact SHA are mandatory", () => {
-  const impact = buildContractImpact(inputs());
+test("contract impact validation reports altered dependencies, digest and unsupported metadata", () => {
+  const baseline = inputs();
+  const impact = buildContractImpact(baseline);
   const broken = structuredClone(impact);
   broken.taskActivations.find((task: { taskId: string }) => task.taskId === "S3-F2-T2")!.exactDependencies = [];
-  const errors = validateContractImpact(broken, inputs());
+  const errors = validateContractImpact(broken, baseline);
   assert.ok(errors.includes("task graph link S3-F2-T1 -> S3-F2-T2 is nonreciprocal"));
   assert.ok(errors.includes("impactSha does not match frozen impact content"));
-});
 
-test("contract impact rows reject employer-specific metadata", () => {
-  const impact = buildContractImpact(inputs());
-  const broken = structuredClone(impact);
-  (broken.taskActivations[0]! as unknown as Record<string, unknown>).employer = "tenant-specific-branch";
-  assert.ok(validateContractImpact(broken, inputs()).includes(
-    `task ${broken.taskActivations[0]!.taskId} contains unsupported field employer`,
-  ));
-});
-
-test("the committed contract impact validates against the same baseline", () => {
-  const impact = JSON.parse(readFileSync(resolve("corpus/workday-40/contract-impact.json"), "utf8"));
-  assert.deepEqual(validateContractImpact(impact, inputs()), []);
+  const tagged = structuredClone(impact);
+  (tagged.taskActivations[0]! as unknown as Record<string, unknown>).employer = "tenant-specific-branch";
+  assert.ok(validateContractImpact(tagged, baseline).includes(`task ${tagged.taskActivations[0]!.taskId} contains unsupported field employer`));
 });

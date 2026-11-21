@@ -50,7 +50,13 @@ test("real extension fills concurrent tabs through Review and requires fresh per
     assert.equal(service.queue.snapshot().connected, true);
     const count = Number(process.env.C3_BATCH_CHECK_COUNT ?? 2);
     assert.ok(count >= 2 && count <= 30);
-    await context.route(/https:\/\/fixture\d+\.wd1\.myworkdayjobs\.com\//, route => route.fulfill({ contentType: "text/html", body: route.request().url().includes("//fixture0.") ? accountFixture.replace('()=>document.querySelector(\'#error\').innerHTML=\'<p data-automation-id="accountNotFoundError">Account not found</p>\'', '()=>profile()') : applicationFixture }));
+    const knownAccount = accountFixture
+      .replace("root.querySelector('[data-automation-id=\"createAccountLink\"]').onclick=createAccount;", "")
+      .replace('<button data-automation-id="createAccountLink">Create Account</button>', "")
+      .replace("()=>document.querySelector('#error').innerHTML='<p data-automation-id=\"accountNotFoundError\">Account not found</p>'", "()=>profile()");
+    await context.route(/https:\/\/fixture\d+\.wd1\.myworkdayjobs\.com\//, route => route.fulfill({
+      contentType: "text/html", body: route.request().url().includes("//fixture0.") ? knownAccount : applicationFixture,
+    }));
     const pages: Page[] = [];
     for (let i = 0; i < count; i++) {
       const page = await context.newPage();

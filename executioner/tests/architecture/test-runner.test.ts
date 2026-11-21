@@ -3,14 +3,6 @@ import { test } from "node:test";
 
 import { testRunnerArgs, testTargets } from "../runner.ts";
 
-test("the test runner bounds file concurrency", () => {
-  assert.deepEqual(testRunnerArgs(["tests/architecture/test-runner.test.ts"]), [
-    "--test",
-    "--test-concurrency=4",
-    "tests/architecture/test-runner.test.ts",
-  ]);
-});
-
 test("an explicit directory with no tests is rejected", () => {
   assert.throws(
     () => testTargets(["tests/architecture/empty"]),

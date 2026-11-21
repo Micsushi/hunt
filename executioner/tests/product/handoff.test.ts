@@ -120,9 +120,9 @@ test('explicit paused import keeps the exact portable contract and never schedul
 test('manual fill and redo require the new paired extension capability and retain the caller deadline',async()=>{
   const root=mkdtempSync(join(tmpdir(),'hunt-page-capability-'));const service=await startProductServer({root,port:0});
   const original=ExtensionBridge.prototype.call;let modern=false,effects=0,slow=false;
-  ExtensionBridge.prototype.call=async function(method){
-    if(method==='agentStatus') {if(slow)await new Promise(resolve=>setTimeout(resolve,40));return {capabilities:[modern?'pageAction-v2':'pageAction-v1']};}
-    if(method==='pageAction'){effects++;return {status:'partial',filled:[],skipped:[]};}
+  ExtensionBridge.prototype.call=async function(method,params){
+    if(method==='agentStatus') {if(slow)await new Promise(resolve=>setTimeout(resolve,40));return {capabilities:modern?['pageAction-v2','question-matching-v1']:['pageAction-v1']};}
+    if(method==='pageAction'){if(params?.operation==='fill') effects++;return {documentId:params?.documentId,status:'partial',filled:[],skipped:[],matching:[],canUndo:false,canRedo:false};}
     throw new Error('Unexpected bridge action');
   };
   try {

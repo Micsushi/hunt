@@ -3,21 +3,24 @@ import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 import {preparePageViewport,viewportOwnership,viewportUnavailable,viewportCleanupPending} from '../../extension/page-viewport.js';
 
-test('positive renderer viewport stays untouched and restoration is a no-op',async()=>{
-  const calls:string[]=[];
-  const restore=await preparePageViewport(async method=>{calls.push(method);return{cssLayoutViewport:{clientWidth:1707,clientHeight:735}};});
-  await restore();await restore();assert.deepEqual(calls,['Page.getLayoutMetrics']);
-});
-
-test('only a zero viewport receives a temporary desktop viewport and restores once',async()=>{
-  for(const dimensions of [[0,0],[0,800],[1280,0]]){
-    const calls:{method:string;params?:Record<string,unknown>}[]=[];let reads=0;
-    const restore=await preparePageViewport(async(method,params)=>{
-      calls.push({method,params});
-      return method==='Page.getLayoutMetrics'?{cssLayoutViewport:{clientWidth:reads++?1280:dimensions[0],clientHeight:reads>1?800:dimensions[1]}}:{};
+test('temporary desktop override applies and restores once only for zero-sized viewports', async () => {
+  for (const [width, height] of [[1707, 735], [0, 0], [0, 800], [1280, 0]] as const) {
+    const calls: {method: string; params?: Record<string,unknown>}[] = [];
+    let reads = 0;
+    const restore = await preparePageViewport(async (method, params) => {
+      calls.push({method, params});
+      if (method !== 'Page.getLayoutMetrics') return {};
+      return {cssLayoutViewport: reads++ ? {clientWidth:1280, clientHeight:800} : {clientWidth:width, clientHeight:height}};
     });
-    assert.equal(calls.length,3);assert.deepEqual(calls[1],{method:'Emulation.setDeviceMetricsOverride',params:{width:1280,height:800,deviceScaleFactor:0,mobile:false}});
-    await restore();await restore();assert.deepEqual(calls.map(c=>c.method),['Page.getLayoutMetrics','Emulation.setDeviceMetricsOverride','Page.getLayoutMetrics','Emulation.clearDeviceMetricsOverride']);
+    await restore();
+    await restore();
+    const methods = calls.map(call => call.method);
+    if (width && height) {
+      assert.deepEqual(methods, ['Page.getLayoutMetrics']);
+    } else {
+      assert.deepEqual(methods, ['Page.getLayoutMetrics', 'Emulation.setDeviceMetricsOverride', 'Page.getLayoutMetrics', 'Emulation.clearDeviceMetricsOverride']);
+      assert.deepEqual(calls[1]!.params, {width:1280, height:800, deviceScaleFactor:0, mobile:false});
+    }
   }
 });
 

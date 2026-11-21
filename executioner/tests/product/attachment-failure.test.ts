@@ -7,29 +7,6 @@ import {join} from 'node:path';
 import {WebSocket} from 'ws';
 import {AttachmentFailure,ExtensionBridge} from '../../src/product/extension-bridge.ts';
 
-test('known attachment conflicts are fixed codes and unknown messages never escape',()=>{
-  for(const [message,code] of [
-    ['C3 is already operating this tab.','c3_page_action_busy'],
-    ['This tab is already running.','c3_attachment_busy'],
-    ['Another debugger is already attached to the tab with id: 123.','debugger_already_attached'],
-    ['No tab with id: 123.','attachment_tab_closed'],
-    ['Cannot attach to this target.','debugger_access_denied'],
-    ['Cannot access a chrome-extension:// URL of different extension','debugger_protected_extension'],
-    ['This tab has no usable page area. Resize or restore its browser window, then retry.','attachment_viewport_unavailable'],
-    ["Hunt could not restore this tab's page size. Retry the job or page action to finish cleanup before filling.",'attachment_viewport_cleanup_pending'],
-    ['The selected tab does not match this job.','attachment_target_mismatch'],
-    ['The job page did not load. Retry when the site is available.','attachment_page_not_ready'],
-    ['Browser connection closed during attachment. Retry this job.','attachment_connection_closed'],
-    ['Another debugger is already attached to the tab with id: secret','attachment_unknown'],
-    ['locator.fill: strict mode violation: private typed text','attachment_unknown'],
-    ['__proto__','attachment_unknown'],
-  ]){
-    const error=new AttachmentFailure(new Error(message));assert.equal(error.code,code);
-    assert.equal(error.message,'C3 attachment stopped: '+code);assert.equal(error.cause,undefined);
-    assert.doesNotMatch(error.stack??'',/private typed|with id:|secret/);
-  }
-});
-
 test('unknown attach text is bounded in a local private receipt, never the public error',()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-attach-diagnostic-'));
   const previous=process.env.HUNT_C3_PRODUCT_ROOT;

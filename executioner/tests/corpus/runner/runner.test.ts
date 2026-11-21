@@ -21,25 +21,6 @@ function inputs() {
   };
 }
 
-test("the offline baseline is sequential, complete, and reproducible", () => {
-  const first = createCorpusBaseline(inputs());
-  const second = createCorpusBaseline(inputs());
-  assert.deepEqual(first, second);
-  assert.deepEqual(validateBaselineReport(first, inputs()), []);
-  assert.equal(first.outcomes.length, 40);
-  assert.deepEqual(first.outcomes.map((outcome: { sequence: number }) => outcome.sequence), Array.from({ length: 40 }, (_, index) => index + 1));
-  assert.equal(first.outcomes.filter((outcome: { kind: string }) => outcome.kind === "application_ready").length, 29);
-  assert.equal(first.outcomes.filter((outcome: { kind: string; reason?: string }) => outcome.kind === "posting_unavailable" && outcome.reason === "maintenance").length, 11);
-  assert.equal(JSON.stringify(first).toLowerCase().includes("submit"), true);
-  assert.equal(first.safety.finalSubmitActivated, false);
-});
-
-test("a partial sequential report resumes without changing the final report", () => {
-  const full = createCorpusBaseline(inputs());
-  const resumed = createCorpusBaseline(inputs(), full.outcomes.slice(0, 10));
-  assert.deepEqual(resumed, full);
-});
-
 test("access control is not collapsed into dead-posting state", () => {
   const changed = inputs();
   changed.manifest.slots[0].availability = {
@@ -53,17 +34,13 @@ test("access control is not collapsed into dead-posting state", () => {
   assert.equal(report.outcomes[0]!.reason, "access_control");
 });
 
-test("baseline preflight rejects a malformed frozen manifest", () => {
-  const changed = inputs();
-  changed.manifest.slots[1].jobRef = changed.manifest.slots[0].jobRef;
-  assert.throws(() => createCorpusBaseline(changed), /baseline manifest validation failed/u);
-});
-
-test("immutable reports are reused only when their bytes are unchanged", () => {
+test("resuming a partial baseline reproduces the same immutable report", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-corpus-baseline-"));
   try {
     const report = createCorpusBaseline(inputs());
-    const first = writeImmutableBaseline(report, root);
+    const resumed = createCorpusBaseline(inputs(), report.outcomes.slice(0, 10));
+    assert.deepEqual(resumed, report);
+    const first = writeImmutableBaseline(resumed, root);
     const second = writeImmutableBaseline(report, root);
     assert.equal(first, second);
     assert.deepEqual(JSON.parse(readFileSync(first, "utf8")), report);

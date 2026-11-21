@@ -59,7 +59,7 @@ test("real extension retains Review and recovers after browser-initiated discard
   const fixtureServer = createServer({ key: readFileSync(join(root, "key.pem")), cert: readFileSync(join(root, "cert.pem")) }, (_, response) => { response.setHeader("Content-Type", "text/html"); response.end(fixture); });
   await new Promise<void>(resolve => fixtureServer.listen(47852, "127.0.0.1", resolve));
   cpSync(resolve("extension"), extension, { recursive: true });
-  for (const file of ["background.js", "manifest.json"]) writeFileSync(join(extension, file), readFileSync(join(extension, file), "utf8").replaceAll("47831", "47851"));
+  for (const file of ["background.js", "manifest.json", "popup.js", "website-handoff.js"]) writeFileSync(join(extension, file), readFileSync(join(extension, file), "utf8").replaceAll("47831", "47851"));
   const browser = spawn(process.env.HUNT_C3_CHROMIUM ?? chromium.executablePath(), [
     '--headless=new', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=47853', `--user-data-dir=${join(root, 'browser')}`,
     `--disable-extensions-except=${extension}`, `--load-extension=${extension}`, "--ignore-certificate-errors", "--no-proxy-server", "--host-resolver-rules=MAP suspension.wd1.myworkdayjobs.com 127.0.0.1:47852", 'about:blank',
@@ -88,8 +88,18 @@ test("real extension retains Review and recovers after browser-initiated discard
       }
       if (!workerUrl) await new Promise(resolve => setTimeout(resolve, 100));
     }
-    for (let i = 0; i < 100 && !await worker.evaluate("typeof chrome !== 'undefined' && !!chrome.storage?.local && typeof connect === 'function'"); i++) await new Promise(resolve => setTimeout(resolve, 100));
-    await worker.evaluate(`chrome.storage.local.set({token:${JSON.stringify(token)}}).then(() => connect())`);
+    await worker.evaluate(`chrome.storage.local.set({token:${JSON.stringify(token)}})`);
+    const pairing = await worker.evaluate('chrome.tabs.create({url:chrome.runtime.getURL("popup.html"),active:false})');
+    let popup;
+    for (let attempt = 0; attempt < 100 && !popup; attempt++) {
+      popup = (await targets()).find(target => target.type === "page" && target.url.startsWith("chrome-extension://") && target.url.endsWith("/popup.html"));
+      if (!popup) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.ok(popup, "pairing page opened");
+    await cdp(popup.webSocketDebuggerUrl, "Runtime.evaluate", {
+      expression:'chrome.runtime.sendMessage({action:"connect"})', awaitPromise:true,
+    });
+    await worker.evaluate(`chrome.tabs.remove(${pairing.id})`);
     for (let i = 0; i < 100 && !service.queue.snapshot().connected; i++) await new Promise(r => setTimeout(r, 50));
     await api("settings", { applicant: { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }, resumeBase64: Buffer.from("%PDF-1.4\nfixture").toString("base64") });
     await api("jobs", { jobs: [{ url: "https://suspension.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" }] });

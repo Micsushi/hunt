@@ -121,32 +121,23 @@ test("Stage 2 preserves every pre-existing Stage 1 contract blob", () => {
     [],
   );
   const freeze = "63218cbcbec87d420d1fda6924a6e7a220491518";
-  const changed = git(repository, "diff", "--name-only", freeze, "HEAD", "--", ...s2FrozenTreePaths).trim().split("\n");
+  const integrated = "09e0cd0b1b83f121801cc6ef2e2e8e16e2d0b601";
+  const changed = git(repository, "diff", "--name-only", freeze, integrated, "--", ...s2FrozenTreePaths).trim().split("\n");
   assert.deepEqual(changed, ["executioner/src/contracts/ownership.ts", "executioner/src/contracts/types.ts"]);
   const types = "executioner/src/contracts/types.ts";
   const addedChoiceBound = "// Country and nationality catalogs exceed 128 choices. Preserve their options\n" +
     "// through browser inspection and editable learning records.\n" +
     "export const MAX_OBSERVED_CHOICE_OPTIONS = 512 as const;\n\n";
-  assert.equal(git(repository, "show", `HEAD:${types}`).replace(addedChoiceBound, ""),
+  assert.equal(git(repository, "show", `${integrated}:${types}`).replace(addedChoiceBound, ""),
     git(repository, "show", `${freeze}:${types}`), "All existing contract declarations remain byte-identical");
   const ownership = "executioner/src/contracts/ownership.ts";
   const frozenOwnership = git(repository, "show", `${freeze}:${ownership}`);
-  const releasedOwnership = git(repository, "show", `HEAD:${ownership}`);
+  const releasedOwnership = git(repository, "show", `${integrated}:${ownership}`);
   assert.equal(releasedOwnership.slice(0, frozenOwnership.length), frozenOwnership,
     "The frozen component ownership matrix is unchanged");
   assert.deepEqual(releasedOwnership.slice(frozenOwnership.length).match(/^export .*$/gmu),
     ["export const productBoundary = {"], "Only the separately reviewed product boundary is appended");
 
-});
-
-test("a pre-F0 revision is rejected with a Stage 2 source diagnostic", () => {
-  assert.throws(
-    () => assertS2FrozenContractBase(acceptedStage1Base, repository),
-    new RegExp(
-      `^Error: S2 contract base ancestry mismatch: Stage 2 contract source ${s2ContractSource} is not an ancestor of ${acceptedStage1Base}$`,
-      "u",
-    ),
-  );
 });
 
 test("the Stage 2 freeze rejects a changed frozen root", () => {

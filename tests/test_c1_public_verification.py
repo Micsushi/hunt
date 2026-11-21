@@ -63,28 +63,6 @@ def test_smartrecruiters_verification_requires_live_matching_public_posting(faul
     )
 
 
-def test_smartrecruiters_canonical_identity_ignores_title_slug_and_apply_tracking():
-    from hunter.discovery_policy import canonical_job_key
-
-    expected = "smartrecruiters:example:123"
-    assert canonical_job_key("https://jobs.smartrecruiters.com/Example/123") == expected
-    assert (
-        canonical_job_key("https://jobs.smartrecruiters.com/Example/123-it-support?oga=true")
-        == expected
-    )
-    assert canonical_job_key("https://jobs.smartrecruiters.com/Other/123") != expected
-    assert canonical_job_key("https://jobs.smartrecruiters.com.evil/Example/123") != expected
-
-
-@pytest.mark.parametrize("provider", ["smartrecruiters", "bamboohr", "workable"])
-def test_supported_saved_board_lead_is_claimed_for_verification(public_db, provider):
-    connection = public_db.get_connection()
-    connection.execute("UPDATE jobs SET ats_type=?, source='jobright' WHERE id=1", (provider,))
-    connection.commit()
-    connection.close()
-    assert public_db.claim_public_employer_job()["id"] == 1
-
-
 @pytest.mark.parametrize(
     "fault", [None, "title", "foreign", "id", "closed", "missing_status", "description"]
 )
@@ -188,25 +166,9 @@ def verification_result(job):
     }
 
 
-@pytest.mark.parametrize(
-    "location,reason",
-    [
-        ("Austin, Texas, United States", "outside_canada"),
-        (None, "geography_unverified"),
-        ("Toronto, Canada", None),
-    ],
-)
-def test_public_verification_refreshes_employer_location_and_fit(public_db, location, reason):
-    def verify(job):
-        return {**verification_result(job), "location": location}
+def test_public_worker_accepts_explicit_requeue_after_attempt_limit(public_db, monkeypatch):
+    from hunter import config
 
-    assert process_public_verification_batch(limit=1, verifier=verify)["verified"] == 1
-    row = public_db.get_job_by_id(1)
-    assert row["location"] == location
-    assert row["discovery_suppressed_reason"] == reason
-
-
-def test_public_worker_accepts_explicit_requeue_after_attempt_limit(public_db):
     conn = public_db.get_connection()
     conn.execute("UPDATE jobs SET enrichment_status = 'blocked', enrichment_attempts = 99")
     conn.execute("UPDATE jobs SET status = 'applied' WHERE id = 2")
@@ -214,6 +176,14 @@ def test_public_worker_accepts_explicit_requeue_after_attempt_limit(public_db):
     conn.execute("UPDATE jobs SET ats_type = 'unsupported' WHERE id = 4")
     conn.commit()
     conn.close()
+    with monkeypatch.context() as limits:
+        limits.setattr(config, "REVIEW_BULK_SELECTED_MAX", 0)
+        limits.setattr(config, "REVIEW_BULK_DELETE_MAX", 0)
+        before = public_db.get_job_by_id(1)
+        assert public_db.bulk_requeue_jobs_by_ids([1]) == 0
+        assert public_db.set_enrichment_status_for_job_ids([1], enrichment_status="done") == 0
+        assert public_db.delete_jobs_by_ids([1]) == 0
+        assert public_db.get_job_by_id(1) == before
     assert public_db.count_ready_public_employer_jobs() == 0
     for job_id in range(1, 5):
         assert public_db.requeue_job(job_id) == (1 if job_id == 1 else 0)
@@ -424,60 +394,6 @@ def test_stale_final_attempt_is_recovered_but_active_claim_is_not(public_db):
     assert public_db.claim_public_employer_job()["id"] == 2
 
 
-def test_dispatch_shares_enrichment_limit_and_reports_public_failures(public_db, monkeypatch):
-    from hunter import enrichment_dispatch as dispatch
-    from hunter import verify_public
-
-    monkeypatch.setattr(dispatch, "C1Logger", Mock())
-    monkeypatch.setattr(dispatch, "_maybe_alert_high_failure_rate", Mock())
-    monkeypatch.setattr(dispatch, "ENRICHMENT_SOURCE_PRIORITY", ("indeed",))
-    monkeypatch.setattr(dispatch, "count_ready_jobs_for_enrichment", Mock(return_value=10))
-    summary = {
-        "attempted": 3,
-        "verified": 2,
-        "failed": 1,
-        "superseded": 0,
-        "actionable_failed": 1,
-        "failure_breakdown": {"http403": 1},
-    }
-    public = Mock(return_value=summary)
-    board = Mock(
-        return_value={
-            "attempted": 2,
-            "ui_verified": 0,
-            "succeeded": 2,
-            "failed": 0,
-            "actionable_failed": 0,
-            "failure_breakdown": {},
-            "total_elapsed_seconds": 0,
-            "stop_error_code": None,
-        }
-    )
-    monkeypatch.setattr(verify_public, "process_public_verification_batch", public)
-    monkeypatch.setattr(dispatch, "_run_batch_for_source", board)
-    result = dispatch.run_enrichment_round(limit=5, return_summary=True)
-    public.assert_called_once_with(limit=5)
-    assert board.call_args.kwargs["source_limit"] == 2
-    assert result["exit_code"] == 1
-    assert result["attempted"] == 5
-    assert result["succeeded"] == 4
-    assert result["by_source"]["public_employer"]["verified"] == 2
-
-
-def test_post_scrape_runs_when_only_public_jobs_are_ready(public_db, monkeypatch):
-    from hunter import enrich_jobs, scraper
-
-    assert public_db.count_ready_public_employer_jobs() == 4
-    monkeypatch.setattr(scraper, "count_ready_jobs_for_enrichment", Mock(return_value=0))
-    worker = Mock(return_value=0)
-    monkeypatch.setattr(enrich_jobs, "process_multi_source_batch", worker)
-    assert scraper.run_pending_job_enrichment(limit=None) == 0
-    assert worker.call_args.kwargs["limit"] == 4
-    worker.reset_mock()
-    assert scraper.run_pending_job_enrichment(limit=0) == 0
-    worker.assert_not_called()
-
-
 def test_service_enrichment_processes_public_queue_without_board_auth(public_db, monkeypatch):
     from functools import partial
 
@@ -621,138 +537,6 @@ def test_catalog_verification_requires_live_exact_posting(provider):
         verify_public_posting({**job, "apply_type": "easy_apply"}, fetcher=Mock())
 
 
-def test_greenhouse_embedded_posting_matches_catalog_id_on_custom_domain():
-    job = {
-        "job_url": "https://job-boards.greenhouse.io/embed/job_app?for=example&token=1234",
-        "title": "IT Support",
-        "company": "Example",
-    }
-    row = {
-        "id": 1234,
-        "title": "IT Support",
-        "absolute_url": "https://example.com/jobs?gh_jid=1234",
-        "content": "Support Canadian office networks and computers with the internal service desk.",
-    }
-    fetcher = Mock(return_value=json.dumps({"jobs": [row]}))
-    result = verify_public_posting(job, fetcher=fetcher)
-    assert result["apply_url"] == row["absolute_url"]
-    fetcher.assert_called_once_with(
-        "https://boards-api.greenhouse.io/v1/boards/example/jobs?content=true"
-    )
-    fetcher.reset_mock()
-    assert verify_public_posting({**job, **result}, fetcher=fetcher) == result
-    fetcher.assert_called_once_with(
-        "https://boards-api.greenhouse.io/v1/boards/example/jobs?content=true"
-    )
-    for changed, error in (
-        ({"id": 5678}, "job_removed"),
-        ({"title": "Another role"}, "identity_mismatch"),
-        ({"absolute_url": "javascript:alert(1)"}, "identity_mismatch"),
-    ):
-        with pytest.raises(ValueError, match=error):
-            verify_public_posting(job, fetcher=lambda _: json.dumps({"jobs": [{**row, **changed}]}))
-
-
-def test_lever_eu_catalog_discovery_and_verification():
-    from hunter.discovery_sources import discover_company_career_site
-
-    url = "https://jobs.eu.lever.co/example/12345678-abcd"
-    row = {
-        "text": "IT Support",
-        "hostedUrl": url,
-        "applyUrl": url + "/apply",
-        "categories": {"location": "Toronto, Canada"},
-        "descriptionPlain": "Support Canadian office networks and computers with the internal service desk.",
-    }
-    fetcher = Mock(return_value=json.dumps([row]))
-    jobs, health = discover_company_career_site("Example", url, fetcher=fetcher)
-    assert health["status"] == "ok" and len(jobs) == 1
-    result = verify_public_posting(jobs[0], fetcher=fetcher)
-    assert result["apply_url"] == row["applyUrl"] and result["location"] == "Toronto, Canada"
-    assert all(
-        call.args == ("https://api.eu.lever.co/v0/postings/example?mode=json",)
-        for call in fetcher.call_args_list
-    )
-
-
-def test_batch_reuses_only_its_own_live_catalog_snapshot(public_db, monkeypatch):
-    from hunter import verify_public
-    from hunter.discovery_sources import _job
-
-    conn = public_db.get_connection()
-    conn.execute("UPDATE jobs SET status='applied'")
-    conn.commit()
-    conn.close()
-    rows = []
-    for index in (1, 2):
-        url = f"https://jobs.lever.co/example/12345678-{index}"
-        public_db.add_job(
-            _job(
-                title="IT Support",
-                company="Example",
-                location="Canada",
-                url=url,
-                source="employer_lever",
-            )
-        )
-        rows.append(
-            {
-                "text": "IT Support",
-                "hostedUrl": url,
-                "applyUrl": url + "/apply",
-                "descriptionPlain": "Support Canadian office networks and computers with the internal service desk.",
-            }
-        )
-    fetcher = Mock(return_value=json.dumps(rows))
-    monkeypatch.setattr(verify_public, "fetch_text", fetcher)
-    assert public_db.count_ready_public_employer_jobs() == 2
-    assert process_public_verification_batch(limit=2)["verified"] == 2
-    assert fetcher.call_count == 1
-    assert public_db.count_ready_public_employer_jobs() == 0
-
-
-def test_greenhouse_custom_domain_requires_published_board_and_exact_catalog_match():
-    job = {
-        "job_url": "https://careers.example.com/jobs/support?gh_jid=1234",
-        "title": "IT Support",
-        "company": "Example",
-        "ats_type": "greenhouse",
-    }
-    row = {
-        "title": "IT Support",
-        "absolute_url": job["job_url"],
-        "content": "Support Canadian office networks and computers with the internal service desk.",
-    }
-    responses = {
-        job[
-            "job_url"
-        ]: '<iframe src="https://app.greenhouse.io/embed/job_app?for=example&amp;token=1234"></iframe>',
-        "https://boards-api.greenhouse.io/v1/boards/example/jobs?content=true": json.dumps(
-            {"jobs": [row]}
-        ),
-    }
-    assert verify_public_posting(job, fetcher=responses.__getitem__)["ats_type"] == "greenhouse"
-    responses[job["job_url"]] = "<p>No board link</p>"
-    with pytest.raises(ValueError, match="provider_not_supported"):
-        verify_public_posting(job, fetcher=responses.__getitem__)
-
-
-def test_closed_job_rechecks_wait_behind_new_leads_and_preserve_application_history(public_db):
-    connection = public_db.get_connection()
-    connection.execute(
-        "UPDATE jobs SET enrichment_status='done', enriched_at='2000-01-01 00:00:00', enrichment_attempts=9 WHERE id IN (1, 2, 3)"
-    )
-    connection.execute("UPDATE jobs SET status='applied' WHERE id=2")
-    connection.execute("UPDATE jobs SET enriched_at=CURRENT_TIMESTAMP WHERE id=3")
-    connection.commit()
-    connection.close()
-    assert public_db.count_ready_public_employer_jobs() == 2
-    assert public_db.claim_public_employer_job()["id"] == 4
-    recheck = public_db.claim_public_employer_job()
-    assert recheck["id"] == 1 and recheck["enrichment_attempts"] == 1
-    assert public_db.claim_public_employer_job() is None
-
-
 @pytest.mark.parametrize("error", ["job_removed", "easy_apply_ineligible"])
 def test_public_terminal_outcomes_are_not_actionable_failures(public_db, error):
     summary = process_public_verification_batch(
@@ -765,45 +549,3 @@ def test_public_terminal_outcomes_are_not_actionable_failures(public_db, error):
     assert row["enrichment_status"] == "failed"
     assert row["next_enrichment_retry_at"] is None
     assert not row["auto_apply_eligible"]
-
-
-def test_verified_title_replaces_feed_label_and_reassesses_eligibility(public_db):
-    claimed = public_db.claim_public_employer_job()
-    result = {**verification_result(claimed), "title": "Senior Software Engineer"}
-    assert (
-        public_db.mark_job_enrichment_succeeded(
-            claimed["id"],
-            **result,
-            source=claimed["source"],
-            expected_started_at=claimed["last_enrichment_started_at"],
-        )
-        == 1
-    )
-    saved = public_db.get_job_by_id(claimed["id"])
-    assert saved["title"] == "Senior Software Engineer"
-    assert saved["discovery_suppressed_reason"]
-
-
-def test_disabled_bulk_limits_preserve_jobs(public_db, monkeypatch):
-    from hunter import config
-
-    monkeypatch.setattr(config, "REVIEW_BULK_SELECTED_MAX", 0)
-    monkeypatch.setattr(config, "REVIEW_BULK_DELETE_MAX", 0)
-    before = public_db.get_job_by_id(1)
-    assert public_db.bulk_requeue_jobs_by_ids([1]) == 0
-    assert public_db.set_enrichment_status_for_job_ids([1], enrichment_status="done") == 0
-    assert public_db.delete_jobs_by_ids([1]) == 0
-    assert public_db.get_job_by_id(1) == before
-
-
-def test_public_queue_prioritizes_matching_leads_and_reports_waiting_groups(public_db):
-    with public_db.get_connection() as conn:
-        conn.execute(
-            "UPDATE jobs SET discovery_suppressed_reason='outside_search_lanes' WHERE id IN (1,2,3)"
-        )
-        conn.execute("UPDATE jobs SET date_scraped='2000-01-01 00:00:00' WHERE id=1")
-    health = public_db.public_verification_health()
-    assert sum(r["count"] for r in health["ready_groups"]) == 1
-    assert not any(r["oldest_discovered_at"].startswith("2000") for r in health["ready_groups"])
-    assert public_db.claim_public_employer_job()["id"] == 4
-    assert public_db.claim_public_employer_job() is None

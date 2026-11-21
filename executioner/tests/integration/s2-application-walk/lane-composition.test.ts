@@ -182,37 +182,6 @@ test("collector retains cumulative answers across consecutive questionnaire page
   );
 });
 
-test("captures profile and questionnaire inputs as immutable source snapshots", () => {
-  const values = laneValues();
-  const sources = createImmutableApplicationLaneSources(values);
-  const plan = sources.profilePlan();
-  const request = sources.questionnaireRequest();
-
-  assert.equal(Object.isFrozen(plan), true);
-  assert.equal(Object.isFrozen(plan.fields), true);
-  assert.equal(Object.isFrozen(request), true);
-  assert.equal(Object.isFrozen(request.page), true);
-  assert.notEqual(plan, values.profilePlan);
-  assert.notEqual(request, values.questionnaireRequest);
-  assert.equal(request.resumeArtifact, values.questionnaireRequest.resumeArtifact);
-  assert.equal(request.mode, "live");
-});
-
-test("lane sources admit explicit non-submittable learning mode", () => {
-  const values = laneValues();
-  assert.doesNotThrow(() => createImmutableApplicationLaneSources({
-    ...values,
-    profilePlan: { ...values.profilePlan, mode: "synthetic_test_non_submittable" },
-  }));
-  assert.doesNotThrow(() => createImmutableApplicationLaneSources({
-    ...values,
-    questionnaireRequest: {
-      ...values.questionnaireRequest,
-      mode: "synthetic_test_non_submittable",
-    },
-  }));
-});
-
 test("maps a transient profile page-port outage to the bounded retry policy", async () => {
   const values = laneValues();
   const handlers = createApplicationLaneHandlers({

@@ -352,7 +352,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
     const proof=state.nativeFileBindings?.get(e),owner=uploadOwner(e)??proof?.group;
     const region=state.resumeAttempt?.element===e ? state.resumeAttempt.region : proof?.region??regionFor(e);
     return !!owner?.isConnected && !!region?.isConnected && region.contains(owner) &&
-      (!e.isConnected || owner.contains(e) && regionFor(e)===region) && attachmentIds(owner).some(input=>input.value);
+      (!e.isConnected || composedContains(owner, e) && regionFor(e)===region) && attachmentIds(owner).some(input=>input.value);
   };
   const externalAttachment = e => {
       if (state.nativeFileBindings?.get(e)?.kind==='jobvite' && !jobviteProof(e)) return true;
@@ -1061,7 +1061,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
             const file = new File([bytes], resume.name, {type:'application/pdf'});
             const owner=uploadOwner(e),fileSha256=crypto.subtle ? [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(byte=>byte.toString(16).padStart(2,'0')).join('') : null;
             checkDeadline();
-            if(!fileBinding(e) || regionFor(e)!==fileRegion || read(e)!==before || owner && (!owner.isConnected || !owner.contains(e))) {
+            if(!fileBinding(e) || regionFor(e)!==fileRegion || read(e)!==before || owner && (!owner.isConnected || !composedContains(owner, e))) {
               result.skipped.push({label,reason:'resume_control_changed'});return result;
             }
             const clientOnly=owner?.matches('[role=group][aria-labelledby][data-allow-s3=false]') && fileBinding(e)?.widget===owner;
@@ -1112,6 +1112,18 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
       (/phone|téléphone/i.test(label) && /\d/.test(element.value) && element.value.replace(/\D/g, '') === expected.replace(/\D/g, ''));
     const existingMatchReason = element => element.validity.valid && element.getAttribute('aria-invalid')!=='true'
       ? 'saved_value_already_present' : 'value_not_accepted';
+    const reportExisting = (row, plan, same, skip) => {
+      if (!same) {
+        skip('saved_value_conflict');
+        reportMatch(row, plan, 'unconfirmed', 'existing_value_preserved', row.selected);
+      } else if (!row.valid) {
+        skip('value_not_accepted');
+        reportMatch(row, plan, 'verification_failed', 'value_not_accepted', row.selected);
+      } else {
+        skip('saved_value_already_present');
+        reportMatch(row, plan, 'verified', 'existing_value_confirmed', row.selected);
+      }
+    };
     const dateValue = (element,label,value) => {
       if (element.type!=='text' || norm(element.placeholder)!=='mm/dd/yyyy') return value;
       const match=typeof value==='string' && value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -1141,7 +1153,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
         if(!plan || plan.signature!==row.signature) {if(plan)result.skipped.push({label:row.question,reason:'field_changed_before_fill',fieldId:row.fieldId});reportMatch(row,plan,'observed','field_changed_or_new');continue;}
         if(searchChoice.labels.length) {
           const same=searchChoice.labels.length===1 && searchChoice.labels[0]===plan.answer;
-          skip(same?'saved_value_already_present':'saved_value_conflict');reportMatch(row,plan,same&&row.valid?'verified':'unconfirmed',same?'existing_value_confirmed':'existing_value_preserved',row.selected);continue;
+          reportExisting(row, plan, same, skip);continue;
         }
         state.choiceDrafts??=new WeakMap();
         const draft=state.choiceDrafts.get(searchChoice.widget),ownedDraft=draft && boundChoice(draft.change) && choiceState(searchChoice)===draft.change.after;
@@ -1199,7 +1211,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
         if(matchingPlans!==undefined && (!plan || plan.signature!==row.signature)){reportMatch(row,plan,'observed','field_changed_or_new');continue;}
         const answer=plan?.answer??f.expected;
         if(typeof answer!=='string' || !row.options.includes(answer)){skip(plan?.reason??'choice_requires_mapping');reportMatch(row,plan,'unconfirmed',plan?.reason??'choice_requires_mapping',row.selected);continue;}
-        if(row.selected!=='') {const same=row.selected===answer;skip(same?'saved_value_already_present':'saved_value_conflict');reportMatch(row,plan,same&&row.valid?'verified':'unconfirmed',same?'existing_value_confirmed':'existing_value_preserved',row.selected);continue;}
+        if(row.selected!=='') {const same=row.selected===answer;reportExisting(row, plan, same, skip);continue;}
         const before=fabricState(fabric);
         if(before===null){skip('custom_choice_backing_unconfirmed');continue;}
         const change={element:e,region:f.region,label:f.label,fabric,before,after:JSON.stringify({label:answer,value:null})};
@@ -1238,8 +1250,7 @@ export async function fillVisibleFields({ facts = [], action = 'fill', scope = '
         if (value===undefined) {skip('saved_date_format_unsupported');reportMatch(row,plan,'unconfirmed','saved_date_format_unsupported',row.selected);continue;}
         if (row.selected!=='' && row.selected!==false) {
           const same=String(row.selected)===String(value) || row.control==='text' && typeof value==='string' && sameText(e,row.question,value);
-          skip(same?'saved_value_already_present':'saved_value_conflict');
-          reportMatch(row,plan,same&&row.valid?'verified':'unconfirmed',same?'existing_value_confirmed':'existing_value_preserved',row.selected);continue;
+          reportExisting(row, plan, same, skip);continue;
         }
         if (row.control==='listbox' || e.multiple) {skip('custom_choice_not_reversible');reportMatch(row,plan,'unconfirmed','custom_choice_not_reversible',row.selected);continue;}
         if (row.control==='radio') {

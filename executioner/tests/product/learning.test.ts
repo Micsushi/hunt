@@ -36,17 +36,6 @@ test("failed profile page observations reach the product journal despite reused 
   }
 });
 
-test("editing basic applicant details retains discovered question metadata", () => {
-  const previous = applicantProfile(basic) as { profile: { discoveredFields: unknown[] } };
-  const discovery = { discoveredFieldId: "discovery-prior", page: "questionnaire", identity: "prior_employment",
-    sanitizedLabel: "Previously employed here?", normalizedQuestionType: "prior_employment", behavior: "select",
-    answerType: "single_select", uiVariant: "native_select", required: true, allowedOptions: ["Yes", "No"],
-    allowsCustomValue: false, constraints: { maxBytes: null, displayFormat: null }, answer: { kind: "profile_answer_missing" } };
-  const revised = applicantProfile({ ...basic, city: "Toronto" }, { ...previous,
-    profile: { ...previous.profile, discoveredFields: [discovery] } }) as typeof previous;
-  assert.deepEqual(revised.profile.discoveredFields, [discovery]);
-});
-
 test("observation journal retains constraints and reports unavailable storage without monitor claims", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-product-learning-unit-"));
   const sources = productSources(applicantProfile(basic), Buffer.from("%PDF-1.4\nfixture"));

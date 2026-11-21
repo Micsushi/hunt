@@ -10,7 +10,7 @@ async function fixture(page:Page,extra=''){
   await page.route('**/*',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<form id="job-application-form">
     <label>First name<input name="first"></label><label>Email<input type="email" name="email"></label>
     <button id="country" type="button" class="fab-SelectToggle" aria-label="Country Canada" onclick="window.countryTouches++">Canada</button>
-    <div class="fab-SelectToggle__container" id="container"><button id="province" type="button" class="fab-SelectToggle" aria-label="Province –Select–" data-menu-id="fab-menu101" aria-expanded="false"><span class="fab-SelectToggle__content">–Select–</span></button></div>
+    <div class="fab-SelectToggle__container" id="container"><button id="province" aria-required="true" type="button" class="fab-SelectToggle" aria-label="Province –Select–" data-menu-id="fab-menu101" aria-expanded="false"><span class="fab-SelectToggle__content">–Select–</span></button></div>
     <button type="button" onclick="window.submits++">Submit application</button></form>
     <div id="fab-menu101" class="fab-MenuList" role="menu" hidden><div role="menuitem">Alberta</div><div role="menuitem">Ontario</div>${extra}</div>
     <script>window.countryTouches=0;window.submits=0;window.clears=0;window.selections=0;
@@ -59,46 +59,26 @@ test('existing province, ambiguous option and conflicting menu binding stay unto
   }finally{await browser.close();}
 });
 
-test('Bamboo waits for the owned menu to become visible before selecting',async()=>{
+test('edits to province or country during menu opening and selection are preserved',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
-    const page=await browser.newPage();await fixture(page);
-    await page.locator('#province').evaluate(e=>e.addEventListener('click',()=>{
-      const menu=document.getElementById('fab-menu101')!;menu.hidden=true;
-      setTimeout(()=>{menu.hidden=false;},600);
-    },{once:true}));
-    const result=await page.evaluate(fillVisibleFields,{facts});
-    assert.ok(result.filled.includes('Province'));
-    assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province Alberta');
-    assert.equal(await page.evaluate('selections'),1);
-    await page.evaluate(fillVisibleFields,{action:'undo' as const});
-    assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province –Select–');
-    assert.equal(await page.evaluate('submits+countryTouches'),0);
-  }finally{await browser.close();}
-});
-
-test('province edits during menu opening or selection are preserved',async()=>{
-  const browser=await chromium.launch({headless:true});
-  try {
-    for(const phase of ['open','selection'] as const){
+    for(const [control,phase] of [['province','open'],['province','selection'],['country','open']] as const){
       const page=await browser.newPage();await fixture(page);
-      await page.evaluate(phase=>{document.getElementById(phase==='open'?'province':'fab-menu101')!.addEventListener('click',()=>{
-        setTimeout(()=>{(window as any).setProvince('Ontario');},20);
-      },{once:true});},phase);
-      const result=await page.evaluate(fillVisibleFields,{facts});assert.equal(result.filled.includes('Province'),false);
-      assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province Ontario');assert.equal(await page.evaluate('clears'),0);
-      assert.equal(await page.evaluate('submits+countryTouches'),0);await page.close();
+      await page.evaluate(({phase,control})=>{
+        document.getElementById(phase==='open'?'province':'fab-menu101')!.addEventListener('click',()=>{
+          setTimeout(()=>{
+            if(control==='province') (window as any).setProvince('Ontario');
+            else document.getElementById('country')!.setAttribute('aria-label','Country United States');
+          },20);
+        },{once:true});
+      },{phase,control});
+      const result=await page.evaluate(fillVisibleFields,{facts});
+      assert.equal(result.filled.includes('Province'),false);
+      assert.equal(await page.locator('#province').getAttribute('aria-label'),control==='province'?'Province Ontario':'Province –Select–');
+      assert.equal(await page.locator('#country').getAttribute('aria-label'),control==='country'?'Country United States':'Country Canada');
+      assert.equal(await page.evaluate('clears+countryTouches+submits'),0);
+      if(control==='country') assert.equal(await page.evaluate('selections'),0);
+      await page.close();
     }
-  }finally{await browser.close();}
-});
-
-test('a country change while the province menu opens is not overwritten',async()=>{
-  const browser=await chromium.launch({headless:true});
-  try {
-    const page=await browser.newPage();await fixture(page);
-    await page.locator('#province').evaluate(e=>e.addEventListener('click',()=>setTimeout(()=>document.getElementById('country')!.setAttribute('aria-label','Country United States'),20),{once:true}));
-    const result=await page.evaluate(fillVisibleFields,{facts});assert.equal(result.filled.includes('Province'),false);
-    assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province –Select–');
-    assert.equal(await page.locator('#country').getAttribute('aria-label'),'Country United States');assert.equal(await page.evaluate('selections+clears+submits'),0);
   }finally{await browser.close();}
 });

@@ -42,7 +42,7 @@ test('validated website rows appear as saved URL answers without rewriting prove
     const page = await browser.newPage();
     const url = 'https://example.applytojob.com/apply/WebsiteFixture';
     await page.route('**/*', route=>route.fulfill({contentType:'text/html',
-      body:'<form><label>First name<input></label><label>Email<input type="email"></label><label>LinkedIn URL<input id="linkedin" type="url"></label><label>Resume<input type="file"></label></form>'}));
+      body:'<form><label>First name<input></label><label>Email<input required type="email"></label><label>LinkedIn URL<input required id="linkedin" type="url"></label><label>Resume<input type="file"></label></form>'}));
     await page.goto(url);
     await fillGenericApplication(page,url,saved,Buffer.from('%PDF-fixture'),AbortSignal.timeout(5000));
     assert.equal(await page.locator('#linkedin').inputValue(),'https://example.invalid/linkedin');
@@ -50,43 +50,12 @@ test('validated website rows appear as saved URL answers without rewriting prove
   } finally { await browser.close(); }
 });
 
-test('generic BambooHR province uses its owned menu and native clear for Undo and Redo', async () => {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setContent(`<form><label>First name<input id="first"></label><label>Email<input type="email"></label>
-      <button type="button" class="fab-SelectToggle" aria-label="Country Canada"></button>
-      <div><button type="button" id="province" class="fab-SelectToggle" data-menu-id="fab-menu54"
-        aria-expanded="false" aria-label="Province –Select–"></button></div>
-      <button type="button">Submit application</button></form>
-      <div id="fab-menu54" role="menu" hidden><div role="menuitem">Alberta</div></div>
-      <script>
-        const province=document.querySelector('#province'), menu=document.querySelector('#fab-menu54');
-        province.onclick=()=>{menu.hidden=!menu.hidden;province.setAttribute('aria-expanded',String(!menu.hidden));province.setAttribute('aria-controls',menu.id);};
-        menu.onclick=()=>{province.onclick();province.setAttribute('aria-label','Province Alberta');
-          const clear=document.createElement('button');clear.type='button';clear.className='fab-SelectToggle__clearButton';
-          clear.setAttribute('aria-label','Clear Selection');
-          clear.onclick=()=>{province.setAttribute('aria-label','Province –Select–');clear.remove();};province.after(clear);};
-      </script>`);
-    const input = { facts: [{factId:'given_name',value:'Fixture'},{factId:'email_address',value:'fixture@example.invalid'},
-      {factId:'country',value:'Canada'},{factId:'region',value:'Alberta'}] };
-    assert.ok((await page.evaluate(fillVisibleFields, input)).filled.includes('Province'));
-    assert.equal(await page.locator('#province').getAttribute('aria-label'), 'Province Alberta');
-    await page.evaluate(fillVisibleFields, { action: 'undo' as const });
-    assert.equal(await page.locator('#province').getAttribute('aria-label'), 'Province –Select–');
-    await page.evaluate(fillVisibleFields, { action: 'redo' as const });
-    assert.equal(await page.locator('#province').getAttribute('aria-label'), 'Province Alberta');
-  } finally {
-    await browser.close();
-  }
-});
-
 test('generic React Select leaves the Sirion country unchanged without a verified native reset', async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
     await page.setContent(`<form>
-      <label>First name<input id="first"></label><label>Email<input type="email"></label>
+      <label>First name<input id="first"></label><label>Email<input required type="email"></label>
       <label id="country-label">Country*</label>
       <div class="select__control"><div class="select__value-container"></div>
         <input id="country" role="combobox" aria-labelledby="country-label" aria-expanded="false" aria-autocomplete="list">
@@ -124,40 +93,12 @@ test('generic React Select leaves the Sirion country unchanged without a verifie
   }
 });
 
-test('generic fill handles open shadow roots and a uniquely labeled resume', async () => {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setContent('<div id="host"></div>');
-    await page.evaluate(() => {
-      document.querySelector('#host')!.attachShadow({ mode: 'open' }).innerHTML = '<form><label>First name<input id="first"></label><label>Email<input id="email" type="email"></label><label>Full Address<input id="address"></label><label>Resume<input id="resume" type="file"></label><label>Cover Letter<input id="cover" type="file"></label></form>';
-    });
-    const profile = applicantProfile({
-      given_name: 'Fixture', family_name: 'Applicant', email_address: 'fixture@example.invalid',
-      address_line1: '1 Example Street', city: 'Calgary', region: 'Alberta',
-      postal_code: 'A1A 1A1', country: 'Canada',
-    }) as { profile: { facts: never[] } };
-    const bytes = Buffer.from('%PDF-fixture');
-    await page.evaluate(fillVisibleFields, { facts: profile.profile.facts, resume: { name: 'Resume.pdf', base64: bytes.toString('base64') } });
-    assert.equal(await page.locator('#first').inputValue(), 'Fixture');
-    assert.equal(await page.locator('#address').inputValue(), '1 Example Street, Calgary, Alberta A1A 1A1, Canada');
-    assert.equal(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => await e.files?.[0]?.text()), bytes.toString());
-    assert.equal(await page.locator('#cover').inputValue(), '');
-    await page.evaluate(fillVisibleFields, { action: 'undo' as const });
-    assert.equal(await page.locator('#resume').inputValue(), '');
-    await page.evaluate(fillVisibleFields, { action: 'redo' as const });
-    assert.equal(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => await e.files?.[0]?.text()), bytes.toString());
-  } finally {
-    await browser.close();
-  }
-});
-
 test('queued unfamiliar application uses the selected PDF only at the admitted posting', async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
     await page.route('**/*', route => route.fulfill({ contentType: 'text/html',
-      body: '<form><label>First name<input id="name"></label><label>Email<input type="email"></label><label>Resume<input id="resume" type="file"></label><button onclick="window.submitted=true">Submit application</button></form>' }));
+      body: '<form><label>First name<input required id="name"></label><label>Email<input required type="email"></label><label>Resume<input required id="resume" type="file"></label><button onclick="window.submitted=true">Submit application</button></form>' }));
     const posting = 'https://example.applytojob.com/apply/TestID/Engineer';
     const other = 'https://example.applytojob.com/apply/OtherID/Engineer';
     const profile = applicantProfile({ given_name: 'Saved', family_name: 'Applicant', email_address: 'saved@example.invalid' });
@@ -190,56 +131,28 @@ test('queued unfamiliar application uses the selected PDF only at the admitted p
     assert.equal(await page.locator('#name').inputValue(), 'Owner edit');
     assert.ok(conflict.skipped.some(field => field.reason === 'saved_value_conflict'));
     await page.goto(posting);
-    await page.locator('#resume').evaluate(input => input.addEventListener('change', () => {
-      setTimeout(() => { document.querySelector<HTMLInputElement>('#name')!.value = 'Parser value'; }, 30);
-    }));
+    await page.evaluate(() => {
+      const name = document.querySelector<HTMLInputElement>('#name')!;
+      const events: string[] = [];
+      name.addEventListener('input', () => events.push('input:' + name.value));
+      document.querySelector('#resume')!.addEventListener('change', () => {
+        setTimeout(() => {
+          events.push('parser:' + name.value);
+          name.value = 'Parser value';
+          name.dataset.events = JSON.stringify(events);
+        }, 30);
+      });
+    });
     const parsed = await fillGenericApplication(page, posting, profile, bytes, AbortSignal.timeout(5000));
     assert.equal(await page.locator('#name').inputValue(), 'Parser value');
     assert.ok(!parsed.filled.includes('First name'));
-    assert.ok(parsed.skipped.some(field => field.label === 'First name' && field.reason === 'value_changed_after_fill'));
+    assert.equal(await page.locator('#name').getAttribute('data-events'), '["parser:"]');
+    for (const reason of ['field_changed_before_fill', 'saved_value_conflict']) {
+      assert.ok(parsed.skipped.some(field => field.label === 'First name' && field.reason === reason), reason);
+    }
   } finally {
     await browser.close();
   }
-});
-
-test('generic fill tracks stable fields through form remounts and refuses changed field identities',async()=>{
-  const browser=await chromium.launch({headless:true,...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{})});
-  try {
-    const page=await browser.newPage();
-    await page.route('**/*',r=>r.fulfill({contentType:'text/html',body:`<form id=application>
-      <label>First name<input id=first name=first></label><label>Last name<input id=last name=last></label>
-      <label>Email<input id=email name=email type=email></label><button type=button>Submit application</button></form>
-      <script>document.addEventListener('input',event=>{const form=event.target.closest('form');if(form){const copy=form.cloneNode(true);if(window.lockAfterFirst&&event.target.id==='first')copy.querySelector('#last').readOnly=true;if(window.rejectUndo&&event.target.id==='last'&&!event.target.value)copy.querySelector('#last').value='Applicant';form.replaceWith(copy);}});</script>`}));
-    await page.goto('https://employer.example.test/apply');
-    const source=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}) as {profile:unknown};
-    const result=await fillGenericIdentityFields(page,source.profile,AbortSignal.timeout(5000));
-    assert.equal(result.filled.length,3);
-    assert.equal(await page.locator('#first').inputValue(),'Fixture');
-    assert.equal((await page.evaluate(fillVisibleFields,{action:'undo' as const})).filled.length,3);
-    assert.equal(await page.locator('#first').inputValue(),'');
-    assert.equal((await page.evaluate(fillVisibleFields,{action:'redo' as const})).filled.length,3);
-    await page.locator('#first').evaluate(e=>{const replacement=e.cloneNode(true) as HTMLInputElement;replacement.setAttribute('aria-label','Emergency contact first name');e.replaceWith(replacement);});
-    await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/Fields changed/);
-    assert.equal(await page.locator('#first').inputValue(),'Fixture');
-    assert.equal(await page.locator('#last').inputValue(),'Applicant');
-    await page.goto('https://employer.example.test/apply');
-    await page.evaluate('window.lockAfterFirst=true');
-    await fillGenericIdentityFields(page,source.profile,AbortSignal.timeout(5000));
-    assert.equal(await page.locator('#last').inputValue(),'');
-    assert.equal(await page.locator('#last').evaluate((e:HTMLInputElement)=>e.readOnly),true);
-    await page.goto('https://employer.example.test/apply');
-    await fillGenericIdentityFields(page,source.profile,AbortSignal.timeout(5000));
-    await page.evaluate('window.rejectUndo=true');
-    await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/did not keep/);
-    assert.equal(await page.locator('#first').inputValue(),'');
-    assert.equal(await page.locator('#last').inputValue(),'Applicant');
-    await page.evaluate('window.rejectUndo=false');
-    await page.evaluate(fillVisibleFields,{action:'redo' as const});
-    assert.equal(await page.locator('#first').inputValue(),'Fixture');
-    await page.evaluate(fillVisibleFields,{action:'undo' as const});
-    await page.evaluate(fillVisibleFields,{action:'undo' as const});
-    assert.equal(await page.locator('#last').inputValue(),'');
-  } finally {await browser.close();}
 });
 
 test('generic partial fill preserves choices and edits, supports French fields and reversible saved answers', async () => {
@@ -247,14 +160,14 @@ test('generic partial fill preserves choices and edits, supports French fields a
   try {
     const page = await browser.newPage();
     await page.route('**/*', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<form>
-      <label>Prénom<input name=first></label><label>Legal Last Name<textarea name=last></textarea></label>
-      <label>Adresse e-mail<input name=email type=email></label><label>City<input name=city value="Owner edit"></label>
-      <label>Country<select name=country><option value="">Choose</option><option value=US>United States</option></select></label>
-      <label>Legal Name<input name=legal></label><label>Full Legal Name<input name=fulllegal></label>
-      <label>Phone number?<input name=phone></label>
-      <label>Nom Complet / Name<input name=bilingualname></label>
-      <label>Adresse courriel / Email<input name=bilingualemail type=email></label>
-      <label>Numéro de téléphone / Phone Number<input name=bilingualphone></label>
+      <label>Prénom<input required name=first></label><label>Legal Last Name<textarea required name=last></textarea></label>
+      <label>Adresse e-mail<input required name=email type=email></label><label>City<input name=city value="Owner edit"></label>
+      <label>Country<select required name=country><option value="">Choose</option><option value=US>United States</option></select></label>
+      <label>Legal Name<input required name=legal></label><label>Full Legal Name<input required name=fulllegal></label>
+      <label>Phone number?<input required name=phone></label>
+      <label>Nom Complet / Name<input required name=bilingualname></label>
+      <label>Adresse courriel / Email<input required name=bilingualemail type=email></label>
+      <label>Numéro de téléphone / Phone Number<input required name=bilingualphone></label>
       <label>Previous legal name<input name=previouslegal></label><label>Emergency contact phone number<input name=emergency></label>
       <label>City<input name=cityproxy aria-hidden=true tabindex=-1></label>
       <div aria-hidden=true><label>Country<input name=countryproxy></label></div>

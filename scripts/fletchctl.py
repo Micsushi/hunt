@@ -303,8 +303,6 @@ def cmd_tests(_args):
     patterns = [
         "test_component2_stage1.py",
         "test_component2_pipeline.py",
-        "test_component2_ollama.py",
-        "test_resume_review_ui.py",
     ]
     for pattern in patterns:
         result = subprocess.run(

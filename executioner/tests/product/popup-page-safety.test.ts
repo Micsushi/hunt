@@ -25,7 +25,7 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     for(let i=0;i<100&&!service.queue.snapshot().connected;i++)await new Promise(r=>setTimeout(r,50));
     assert.equal(service.queue.snapshot().connected,true);
     const url='https://job-boards.greenhouse.io/fixture/jobs/123';
-    await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input autocomplete="given-name"></label><label>Email<input type="email"></label><label>Resume<input type="file" accept=".pdf"></label></form>'}));
+    await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label><label>Resume<input required type="file" accept=".pdf"></label></form>'}));
     const page=await context.newPage();await page.goto(url);
     const tabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===url).id,url);
     const send=(operation:string,documentId?:string)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage({action:'pageAction',...args,expiresAt:Date.now()+12000}),{operation,documentId,tabId,expectedUrl:url});

@@ -32,6 +32,11 @@ test("the frozen page/UI matrix reconciles exact execution proof on one implemen
     ? createPageUiExecutionRecord(plan, implementationDigest, plan.variants.map(({ id }) => id))
     : JSON.parse(process.env.HUNT_PAGE_UI_EXECUTION_RECORD) as unknown;
   assert.deepEqual(validatePageUiExecutionRecord(record, plan, implementationDigest), []);
+  const missingVariant = createPageUiExecutionRecord(
+    plan, implementationDigest, plan.variants.slice(1).map(({ id }) => id),
+  );
+  assert.ok(validatePageUiExecutionRecord(missingVariant, plan, implementationDigest)
+    .includes("not every activated variant executed"));
   const baseline = createCorpusBaseline({
     manifest,
     fixtures,
@@ -58,13 +63,4 @@ test("the frozen page/UI matrix reconciles exact execution proof on one implemen
   assert.deepEqual(terminalCodes, [...impact.allowedTerminalCodes].sort());
   assert.deepEqual(baseline.cleanup, { browserOpened: false, retainedRawCapture: false });
   assert.deepEqual(baseline.safety, { liveAccountMutation: false, finalSubmitActivated: false });
-});
-
-test("matrix reconciliation rejects a missing activated behavior execution", () => {
-  const plan = readJson("corpus/workday-40/page-ui-variants.json") as {
-    variants: readonly { id: string }[];
-  };
-  const digest = pageUiImplementationDigest(root, plan);
-  const record = createPageUiExecutionRecord(plan, digest, plan.variants.slice(1).map(({ id }) => id));
-  assert.ok(validatePageUiExecutionRecord(record, plan, digest).includes("not every activated variant executed"));
 });

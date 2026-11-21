@@ -494,50 +494,209 @@ export const componentBoundaries = [
 // Product integration is separate from the frozen F2-F11 component matrix.
 // These exact assembly edges do not grant other product modules peer access.
 export const productBoundary = {
+  sourceOwners: {
+    authentication: [
+      "extension/workday-account.js",
+      "src/product/account-journal.ts",
+      "src/product/account-state.ts",
+      "src/product/account-storage.ts",
+      "src/product/workday-sign-in.ts",
+    ],
+    field_recognition: ["extension/question-context.js"],
+    answer_matching: [
+      "src/product/matching-backlog.ts",
+      "src/product/page-matching.ts",
+      "src/product/profile-field.ts",
+      "src/product/sources.ts",
+    ],
+    browser_interaction: [
+      "extension/generic-fill.js",
+      "extension/page-viewport.js",
+      "extension/shared-choice-widget.js",
+      "src/product/extension-bridge.ts",
+    ],
+    uploads: [
+      "extension/jobvite-resume.js",
+      "src/product/client-resume.ts",
+      "src/product/greenhouse-resume.ts",
+      "src/product/workable-resume.ts",
+    ],
+    workflow: [
+      "extension/background.js",
+      "extension/page-actions.js",
+      "extension/popup.js",
+      "extension/website-handoff.js",
+      "src/product/engine.ts",
+      "src/product/generic-application.ts",
+      "src/product/handoff.ts",
+      "src/product/hosted-application.ts",
+      "src/product/mcp.ts",
+      "src/product/queue.ts",
+      "src/product/server.ts",
+      "src/product/smartrecruiters-target.ts",
+      "src/product/target.ts",
+    ],
+  },
   sourceImports: {
+    // The worker dispatches account commands and owns viewport cleanup.
+    "extension/background.js": [
+      "extension/page-viewport.js",
+      "extension/workday-account.js",
+    ],
+    // Only the declaration uses the service's page-plan types.
+    "extension/generic-fill.d.ts": ["src/product/page-matching.ts"],
+    // Current-page actions compose the browser-only control, upload and account helpers.
+    "extension/page-actions.js": [
+      "extension/generic-fill.js",
+      "extension/jobvite-resume.js",
+      "extension/page-viewport.js",
+      "extension/question-context.js",
+      "extension/shared-choice-widget.js",
+      "extension/workday-account.js",
+    ],
+    // Profile answers reuse the questionnaire's consent classifier and fallback policy.
+    "src/ats/workday/application/profile/handler.ts": [
+      "src/ats/workday/application/questions/protected.ts",
+      "src/form/answers/testing-policy.ts",
+    ],
+    // Both profile readers share the extension's DOM ownership and field-context rules.
+    "src/ats/workday/application/profile/multi-select-readback.ts": ["extension/shared-choice-widget.js"],
+    "src/ats/workday/application/profile/playwright-page.ts": [
+      "extension/question-context.js",
+      "extension/shared-choice-widget.js",
+    ],
+    // The Workday observer shares the page classifier used during extension account entry.
+    "src/ats/workday/page-observation.ts": ["extension/workday-account.js"],
+    // The browser adapter annotates field context before returning observations.
+    "src/browser/adapter.ts": ["extension/question-context.js"],
+    // Browser runtime and structural catalog use the same Workday page observation.
+    "src/browser/playwright-live/private/workday-application-runtime.ts": ["src/ats/workday/page-observation.ts"],
+    "src/browser/playwright-live/private/workday-structural-catalog.ts": ["src/ats/workday/page-observation.ts"],
+    // Account lifecycle and storage reuse private atomic writes, IMAP failure types and DPAPI.
+    "src/product/account-journal.ts": [
+      "src/ats/workday/page-observation.ts",
+      "src/composition/private/s2-application-source-preparation.ts",
+    ],
+    "src/product/account-state.ts": [
+      "src/composition/private/s2-application-source-preparation.ts",
+      "src/mailbox/providers/gmail/private/imap-client.ts",
+    ],
+    "src/product/account-storage.ts": [
+      "src/composition/private/s2-application-source-preparation.ts",
+      "src/secrets/windows-dpapi/bridge.ts",
+      "src/secrets/windows-dpapi/record.ts",
+    ],
+    // Each uploader binds to the active target and reports the workflow's pause or upload receipt.
+    "src/product/client-resume.ts": [
+      "src/product/engine.ts",
+      "src/product/target.ts",
+    ],
+    // The current engine assembles the Workday browser, preparation, account and review ports.
     "src/product/engine.ts": [
-      "src/browser/playwright-live/private/workday-application-runtime.ts",
+      "src/ats/workday/application/page-walk-contract.ts",
+      "src/ats/workday/application/page-walk.ts",
+      "src/ats/workday/application/playwright-page.ts",
+      "src/ats/workday/page-observation.ts",
       "src/browser/playwright-live/private/application-page-types.ts",
       "src/browser/playwright-live/private/playwright-account-page.ts",
       "src/browser/playwright-live/private/playwright-posting-navigation.ts",
+      "src/browser/playwright-live/private/workday-application-runtime.ts",
       "src/browser/playwright-live/private/workday-structural-catalog.ts",
-      "src/ats/workday/application/playwright-page.ts",
-      "src/ats/workday/application/page-walk-contract.ts",
-      "src/ats/workday/application/page-walk.ts",
       "src/interaction/review/index.ts",
+      "src/product/account-journal.ts",
+      "src/product/sources.ts",
     ],
-    "src/product/extension-bridge.ts": [],
-    "src/product/generic-application.ts": ["src/profile/application-profile.ts"],
+    // The bridge validates the selected job target and dispatches Workday sign-in.
+    "src/product/extension-bridge.ts": [
+      "src/product/smartrecruiters-target.ts",
+      "src/product/target.ts",
+      "src/product/workday-sign-in.ts",
+    ],
+    // Generic fill composes browser helpers with the profile and page-answer matcher.
+    "src/product/generic-application.ts": [
+      "extension/generic-fill.js",
+      "extension/jobvite-resume.js",
+      "extension/question-context.js",
+      "extension/shared-choice-widget.js",
+      "src/product/page-matching.ts",
+      "src/product/sources.ts",
+      "src/profile/application-profile.ts",
+    ],
+    "src/product/greenhouse-resume.ts": [
+      "src/product/engine.ts",
+      "src/product/target.ts",
+    ],
+    // Hosted fill combines profile/question resolution, consent classification and ATS-specific uploads.
     "src/product/hosted-application.ts": [
+      "extension/question-context.js",
+      "src/ats/workday/application/questions/protected.ts",
+      "src/composition/private/s2-derived-profile-country.ts",
       "src/form/answers/resolver.ts",
       "src/form/questions/catalog.ts",
-      "src/composition/private/s2-derived-profile-country.ts",
+      "src/form/questions/normalize.ts",
+      "src/product/client-resume.ts",
+      "src/product/greenhouse-resume.ts",
+      "src/product/matching-backlog.ts",
+      "src/product/profile-field.ts",
+      "src/product/sources.ts",
+      "src/product/workable-resume.ts",
     ],
-    "src/product/page-matching.ts": ["src/form/answers/resolver.ts"],
-    "src/product/profile-field.ts": [],
-    "src/product/queue.ts": ["src/composition/private/s2-application-source-preparation.ts"],
+    // Candidate ranking and page matching reuse catalog normalization, answer resolution and persistence.
+    "src/product/matching-backlog.ts": [
+      "src/composition/private/s2-application-source-preparation.ts",
+      "src/form/options/mapper.ts",
+      "src/form/questions/catalog.ts",
+      "src/form/questions/matching.ts",
+      "src/form/questions/normalize.ts",
+    ],
+    "src/product/page-matching.ts": [
+      "src/form/answers/resolver.ts",
+      "src/form/questions/catalog.ts",
+      "src/form/questions/normalize.ts",
+    ],
+    // Queue preparation owns binding inputs, authentication, browser attachment and viewport recovery.
+    "src/product/queue.ts": [
+      "extension/page-viewport.js",
+      "src/composition/private/s2-application-source-preparation.ts",
+      "src/product/account-journal.ts",
+      "src/product/extension-bridge.ts",
+      "src/product/sources.ts",
+      "src/product/workday-sign-in.ts",
+    ],
+    // The local server composes the authenticated account, matching and browser APIs.
     "src/product/server.ts": [
+      "src/composition/private/s2-application-source-preparation.ts",
       "src/form/questions/catalog.ts",
       "src/mailbox/providers/gmail/private/imap-client.ts",
-      "src/composition/private/s2-application-source-preparation.ts",
+      "src/product/account-state.ts",
+      "src/product/account-storage.ts",
+      "src/product/extension-bridge.ts",
+      "src/product/matching-backlog.ts",
+      "src/product/page-matching.ts",
+      "src/product/sources.ts",
+      "src/product/workday-sign-in.ts",
     ],
+    // The source adapter builds the profile, questionnaire and resume inputs and records learning.
     "src/product/sources.ts": [
-      "src/live/evidence/question-answer-learning.ts",
-      "src/profile/application-profile.ts",
+      "src/ats/workday/application/profile/catalog.ts",
+      "src/ats/workday/application/profile/types.ts",
       "src/ats/workday/application/questions/index.ts",
       "src/ats/workday/application/resume/index.ts",
       "src/composition/private/s2-application-owner-source.ts",
-      "src/form/questions/catalog.ts",
       "src/form/answers/testing-policy.ts",
-    ],
-    "src/product/target.ts": [],
-    "src/product/matching-backlog.ts": [
       "src/form/questions/catalog.ts",
-      "src/form/questions/matching.ts",
-      "src/form/options/mapper.ts",
-      "src/composition/private/s2-application-source-preparation.ts",
+      "src/live/evidence/question-answer-learning.ts",
+      "src/profile/application-profile.ts",
     ],
-    "extension/generic-fill.js": [],
+    "src/product/workable-resume.ts": [
+      "src/product/engine.ts",
+      "src/product/target.ts",
+    ],
+    // Sign-in uses the common Workday observer and the workflow's account and pause types.
+    "src/product/workday-sign-in.ts": [
+      "src/ats/workday/page-observation.ts",
+      "src/product/engine.ts",
+    ],
   },
   // Stage 1 still needs only Playwright; only this transport may import ws.
   runtimeDependencies: { ws: ["src/product/extension-bridge.ts"] },

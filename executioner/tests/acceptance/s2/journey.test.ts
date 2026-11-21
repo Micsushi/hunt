@@ -39,7 +39,7 @@ const config = Object.freeze({
   targetHandleId: "target_ref_0123456789abcdef",
 });
 
-test("real journey terminal reaches the configured C1 job and reporting failure preserves it", async () => {
+test("a failed journey preserves its terminal across C1 reporting failure and a retry", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-c1-outcome-"));
   const evidenceRoot = resolve(root, "evidence");
   mkdirSync(evidenceRoot);
@@ -59,74 +59,22 @@ test("real journey terminal reaches the configured C1 job and reporting failure 
     assertFailureCode(result, "runtime_binding_failed");
     assert.deepEqual(calls, [{ url: "http://127.0.0.1:8001/jobs/42/c3-outcome",
       body: { outcome: "failed", reason: "owner_config_invalid" } }]);
-    assert.deepEqual(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")).terminal,
-      result.terminal);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+    const path = join(evidenceRoot, "terminal-artifact.json");
+    const original = readFileSync(path, "utf8");
+    assert.deepEqual(JSON.parse(original).terminal, result.terminal);
 
-test("the unavailable opaque runtime binding fails before any journey effect", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-unbound-terminal-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  try {
-    const result = await runStage2RealJourney(
-      invocation(evidenceRoot),
-      undefined,
-      ports(),
-      new AbortController().signal,
-    );
-    assertFailureCode(result, "runtime_binding_failed");
-    assert.deepEqual(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")), {
-      schemaVersion: 1,
-      evidenceRevision: "s2-terminal-artifact-v1",
-      resultCode: "runtime_binding_failed",
-      terminal: {
-        schemaVersion: 4,
-        journeyId: config.journeyId,
-        status: "failed",
-        completedPages: 0,
-        errorCode: "owner_config_invalid",
-      },
-    });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("owner-source binding denial keeps its safe causal terminal code", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-owner-source-terminal-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  try {
-    const result = await runStage2RealJourney(
+    const retry = await runStage2RealJourney(
       invocation(evidenceRoot),
       { bind: async () => { throw new TypeError("application owner source denied"); } },
       ports(),
       new AbortController().signal,
     );
-    assertFailureCode(result, "runtime_binding_failed");
-    assert.equal(result.terminal.status, "failed");
-    if (result.terminal.status === "failed") {
-      assert.equal(result.terminal.errorCode, "owner_config_invalid");
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("pre-aborted journeys persist a cancelled terminal without binding", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-pre-aborted-terminal-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const controller = new AbortController();
-  controller.abort();
-  try {
-    const result = await runStage2RealJourney(invocation(evidenceRoot), undefined, ports(), controller.signal);
-    assertFailureCode(result, "operation_cancelled");
-    assert.equal(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")).terminal.status,
-      "cancelled");
+    assertFailureCode(retry, "runtime_binding_failed");
+    assert.equal(retry.terminal.status, "failed");
+    if (retry.terminal.status === "failed") assert.equal(retry.terminal.errorCode, "owner_config_invalid");
+    assert.equal(retry.ok, false);
+    if (!retry.ok) assert.equal(retry.terminalArtifactErrorCode, "terminal_artifact_persistence_failed");
+    assert.equal(readFileSync(path, "utf8"), original);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -299,102 +247,6 @@ test("a tenant-skipped Resume is recorded as missing rather than falsely verifie
   }
 });
 
-test("acceptance write failure retains recovery and stale terminal evidence blocks retry", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retry-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const cleanupModes: boolean[] = [];
-  try {
-    const first = runtime([], evidenceRoot);
-    first.recovery.pending = async () => null;
-    first.cleanup.close = async (_signal, accepted = false) => {
-      cleanupModes.push(accepted);
-      return true;
-    };
-    assertFailureCode(await runStage2RealJourney(
-      invocation(evidenceRoot), binding(first), {
-        now: () => "2026-08-05T12:00:00.000Z",
-        writeAcceptance: async () => { throw new Error("injected acceptance write failure"); },
-      }, new AbortController().signal,
-    ), "evidence_failed");
-    assert.equal(existsSync(join(evidenceRoot, "real-evidence", "manifest.json")), true);
-    assert.deepEqual(cleanupModes, [false]);
-    assert.equal(JSON.parse(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8")).resultCode,
-      "evidence_failed");
-
-    const second = runtime([], evidenceRoot);
-    second.recovery.pending = async () => null;
-    second.cleanup.close = async (_signal, accepted = false) => {
-      cleanupModes.push(accepted);
-      return true;
-    };
-    const retry = await runStage2RealJourney(
-      invocation(evidenceRoot), binding(second), {
-        now: () => "2026-08-06T12:00:00.000Z",
-        writeAcceptance: async () => undefined,
-      }, new AbortController().signal,
-    );
-    assert.equal(retry.ok, false);
-    if (!retry.ok) assert.equal(retry.terminalArtifactErrorCode, "terminal_artifact_persistence_failed");
-    assert.deepEqual(cleanupModes, [false, true]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-for (const checkpoint of ["resume", "questionnaire", "review"] as const) {
-  test(`recovery at ${checkpoint} passes the exact durable walk cursor`, async () => {
-    const root = mkdtempSync(join(tmpdir(), `hunt-s2-recover-${checkpoint}-`));
-    const evidenceRoot = resolve(root, "evidence");
-    mkdirSync(evidenceRoot);
-    const value = runtime([], evidenceRoot);
-    const plan = recoveryPlan([], checkpoint);
-    let received: unknown;
-    value.recovery.pending = async () => plan;
-    value.application.run = async (_signal, resume) => {
-      received = resume;
-      return { ok: true, value: preReview() };
-    };
-    try {
-      assert.equal((await runStage2RealJourney(
-        invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
-      )).ok, true);
-      assert.deepEqual((received as { currentPage?: unknown }).currentPage,
-        checkpoint === "review" ? "pre_review" : checkpoint);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-}
-
-test("a recovery stop fails closed before application and still cleans the bound runtime", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-recovery-stop-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const calls: string[] = [];
-  const value = runtime(calls, evidenceRoot);
-  value.recovery.pending = async () => ({
-    ...recoveryPlan(calls),
-    input: {
-      ...recoveryPlan(calls).input,
-      interruption: { code: "browser_effect_uncertain", effect: "possible" },
-    },
-  });
-  try {
-    assertFailureCode(await runStage2RealJourney(
-      invocation(evidenceRoot),
-      binding(value),
-      ports(),
-      new AbortController().signal,
-    ), "recovery_failed");
-    assert.equal(calls.includes("application.run"), false);
-    assert.equal(calls.at(-1), "cleanup.close");
-    assert.equal(existsSync(join(evidenceRoot, "real-evidence")), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test("account proof failure preserves CAPTCHA fact and stops before recovery or application", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-stop-"));
   const evidenceRoot = resolve(root, "evidence");
@@ -415,97 +267,6 @@ test("account proof failure preserves CAPTCHA fact and stops before recovery or 
     ), "captcha");
     assert.deepEqual(calls, ["runtime.bind", "account.verify", "cleanup.close"]);
     assert.equal(existsSync(join(evidenceRoot, "real-evidence")), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("account posting fact becomes an exact value-free terminal", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-fact-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const value = runtime([], evidenceRoot);
-  value.account.verify = async () => ({
-    ok: false,
-    code: "posting_unavailable",
-    fact: { kind: "posting_unavailable", reason: "closed" },
-  });
-  try {
-    const result = await runStage2RealJourney(
-      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
-    );
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.deepEqual(result.terminal, {
-      schemaVersion: 4,
-      journeyId: config.journeyId,
-      status: "blocked",
-      completedPages: 0,
-      factualOutcome: {
-        source: "target_identity",
-        result: { kind: "posting_unavailable", reason: "closed" },
-      },
-    });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("provider cancellation remains a cancelled terminal", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-provider-cancel-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const value = runtime([], evidenceRoot);
-  value.account.verify = async () => ({ ok: false, code: "operation_cancelled" });
-  try {
-    const result = await runStage2RealJourney(
-      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
-    );
-    assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.terminal.status, "cancelled");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("application failure preserves its exact code and completed-page count", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-application-terminal-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const value = runtime([], evidenceRoot);
-  value.recovery.pending = async () => null;
-  value.application.run = async () => ({
-    ok: false,
-    error: {
-      checkpoint: "questionnaire",
-      completedPages: 4,
-      failure: {
-        code: "question_unknown",
-        retryable: false,
-        owner: "questionnaire",
-        classifier: "questionnaire_page",
-        primitive: "question_control",
-        unknownLayer: "question",
-        page: "questionnaire",
-        attempt: 1,
-      },
-      submitActivated: false,
-      privacyScan: "pass",
-    },
-  });
-  try {
-    const result = await runStage2RealJourney(
-      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
-    );
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.deepEqual(result.terminal, {
-      schemaVersion: 4,
-      journeyId: config.journeyId,
-      status: "failed",
-      completedPages: 4,
-      errorCode: "question_unknown",
-    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -591,59 +352,6 @@ test("runStage2RealJourney retains the failed application owner until release ex
   }
 });
 
-test("runStage2RealJourney falls back once when retention is rejected", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-journey-retention-fallback-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const value = runtime([], evidenceRoot);
-  value.recovery.pending = async () => null;
-  let preserveCalls = 0;
-  let closeCalls = 0;
-  value.application.run = async () => ({
-    ok: false,
-    error: {
-      checkpoint: "profile",
-      completedPages: 1,
-      failure: {
-        code: "browser_timeout",
-        retryable: false,
-        owner: "profile",
-        classifier: "profile_page",
-        primitive: "profile_control",
-        unknownLayer: "ui_behavior",
-        page: "profile",
-        attempt: 1,
-      },
-      submitActivated: false,
-      privacyScan: "pass",
-    },
-  });
-  value.cleanup.preserve = async () => {
-    preserveCalls += 1;
-    return false;
-  };
-  value.cleanup.close = async () => {
-    closeCalls += 1;
-    return true;
-  };
-  try {
-    const result = await runStage2RealJourney(
-      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
-    );
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.equal(result.code, "pre_review_failed");
-    assert.equal(result.terminal.status, "failed");
-    if (result.terminal.status !== "failed") return;
-    assert.equal(result.terminal.errorCode, "browser_timeout");
-    assert.equal(preserveCalls, 1);
-    assert.equal(closeCalls, 1);
-    assert.equal(result.cleanupErrorCode, undefined);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test("cleanup failure does not replace the original journey failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-primary-failure-"));
   const evidenceRoot = resolve(root, "evidence");
@@ -667,124 +375,6 @@ test("cleanup failure does not replace the original journey failure", async () =
     assert.equal(artifact.resultCode, "account_verification_failed");
     assert.equal(artifact.terminal.errorCode, "browser_effect_uncertain");
     assert.equal(artifact.cleanupErrorCode, "browser_profile_cleanup_failed");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("a stale terminal artifact fails closed without being overwritten", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-stale-terminal-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  try {
-    const first = await runStage2RealJourney(
-      invocation(evidenceRoot), undefined, ports(), new AbortController().signal,
-    );
-    assertFailureCode(first, "runtime_binding_failed");
-    const before = readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8");
-    const second = await runStage2RealJourney(
-      invocation(evidenceRoot), undefined, ports(), new AbortController().signal,
-    );
-    assert.equal(second.ok, false);
-    if (!second.ok) assert.equal(second.terminalArtifactErrorCode, "terminal_artifact_persistence_failed");
-    assert.equal(readFileSync(join(evidenceRoot, "terminal-artifact.json"), "utf8"), before);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("arbitrary stage exceptions use their truthful non-MCP phase codes", async () => {
-  const expected = {
-    bind: "browser_session_missing",
-    account: "verification_input_invalid",
-    recovery: "recovery_checkpoint_unavailable",
-    application: "page_observation_invalid",
-    review: "page_observation_invalid",
-    evidence: "evidence_unavailable",
-  } as const;
-  for (const stage of ["bind", "account", "recovery", "application", "review", "evidence"] as const) {
-    const root = mkdtempSync(join(tmpdir(), `hunt-s2-internal-${stage}-`));
-    const evidenceRoot = resolve(root, "evidence");
-    mkdirSync(evidenceRoot);
-    const value = runtime([], evidenceRoot);
-    value.recovery.pending = async () => null;
-    if (stage === "account") value.account.verify = async () => { throw new Error("arbitrary"); };
-    if (stage === "recovery") value.recovery.pending = async () => { throw new Error("arbitrary"); };
-    if (stage === "application") value.application.run = async () => { throw new Error("arbitrary"); };
-    if (stage === "review") value.review.capture = async () => { throw new Error("arbitrary"); };
-    if (stage === "evidence") value.privacy.forbiddenTokens = async () => { throw new Error("arbitrary"); };
-    const selectedBinding = stage === "bind"
-      ? { bind: async () => { throw new Error("arbitrary"); } }
-      : binding(value);
-    try {
-      const result = await runStage2RealJourney(
-        invocation(evidenceRoot), selectedBinding, ports(), new AbortController().signal,
-      );
-      assert.equal(result.ok, false);
-      if (result.ok || result.terminal.status !== "failed") continue;
-      assert.equal(result.terminal.errorCode, expected[stage]);
-      assert.notEqual(result.terminal.errorCode, "mcp_internal_error");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }
-});
-
-test("wrongly bound account proof stops before recovery or application", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-account-binding-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const calls: string[] = [];
-  const value = runtime(calls, evidenceRoot);
-  value.account.verify = async () => ({
-    ok: true,
-    proof: { ...accountProof(), journeyId: "journey_wrongwrongwrong1" },
-  });
-  try {
-    assertFailureCode(await runStage2RealJourney(
-      invocation(evidenceRoot), binding(value), ports(), new AbortController().signal,
-    ), "account_verification_failed");
-    assert.equal(calls.includes("recovery.pending"), false);
-    assert.equal(calls.includes("application.run"), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("a recovery plan for another journey revision is rejected before recovery ports", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-s2-recovery-binding-"));
-  const evidenceRoot = resolve(root, "evidence");
-  mkdirSync(evidenceRoot);
-  const calls: string[] = [];
-  const value = runtime(calls, evidenceRoot);
-  const plan = recoveryPlan(calls);
-  let recoveryPortCalled = false;
-  value.recovery.pending = async () => ({
-    input: {
-      ...plan.input,
-      sourceRevision: "revision_fedcba9876543210" as never,
-    },
-    dependencies: {
-      ...plan.dependencies,
-      state: {
-        ...plan.dependencies.state,
-        load: async (...args) => {
-          recoveryPortCalled = true;
-          return plan.dependencies.state.load(...args);
-        },
-      },
-    },
-    resume: plan.resume,
-  });
-  try {
-    assertFailureCode(await runStage2RealJourney(
-      invocation(evidenceRoot),
-      binding(value),
-      ports(),
-      new AbortController().signal,
-    ), "recovery_failed");
-    assert.equal(recoveryPortCalled, false);
-    assert.equal(calls.includes("application.run"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

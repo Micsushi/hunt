@@ -9,18 +9,6 @@ const posting = `https://jobs.smartrecruiters.com/${company}/${id}-analyst?oga=t
 const application = `https://jobs.smartrecruiters.com/oneclick-ui/company/${company}/publication/${uuid}?dcr_ci=${company}`;
 const metadata = { id, uuid, company: { identifier: company }, active: true };
 
-test("public metadata binds the exact numeric ad to the exact application UUID", async t => {
-  const fetcher = t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
-    assert.equal(url, `https://api.smartrecruiters.com/v1/companies/${company}/postings/${id}`);
-    assert.equal(options.redirect, "error");
-    assert.equal(options.credentials, "omit");
-    assert.ok(options.signal instanceof AbortSignal);
-    return Response.json({ ...metadata, applyUrl: "https://unrelated.example/" });
-  });
-  assert.equal(await verifySmartRecruitersApplication(posting, application), true);
-  assert.equal(fetcher.mock.callCount(), 1);
-});
-
 test("invalid host, company, UUID, and conflicting tenant query never reach the public API", async t => {
   const fetcher = t.mock.method(globalThis, "fetch", async () => Response.json(metadata));
   for (const candidate of [

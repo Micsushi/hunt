@@ -13,7 +13,7 @@ test('explicit generic run uses the bound selected PDF, fills profile facts and 
   const page=await browser.newPage();let opens=0;
   const root=mkdtempSync(join(tmpdir(),'c3-generic-queue-'));
   const url='https://fixture.bamboohr.com/careers/123';
-  await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<label>First name<input name="first"></label><label>Email<input name="email" type="email"></label><label>Current company<input name="current_company" value="Other company"></label><label>Resume<input type="file" accept=".pdf"></label><button onclick="window.advances++">Next</button><button onclick="window.submits++">Submit</button><script>window.advances=0;window.submits=0;</script>'}));
+  await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<label>First name<input required name="first"></label><label>Email<input required name="email" type="email"></label><label>Current company<input required name="current_company" value="Other company"></label><label>Resume<input required type="file" accept=".pdf"></label><button onclick="window.advances++">Next</button><button onclick="window.submits++">Submit</button><script>window.advances=0;window.submits=0;</script>'}));
   await page.goto(url);
   const queue=new ApplicationQueue(root,{connected:true,open:async requested=>{opens++;assert.equal(requested,url);return {tabId:123,page,browser:{close:async()=>{}} as typeof browser};},release:async()=>{}});
   try {

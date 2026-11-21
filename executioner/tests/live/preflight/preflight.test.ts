@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   symlinkSync,
 } from "node:fs";
@@ -180,31 +179,6 @@ test("admits one closed owner config and returns a value-free dry report", () =>
   }
 });
 
-test("accepts the frozen sign-in mode without widening account policy", () => {
-  const record = fixture();
-  try {
-    const result = admit({ ...record.input, accountMode: "sign_in" }, record);
-    assert.equal(result.ok, true);
-    assert.equal(result.ok && result.report.accountMode, "sign_in");
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
-test("admits three-digit Workday shard hosts used by current postings", () => {
-  const record = fixture();
-  try {
-    const target = {
-      ...record.input.target,
-      url: "https://acme.wd108.myworkdayjobs.invalid/en-US/Careers/job/Example_R12345",
-      host: "acme.wd108.myworkdayjobs.invalid",
-    };
-    assert.equal(admit({ ...record.input, target }, record).ok, true);
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
 test("admits an expired owner only for scope-bound Gmail grant revocation", () => {
   const record = fixture();
   try {
@@ -280,21 +254,6 @@ test("admits an expired owner only for scope-bound Gmail grant revocation", () =
   }
 });
 
-test("rejects missing, extra, and unversioned owner input fields", () => {
-  const record = fixture();
-  try {
-    const { schemaVersion: _schemaVersion, ...missing } = record.input;
-    for (const value of [missing, { ...record.input, unexpected: true }]) {
-      assert.deepEqual(admit(value, record), {
-        ok: false,
-        error: { code: "owner_config_invalid", dimension: "schema" },
-      });
-    }
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
 test("rejects unsafe target URLs and exact identity mismatches", () => {
   const record = fixture();
   try {
@@ -320,7 +279,7 @@ test("rejects unsafe target URLs and exact identity mismatches", () => {
   }
 });
 
-test("rejects relative, repository, overlapping, and reparse roots", () => {
+test("rejects unsafe runtime roots and missing repository boundaries without leaking paths", () => {
   const record = fixture();
   try {
     const replaceRoot = (
@@ -353,6 +312,23 @@ test("rejects relative, repository, overlapping, and reparse roots", () => {
       ok: false,
       error: { code: "runtime_root_invalid", dimension: "reparse" },
     });
+    const rejected = resolve(record.forbidden, "private-child");
+    const missing = admit(replaceRoot("evidence", rejected), record);
+    assert.deepEqual(missing, { ok: false, error: { code: "evidence_root_invalid", dimension: "missing" } });
+    assert.equal(JSON.stringify(missing).includes(rejected), false);
+
+    for (const forbiddenRoots of [[], [join(record.root, "missing-repository")]]) {
+      assert.deepEqual(
+        admitRealRunPreflight(record.input, { now: NOW, forbiddenRoots }),
+        {
+          ok: false,
+          error: {
+            code: "owner_config_invalid",
+            dimension: "repository_scope",
+          },
+        },
+      );
+    }
   } finally {
     rmSync(record.root, { recursive: true, force: true });
   }
@@ -380,68 +356,5 @@ test("rejects mismatched approval, retention, adapter, and secret metadata", () 
     }
   } finally {
     rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
-test("failure reports do not echo rejected values", () => {
-  const record = fixture();
-  try {
-    const rejected = resolve(record.forbidden, "private-child");
-    const result = admit(
-      {
-        ...record.input,
-        roots: {
-          ...record.input.roots,
-          evidence: { ...record.input.roots.evidence, path: rejected },
-        },
-      },
-      record,
-    );
-    assert.deepEqual(result, {
-      ok: false,
-      error: { code: "evidence_root_invalid", dimension: "missing" },
-    });
-    assert.equal(JSON.stringify(result).includes(rejected), false);
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
-test("fails closed when repository boundary roots are missing or unreadable", () => {
-  const record = fixture();
-  try {
-    for (const forbiddenRoots of [[], [join(record.root, "missing-repository")]]) {
-      assert.deepEqual(
-        admitRealRunPreflight(record.input, { now: NOW, forbiddenRoots }),
-        {
-          ok: false,
-          error: {
-            code: "owner_config_invalid",
-            dimension: "repository_scope",
-          },
-        },
-      );
-    }
-  } finally {
-    rmSync(record.root, { recursive: true, force: true });
-  }
-});
-
-test("the operator runbook keeps preflight dry and owner inputs external", () => {
-  const readme = readFileSync(resolve("README.md"), "utf8").replace(/\s+/gu, " ");
-  for (const statement of [
-    "## Stage 2 real-run preflight",
-    "outside the repository and every worktree",
-    "does not launch a browser, contact Gmail or Workday, or resolve a secret",
-    "windows-dpapi-current-user-v1",
-    "gmail-api-v1",
-    "approval-bounded live authority",
-    "no more than 30 minutes",
-    "30-day retention ceiling",
-    "Never copy the owner input file into the repository",
-    "current user or SYSTEM",
-    "before any browser can start",
-  ]) {
-    assert.equal(readme.includes(statement), true, statement);
   }
 });

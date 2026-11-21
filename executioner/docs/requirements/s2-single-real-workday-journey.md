@@ -70,9 +70,9 @@ independent review with no P0/P1. Apply findings, then run focused rechecks only
   answer type/provenance, and visible-option mapping have separate owners.
   Unknowns stop and produce only sanitized candidate evidence; no live process
   mutates or reloads selectors, catalogs, aliases, applicant facts, or answers.
-- Verify: `npm --prefix executioner test -- tests/live/contracts/authority-matrix.test.ts`.
-- Relevant files: `executioner/docs/s2-live-boundaries.md`,
-  `executioner/tests/live/contracts/authority-matrix.test.ts`.
+- Historical verification: the retired test compared exact Markdown table rows.
+  Its source remains in revision `21b403ce`.
+- Boundary reference: `executioner/docs/s2-live-boundaries.md`.
 
 ## S2-F0-T2 — Define minimal live ports, schemas, fakes, and conformance
 - Outcome: persistent browser, SecretStore, privileged credential mutation,

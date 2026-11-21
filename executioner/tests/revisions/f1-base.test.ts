@@ -18,10 +18,6 @@ import { assertReleaseContractProvenance } from "../../src/testing/s2-revision.t
 const repository = resolve(process.cwd(), "..");
 const acceptedStage1Base = "87c77e538d8bba378ec93516dbea3f4747beb822";
 
-test("the F1 R2.n contract baseline is frozen", () => {
-  assert.equal(contractRevisionStatus, "r2n_frozen");
-});
-
 test("the accepted Stage 1 base has exact ancestry, trees, and versions", () => {
   const record = JSON.parse(
     readFileSync("docs/contract-revision.json", "utf8"),

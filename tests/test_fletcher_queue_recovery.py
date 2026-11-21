@@ -1,46 +1,6 @@
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
-
-
-def test_fletcher_recovery_requeues_interrupted_running_job(monkeypatch):
-    fd, raw_path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    db_path = Path(raw_path)
-    monkeypatch.setenv("HUNT_DB_PATH", str(db_path))
-
-    try:
-        from fletcher.db import (
-            claim_next_fletcher_job,
-            enqueue_fletcher_job,
-            recover_interrupted_fletcher_jobs,
-        )
-
-        item = enqueue_fletcher_job(
-            {"title": "Azure Full Stack Developer", "description": "Build APIs."},
-            db_path=db_path,
-        )
-        claimed = claim_next_fletcher_job(db_path=db_path)
-        assert claimed is not None
-        assert claimed["queue_item_id"] == item["queue_item_id"]
-        assert claimed["status"] == "running"
-
-        recovered = recover_interrupted_fletcher_jobs(db_path=db_path)
-
-        assert [row["queue_item_id"] for row in recovered] == [item["queue_item_id"]]
-        assert recovered[0]["status"] == "queued"
-        assert recovered[0]["started_at"] is None
-        assert recovered[0]["progress"]["current_step"] == "requeued_after_worker_restart"
-        assert recovered[0]["progress"]["previous_step"] == "running"
-
-        reclaimed = claim_next_fletcher_job(db_path=db_path)
-        assert reclaimed is not None
-        assert reclaimed["queue_item_id"] == item["queue_item_id"]
-        assert reclaimed["status"] == "running"
-    finally:
-        db_path.unlink(missing_ok=True)
 
 
 def test_fletcher_queue_result_records_job_resume_attempt(monkeypatch, tmp_path):

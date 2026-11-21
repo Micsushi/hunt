@@ -37,10 +37,8 @@
       ],
       "testModule": "tests/fixtures/workday/variants/wd-page-auth-action-v1/variant.test.ts",
       "regressionModules": [
-        "tests/account/entry/account-entry.test.ts",
-        "tests/ats/workday/live-entry/account-state.test.ts",
-        "tests/browser/live-adapter/playwright-account-page.test.ts",
-        "tests/browser/live-adapter/workday-structural-catalog.test.ts"
+        "tests/ats/workday/live-entry/verification.test.ts",
+        "tests/product/posting-entry.test.ts"
       ]
     },
     {
@@ -61,8 +59,7 @@
       ],
       "testModule": "tests/fixtures/workday/variants/wd-page-external-state-v1/variant.test.ts",
       "regressionModules": [
-        "tests/browser/live-adapter/workday-owned-target-probe.test.ts",
-        "tests/browser/live-adapter/workday-structural-catalog.test.ts"
+        "tests/live/evidence/external-monitor-runtime.test.ts"
       ]
     },
     {
@@ -80,10 +77,7 @@
       "affectedSlots": ["WD40-007"],
       "testModule": "tests/fixtures/workday/variants/wd-ui-scalar-composite-v1/variant.test.ts",
       "regressionModules": [
-        "tests/browser/operations/mutation.test.ts",
-        "tests/browser/operations/observation.test.ts",
-        "tests/interaction/drivers/behaviors/behaviors.test.ts",
-        "tests/interaction/verification/field-verifier.test.ts"
+        "tests/ats/workday/profile/semantic-readback.test.ts"
       ]
     },
     {
@@ -100,16 +94,11 @@
       ],
       "affectedSlots": ["WD40-002", "WD40-007"],
       "testModule": "tests/fixtures/workday/variants/wd-ui-source-select-v1/variant.test.ts",
-      "regressionModules": [
-        "tests/browser/operations/mutation.test.ts",
-        "tests/browser/operations/observation.test.ts",
-        "tests/interaction/drivers/registry/registry.test.ts",
-        "tests/interaction/verification/field-verifier.test.ts"
-      ]
+      "regressionModules": ["tests/ats/workday/profile/playwright-page.test.ts"]
     }
   ],
   "freeze": {
     "algorithm": "sha256",
-    "digest": "sha256.3b0ff0ac6410e5ee1a8a754194d3aaa99f5bd2ec6ae3632c1e8335273707ef93"
+    "digest": "sha256.4a98642669e8032be9ebc4a7edb2c0747308c589235017ff591d9121e45989dd"
   }
 }

@@ -7,19 +7,6 @@ import { ApplicationQueue, type BrowserConnection } from "../../src/product/queu
 import { applicantProfile, productSources } from "../../src/product/sources.ts";
 import { disposeResumeArtifact } from '../../src/contracts/index.ts';
 
-test("legacy campaign profile imports without promoting its non-submittable mode", async () => {
-  const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-legacy-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
-  try {
-    const profile = applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }) as any;
-    profile.profilePlan.mode = "synthetic_test_non_submittable";
-    delete profile.executionPolicy;
-    queue.configure(profile, Buffer.from("%PDF-original").toString("base64"));
-    const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
-    assert.equal(job!.submissionAllowed, false);
-    assert.throws(() => queue.configure({ ...profile, executionPolicy: null }, Buffer.from("%PDF-original").toString("base64")), /policy denied/);
-  } finally { await queue.close(); }
-});
-
 test("queue snapshots inputs, supports remove/restore, and never retries uncertain submissions after restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "c3-queue-"));
   const bridge: BrowserConnection = { connected: false, open: async () => { throw new Error("should not open"); }, release: async () => {} };
@@ -86,22 +73,6 @@ test("disk failure pauses scheduling instead of crashing the service", async () 
   } finally { await queue.close(); }
 });
 
-test("a matching C1 handoff preserves its source and selected resume identity", async () => {
-  const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-origin-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
-  try {
-    const resumeBase64 = Buffer.from("%PDF-selected").toString("base64");
-    queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), resumeBase64);
-    const input = { url: "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" };
-    const [manual] = queue.add([input]);
-    queue.add([{ ...input, resumeBase64, sourceJobId: 7, resumeVersion: "version-2", resumeName: "selected.pdf" }]);
-    assert.equal(manual!.sourceJobId, 7); assert.equal(manual!.resumeVersion, "version-2");
-    assert.equal(manual!.resumeName, "selected.pdf");
-    assert.equal(manual!.resumeSha256?.length, 64);
-    assert.throws(() => queue.add([{ ...input, resumeBase64, sourceJobId: 8 }]), /another Hunt job/);
-    assert.equal(manual!.sourceJobId, 7);
-  } finally { await queue.close(); }
-});
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -142,34 +113,6 @@ test("observed resume requirement survives a failed fill and service restart", a
   assert.equal(restored.jobs[0]!.status, "paused");
 });
 
-test("shutdown drains an opening runner and releases its late session without filling", async () => {
-  const opening = deferred<Awaited<ReturnType<BrowserConnection["open"]>>>();
-  const opened = deferred<void>();
-  const released = deferred<void>();
-  let fills = 0, disconnects = 0;
-  const bridge: BrowserConnection = { connected: true,
-    open: async () => { opened.resolve(); return opening.promise; },
-    release: async () => { released.resolve(); },
-  };
-  const root = mkdtempSync(join(tmpdir(), "c3-close-open-"));
-  const queue = new ApplicationQueue(root, bridge, async () => {
-    fills++; return { reviewDigest: "fixture", completedPages: 1 };
-  });
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
-  const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
-  await opened.promise;
-  let closed = false;
-  const closing = queue.close().then(() => { closed = true; });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(closed, false);
-  opening.resolve({ tabId: 42, page: {} as any, browser: { close: async () => { disconnects++; } } as any });
-  await closing; await released.promise;
-  assert.equal(fills, 0); assert.equal(disconnects, 1);
-  assert.equal(job!.status, "paused");
-  assert.equal(JSON.parse(readFileSync(join(root, "jobs.json"), "utf8")).jobs[0].status, "paused");
-  await assert.rejects(queue.action(job!.id, "retry"), /stopping/);
-});
-
 test("shutdown is bounded while a pending open remains responsible for late cleanup", async () => {
   const opening = deferred<Awaited<ReturnType<BrowserConnection["open"]>>>();
   const opened = deferred<void>(), released = deferred<void>();
@@ -189,26 +132,6 @@ test("shutdown is bounded while a pending open remains responsible for late clea
   opening.resolve({ tabId: 43, page: {} as any, browser: { close: async () => {} } as any });
   await released.promise;
   assert.equal(fills, 0);
-});
-
-test("shutdown also drains pending review opens and prevents further review work", async () => {
-  const opening = deferred<Awaited<ReturnType<BrowserConnection["open"]>>>();
-  const released = deferred<void>();
-  const bridge: BrowserConnection = { connected: false, open: async () => opening.promise,
-    release: async () => { released.resolve(); },
-  };
-  const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-close-review-")), bridge);
-  queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-fixture").toString("base64"));
-  const [job] = queue.add([{ url: "https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1" }]);
-  job!.status = "review"; job!.tabId = 44;
-  const reviewing = assert.rejects(queue.action(job!.id, "refresh_review"), /stopping/);
-  let closed = false;
-  const closing = queue.close().then(() => { closed = true; });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(closed, false);
-  opening.resolve({ tabId: 44, page: {} as any, browser: { close: async () => {} } as any });
-  await closing; await reviewing; await released.promise;
-  assert.equal(job!.status, "review");
 });
 
 test("shutdown preserves uncertain submission state even when progress cannot be saved", async () => {

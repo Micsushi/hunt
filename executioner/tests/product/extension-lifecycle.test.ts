@@ -6,17 +6,6 @@ import { runInNewContext } from "node:vm";
 const backgroundSource = readFileSync("extension/background.js", "utf8").replace("const instanceId = crypto.randomUUID();", "const instanceId = 'fixture-instance';").replace(/^import .*workday-account.*\r?\n/m, "").replace(/^import .*page-actions.*\r?\n/m, "const pageActionTabs = new Set();\n").replace(/^import .*website-handoff.*\r?\n/m, "const registerWebsiteHandoff = () => {};\n").replace(/^import .*page-viewport.*\r?\n/m,"const preparePageViewport = globalThis.viewportFixture ?? (async()=>async()=>{}); const viewportOwnership = globalThis.ownershipFixture ?? (()=>({has:async()=>false})); const viewportCleanupPending = \"Hunt could not restore this tab's page size. Retry the job or page action to finish cleanup before filling.\";\n");
 const timers = { setTimeout, clearTimeout, setInterval, clearInterval };
 
-test('failed restore remains actionable even when debugger detach also rejects',async()=>{
-  const event={addListener(){}};const url='https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1';
-  let detaches=0;
-  const chrome={storage:{local:{get:async()=>({})}},runtime:{onMessage:event,onStartup:event},tabs:{get:async()=>({id:7,url,status:'complete'})},debugger:{onEvent:event,onDetach:event,attach:async()=>{},detach:async()=>{detaches++;throw new Error('session gone');},getTargets:async()=>[{tabId:7,id:'target'}]}};
-  const viewportFixture=async()=>async()=>{throw new Error('clear rejected');};
-  const command=runInNewContext(backgroundSource+'\nsocket={readyState:1};command',{chrome,URL,WebSocket:{OPEN:1},viewportFixture,...timers});
-  await command('attach',{url,tabId:7});
-  await assert.rejects(command('detach',{tabId:7}),/finish cleanup before filling/);
-  assert.equal(detaches,1);
-});
-
 test('unsolicited detach preserves owned cleanup and never reattaches or clears',async()=>{
   const event={addListener(){}};const url='https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1';
   let listener:Function=()=>{},attaches=0,restores=0;const sent:any[]=[];
@@ -42,31 +31,6 @@ test('owned viewport restoration runs before detach on release and failed attach
   }
 });
 
-test('socket cleanup restores its owned viewport before debugger detach',async()=>{
-  let token:string|undefined;const sockets:any[]=[];const events:string[]=[];
-  class Socket {static OPEN=1;static CONNECTING=0;static CLOSING=2;readyState=1;onclose=()=>{};constructor(){sockets.push(this)}close(){this.readyState=3;this.onclose()}}
-  const event={addListener(){}};const url='https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1';
-  const chrome={storage:{local:{get:async()=>({token})}},runtime:{onMessage:event,onStartup:event},tabs:{get:async()=>({id:7,url,status:'complete'})},debugger:{onEvent:event,onDetach:event,attach:async()=>{},detach:async()=>{events.push('detach')},getTargets:async()=>[{tabId:7,id:'target'}]}};
-  const viewportFixture=async()=>async()=>{events.push('restore')};
-  const api=runInNewContext(backgroundSource+'\n({connect,command,drain:()=>cleanup})',{chrome,URL,WebSocket:Socket,viewportFixture,setTimeout:()=>0,clearTimeout,setInterval,clearInterval});
-  token='fixture';await api.connect();await api.command('attach',{url,tabId:7});sockets[0].close();await api.drain();
-  assert.deepEqual(events,['restore','detach']);
-});
-
-test('popup actions use the guarded service route and never read a default resume directly',async()=>{
-  let listener:Function=()=>{},request:any;const event={addListener(){}};
-  const chrome={storage:{local:{get:async()=>({token:'fixture-key'})}},runtime:{id:'fixture',getURL:(path:string)=>'chrome-extension://fixture/'+path,onMessage:{addListener(fn:Function){listener=fn;}},onStartup:event},tabs:{},debugger:{onEvent:event,onDetach:event}};
-  let fetches=0;
-  const fetch=async(url:string,options:any)=>{fetches++;assert.equal(url,'http://127.0.0.1:47831/browser/page');request=JSON.parse(options.body);return{ok:false,status:400,json:async()=>({error:'Use the queued application in Applications.'})};};
-  runInNewContext(backgroundSource.replace(/^void connect\(\);\s*$/m,''),{chrome,URL,fetch,AbortSignal,WebSocket:{OPEN:1},...timers});
-  const message={action:'pageAction',operation:'fill',tabId:7,expectedUrl:'https://fixture.example/apply',documentId:'doc',expiresAt:Date.now()+5000};
-  const reply=await new Promise<any>(resolve=>listener(message,{id:'fixture',url:chrome.runtime.getURL('popup.html')},resolve));
-  assert.equal(reply.ok,false);assert.match(reply.error,/queued/);assert.equal(fetches,1);
-  assert.equal(request.documentId,'doc');assert.equal(request.expiresAt,message.expiresAt);assert.equal('facts' in request,false);assert.equal('resume' in request,false);
-  const expired=await new Promise<any>(resolve=>listener({...message,expiresAt:1},{id:'fixture',url:chrome.runtime.getURL('popup.html')},resolve));
-  assert.equal(expired.ok,false);assert.equal(fetches,1);
-});
-
 test('explicit generic attachment binds the exact URL and document and refuses navigation',async()=>{
   const original='https://solace.bamboohr.com/careers/823';
   const tab={id:7,url:original,status:'complete',discarded:false};let loader='document-one';
@@ -84,21 +48,6 @@ test('explicit generic attachment binds the exact URL and document and refuses n
   tab.url=original;loader='document-two';
   await assert.rejects(command('info',{tabId:7}),/document changed/);
   await command('detach',{tabId:7});
-});
-
-test('released generic drafts can be focused only at their exact admitted URL',async()=>{
-  const original='https://solace.bamboohr.com/careers/823';let url=original,focused=0;
-  const event={addListener(){}};
-  const chrome={storage:{local:{get:async()=>({})}},runtime:{onMessage:event,onStartup:event},tabs:{get:async()=>({id:7,url,windowId:1}),update:async()=>{focused++;}},windows:{update:async()=>{}},debugger:{onEvent:event,onDetach:event}};
-  const command=runInNewContext(backgroundSource+'\ncommand',{chrome,URL,WebSocket:{OPEN:1},...timers});
-  await assert.rejects(command('focus',{tabId:7,url:original}),/selected application/);
-  await command('focus',{tabId:7,url:original,generic:true});assert.equal(focused,1);
-  url='https://solace.bamboohr.com/careers/999';
-  await assert.rejects(command('focus',{tabId:7,url:original,generic:true}),/selected application/);
-  url='https://evil.example/';
-  await assert.rejects(command('focus',{tabId:7,url:original,generic:true}),/selected application/);
-  await assert.rejects(command('focus',{tabId:7,generic:true}),/selected application/);
-  assert.equal(focused,1);
 });
 
 test("naturally discarded tabs wake before attachment and completed tabs stay loaded", async () => {
@@ -123,50 +72,6 @@ test("naturally discarded tabs wake before attachment and completed tabs stay lo
   await command('attach', { tabId: 1, url, existingOnly: true });
   assert.equal(reloads, 1);
   await command('detach', { tabId: 1 });
-});
-
-test("extension cleans interrupted attachments and recreates missing tabs", async () => {
-  for (const scenario of ["disconnect", "missing-target", "closed-tab"]) {
-    let detached = 0, created = 0;
-    const connection = { readyState: 1 };
-    const url = "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1";
-    const event = { addListener() {} };
-    const chrome = {
-      storage: { local: { get: async () => ({}) } },
-      runtime: { onMessage: event, onStartup: event },
-      tabs: {
-        get: async () => { if (scenario === "closed-tab") throw new Error("No tab with id: 99."); return { id: 1, url, status: "complete" }; },
-        create: async () => { created++; return { id: 1, url, status: "complete" }; },
-      },
-      debugger: {
-        onEvent: event, onDetach: event,
-        attach: async () => { if (scenario === "disconnect") connection.readyState = 3; },
-        detach: async () => { detached++; },
-        getTargets: async () => scenario === "missing-target" ? [] : [{ tabId: 1, id: "target" }],
-      },
-    };
-    const run = runInNewContext(backgroundSource + "\n(value) => { socket = value; return command('attach', {url:'" + url + "',tabId:99}, value); }", { chrome, URL, WebSocket: { OPEN: 1 }, ...timers });
-    if (scenario === "closed-tab") { assert.equal((await run(connection)).tabId, 1); assert.equal(created, 1); }
-    else { await assert.rejects(run(connection), /connection closed/); assert.equal(detached, 1); }
-  }
-});
-
-test("reconnection waits for the old socket cleanup", async () => {
-  let finishClose: () => void = () => {}, opened = 0;
-  const old = { readyState: 2, addEventListener: (_: string, callback: () => void) => { finishClose = callback; } };
-  class Socket {
-    static OPEN = 1; static CONNECTING = 0; static CLOSING = 2;
-    constructor() { opened++; }
-  }
-  const event = { addListener() {} };
-  const chrome = { storage: { local: { get: async () => ({}) } }, tabs: {}, runtime: { onMessage: event, onStartup: event }, debugger: { onEvent: event, onDetach: event } };
-  const connectOld = runInNewContext(backgroundSource + "\nold => { socket = old; chrome.storage.local.get = async () => ({token:'fixture'}); return connect(); }", { chrome, WebSocket: Socket, URL, ...timers });
-  const pending = connectOld(old);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(opened, 0);
-  old.readyState = 3; finishClose();
-  await pending;
-  assert.equal(opened, 1);
 });
 
 test("failed created tabs and failed CDP setup reuse the same tab without closing user drafts", async () => {

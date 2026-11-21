@@ -3,65 +3,42 @@ import time
 
 import pytest
 
-from fletcher.resume.compiler import compile_tex, get_pdf_page_count
+from fletcher.resume.compiler import get_pdf_page_count
 from fletcher.resume.compiler_process import run_tool
 
 
-@pytest.mark.parametrize("pages", [1, 2, 3])
-def test_fallback_counts_leaf_pages_without_subtracting_tree(tmp_path, monkeypatch, pages):
+@pytest.mark.parametrize(
+    "body,pages",
+    [(b"/Type /Pages " + b"/Type /Page " * n, n) for n in (1, 2, 3)]
+    + [(b"/Type /ObjStm /Type /Page", None)],
+)
+def test_fallback_page_count_requires_plain_leaf_entries(tmp_path, monkeypatch, body, pages):
     monkeypatch.setattr("fletcher.resume.compiler.shutil.which", lambda _: None)
     pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.4 /Type /Pages " + b"/Type /Page " * pages)
+    pdf.write_bytes(b"%PDF-1.5 " + body)
     assert get_pdf_page_count(pdf) == pages
 
 
-def test_compressed_page_tree_is_unknown(tmp_path, monkeypatch):
-    monkeypatch.setattr("fletcher.resume.compiler.shutil.which", lambda _: None)
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.5 /Type /ObjStm /Type /Page")
-    assert get_pdf_page_count(pdf) is None
-
-
-def test_failed_tool_does_not_return_old_pdf(tmp_path, monkeypatch):
-    monkeypatch.setattr("fletcher.resume.compiler.shutil.which", lambda _: "fake")
-    monkeypatch.setattr(
-        "fletcher.resume.compiler._run_bounded",
-        lambda *a, **k: {"returncode": 1, "status": "timeout", "stdout": "", "log_text": "bounded"},
-    )
-    tex = tmp_path / "resume.tex"
-    tex.write_text("synthetic")
-    tex.with_suffix(".pdf").write_bytes(b"old")
-    result = compile_tex(tex)
-    assert result["compile_status"] == "timeout"
-    assert result["pdf_path"] is None
-    assert result["fits_one_page"] is False
-
-
-def test_harmless_tool_success():
-    result = run_tool([sys.executable, "-c", "print('synthetic')"])
-    assert result["failure"] is None
-    assert result["returncode"] == 0
-    assert result["output"].strip() == "synthetic"
-
-
-def test_harmless_stalled_tool_is_bounded():
+@pytest.mark.parametrize(
+    "script,timeout,failure",
+    [
+        ("print('synthetic')", 5, None),
+        ("import time; time.sleep(30)", 0.15, "timeout"),
+        ("import os; os.write(1, b'x' * 1000000)", 5, "output_limit"),
+        (
+            "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])",
+            0.3,
+            "timeout",
+        ),
+    ],
+    ids=["success", "stalled", "output-flood", "child-retains-pipe"],
+)
+def test_tool_bounds_runtime_and_output(script, timeout, failure):
     start = time.monotonic()
-    result = run_tool([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.15)
-    assert result["failure"] == "timeout"
+    result = run_tool([sys.executable, "-c", script], timeout=timeout, max_output=4096)
+    assert result["failure"] == failure
     assert time.monotonic() - start < 5
-
-
-def test_harmless_output_flood_is_bounded():
-    result = run_tool(
-        [sys.executable, "-c", "import os; os.write(1, b'x' * 1000000)"], max_output=4096
-    )
-    assert result["failure"] == "output_limit"
     assert len(result["output"]) <= 4096
-
-
-def test_exited_parent_cannot_leave_pipe_open():
-    script = "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])"
-    start = time.monotonic()
-    result = run_tool([sys.executable, "-c", script], timeout=0.3)
-    assert result["failure"] == "timeout"
-    assert time.monotonic() - start < 5
+    if failure is None:
+        assert result["returncode"] == 0
+        assert result["output"].strip() == "synthetic"

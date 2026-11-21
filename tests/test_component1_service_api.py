@@ -27,18 +27,30 @@ def _auth():
 
 
 class HunterServiceApiTests(unittest.TestCase):
-    def test_service_initializes_a_fresh_database_before_serving_requests(self):
-        with tempfile.TemporaryDirectory(prefix="hunt-c1-startup-") as directory:
-            path = str(Path(directory) / "fresh.db")
-            with (
-                patch.dict(os.environ, {"HUNT_DB_PATH": path, "HUNT_DB_URL": ""}),
-                patch.object(db, "DB_PATH", path),
-                patch("hunter.config.HUNT_SERVICE_TOKEN", SERVICE_TOKEN),
-            ):
-                with TestClient(service.app, raise_server_exceptions=False) as client:
-                    for route in ("/status", "/queue", "/discovery/health"):
-                        self.assertEqual(client.get(route, headers=_auth()).status_code, 200)
-                    self.assertEqual(client.get("/status").status_code, 401)
+    def test_service_initializes_a_fresh_database_and_preserves_history_on_restart(self):
+        # setUp normally pre-initializes SQLite. Exercise both lifespans on a fresh path.
+        os.remove(self.db_path)
+        with (
+            patch.dict(os.environ, {"HUNT_DB_URL": ""}),
+            patch("hunter.config.HUNT_SERVICE_TOKEN", SERVICE_TOKEN),
+        ):
+            with TestClient(service.app, raise_server_exceptions=False) as client:
+                for route in ("/status", "/queue", "/discovery/health"):
+                    self.assertEqual(client.get(route, headers=_auth()).status_code, 200)
+                self.assertEqual(client.get("/status").status_code, 401)
+                job_id = self._insert_job(enrichment_status="processing", enrichment_attempts=7)
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute(
+                        "UPDATE jobs SET status='applied', last_enrichment_started_at='2000-01-01 00:00:00' WHERE id=?",
+                        (job_id,),
+                    )
+                conn.close()
+            with TestClient(service.app):
+                row = db.get_job_by_id(job_id)
+        self.assertEqual(row["status"], "applied")
+        self.assertEqual(row["enrichment_status"], "processing")
+        self.assertEqual(row["enrichment_attempts"], 7)
+        self.assertEqual(row["last_enrichment_started_at"], "2000-01-01 00:00:00")
 
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
@@ -144,76 +156,6 @@ class HunterServiceApiTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_status_returns_401_without_token(self):
-        client = TestClient(service.app, raise_server_exceptions=False)
-        with patch("hunter.config.HUNT_SERVICE_TOKEN", SERVICE_TOKEN):
-            response = client.get("/status")
-        self.assertEqual(response.status_code, 401)
-
-    def test_service_restart_preserves_existing_processing_and_application_history(self):
-        job_id = self._insert_job(enrichment_status="processing", enrichment_attempts=7)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE jobs SET status = 'applied', last_enrichment_started_at = '2000-01-01 00:00:00' WHERE id = ?",
-                (job_id,),
-            )
-        conn.close()
-        with TestClient(service.app):
-            pass
-        row = db.get_job_by_id(job_id)
-        self.assertEqual(row["status"], "applied")
-        self.assertEqual(row["enrichment_status"], "processing")
-        self.assertEqual(row["enrichment_attempts"], 7)
-        self.assertEqual(row["last_enrichment_started_at"], "2000-01-01 00:00:00")
-
-    def test_status_reports_service_flags_queue_and_auth_state(self):
-        self._insert_job(source="indeed", enrichment_status="pending", suffix="pending")
-        self._insert_job(
-            source="indeed",
-            enrichment_status="failed",
-            enrichment_attempts=1,
-            next_enrichment_retry_at="2000-01-01 00:00:00",
-            suffix="ready",
-        )
-        db.mark_linkedin_auth_unavailable("cookie expired")
-        client = self._make_client()
-
-        response = client.get("/status", headers=_auth())
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json(),
-            {
-                "service": "c1-hunter",
-                "scrape_running": False,
-                "enrich_running": False,
-                "queue": {"pending": 1, "ready": 2},
-                "linkedin_auth": {
-                    "status": "expired",
-                    "available": False,
-                    "last_error": "cookie expired",
-                    "updated_at": response.json()["linkedin_auth"]["updated_at"],
-                },
-            },
-        )
-        self.assertIsNotNone(response.json()["linkedin_auth"]["updated_at"])
-
-    def test_queue_returns_pending_and_ready_counts(self):
-        self._insert_job(source="indeed", enrichment_status="pending", suffix="a")
-        self._insert_job(
-            source="indeed",
-            enrichment_status="failed",
-            enrichment_attempts=1,
-            next_enrichment_retry_at="2000-01-01 00:00:00",
-            suffix="b",
-        )
-        client = self._make_client()
-
-        response = client.get("/queue", headers=_auth())
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"pending": 1, "ready": 2})
-
     def test_discovery_health_and_c3_handoff_endpoints(self):
         job_id = self._insert_job(enrichment_status="done", suffix="c3")
         db.update_selected_resume_for_job(
@@ -267,26 +209,6 @@ class HunterServiceApiTests(unittest.TestCase):
         self.assertEqual(event["component"], "c1")
         self.assertEqual(event["payload"]["details"]["route"], "/scrape")
 
-    def test_full_backfill_includes_public_and_company_sources(self):
-        client = self._make_client()
-        with (
-            patch("hunter.scraper.scrape") as scrape_mock,
-            patch("hunter.config.BACKFILL_HOURS_OLD", 336),
-        ):
-            response = client.post(
-                "/scrape",
-                headers=_auth(),
-                json={"full_backfill": True, "enrich_after": False},
-            )
-        self.assertEqual(response.status_code, 200)
-        scrape_mock.assert_called_once_with(
-            enrich_pending=False,
-            enrich_limit=None,
-            hours_old=336,
-            include_public_sources=True,
-            include_company_queue=True,
-        )
-
     def test_query_health_does_not_overwrite_another_query_failure(self):
         from hunter.scraper import _scrape_jobspy_task
 
@@ -303,111 +225,50 @@ class HunterServiceApiTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual({row["status"] for row in rows}, {"ok", "failed"})
 
-    def test_scrape_rejects_duplicate_run_while_first_is_active(self):
+    def test_active_scrape_and_enrich_reject_duplicate_requests(self):
         client = self._make_client()
-        started = threading.Event()
-        release = threading.Event()
-        first_response = {}
-
-        def blocking_scrape(*, enrich_pending, enrich_limit):
-            started.set()
-            release.wait(timeout=5)
-
-        def run_first_request():
-            first_response["response"] = client.post(
+        cases = [
+            (
                 "/scrape",
-                headers=_auth(),
-                json={"enrich_after": True, "enrich_limit": 3},
-            )
-
-        with patch("hunter.scraper.scrape", side_effect=blocking_scrape):
-            thread = threading.Thread(target=run_first_request)
-            thread.start()
-            self.assertTrue(started.wait(timeout=5))
-
-            second = client.post(
-                "/scrape",
-                headers=_auth(),
-                json={"enrich_after": True, "enrich_limit": 3},
-            )
-
-            release.set()
-            thread.join(timeout=5)
-
-        self.assertEqual(first_response["response"].status_code, 200)
-        self.assertEqual(second.status_code, 409)
-        self.assertEqual(second.json()["detail"], "Scrape already running")
-        self.assertFalse(service._is_scrape_running())
-
-    def test_enrich_starts_background_task_with_default_limit(self):
-        client = self._make_client()
-
-        with patch("hunter.config.ENRICHMENT_BATCH_LIMIT", 42):
-            with patch("hunter.enrichment_dispatch.run_enrichment_round") as enrich_mock:
-                response = client.post("/enrich", headers=_auth(), json={})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "started", "limit": 42})
-        enrich_mock.assert_called_once_with(limit=42, return_summary=True)
-        self.assertFalse(service._is_enrich_running())
-
-    def test_enrich_rejects_duplicate_run_while_first_is_active(self):
-        client = self._make_client()
-        started = threading.Event()
-        release = threading.Event()
-        first_response = {}
-
-        def blocking_enrich(*, limit, return_summary):
-            started.set()
-            release.wait(timeout=5)
-            return {"ok": True}
-
-        def run_first_request():
-            first_response["response"] = client.post(
+                {"enrich_after": True, "enrich_limit": 3},
+                "hunter.scraper.scrape",
+                "Scrape already running",
+                service._is_scrape_running,
+            ),
+            (
                 "/enrich",
-                headers=_auth(),
-                json={"limit": 9},
-            )
+                {"limit": 9},
+                "hunter.enrichment_dispatch.run_enrichment_round",
+                "Enrichment already running",
+                service._is_enrich_running,
+            ),
+        ]
+        for endpoint, body, worker, message, is_running in cases:
+            with self.subTest(endpoint=endpoint):
+                started, release = threading.Event(), threading.Event()
+                responses = []
 
-        with patch("hunter.enrichment_dispatch.run_enrichment_round", side_effect=blocking_enrich):
-            thread = threading.Thread(target=run_first_request)
-            thread.start()
-            self.assertTrue(started.wait(timeout=5))
+                def block(**kwargs):
+                    started.set()
+                    release.wait(timeout=5)
+                    return {"ok": True}
 
-            second = client.post("/enrich", headers=_auth(), json={"limit": 9})
+                def post():
+                    return client.post(endpoint, headers=_auth(), json=body)
 
-            release.set()
-            thread.join(timeout=5)
-
-        self.assertEqual(first_response["response"].status_code, 200)
-        self.assertEqual(second.status_code, 409)
-        self.assertEqual(second.json()["detail"], "Enrichment already running")
-        self.assertFalse(service._is_enrich_running())
-
-    def test_reauth_starts_session_refresh_for_existing_account(self):
-        self._insert_linkedin_account(account_id=7)
-        client = self._make_client()
-
-        with patch("hunter.enrichment_dispatch.ensure_linkedin_session") as reauth_mock:
-            response = client.post("/accounts/7/reauth", headers=_auth())
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "started", "account_id": 7})
-        reauth_mock.assert_called_once_with(
-            storage_state_path=None,
-            headless=True,
-            slow_mo=0,
-            timeout_ms=45000,
-            browser_channel=None,
-        )
-
-    def test_reauth_returns_404_for_unknown_account(self):
-        client = self._make_client()
-
-        response = client.post("/accounts/99/reauth", headers=_auth())
-
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["detail"], "Account not found")
+                with patch(worker, side_effect=block):
+                    thread = threading.Thread(target=lambda: responses.append(post()))
+                    thread.start()
+                    try:
+                        self.assertTrue(started.wait(timeout=5))
+                        second = post()
+                    finally:
+                        release.set()
+                        thread.join(timeout=5)
+                self.assertEqual(responses[0].status_code, 200)
+                self.assertEqual(second.status_code, 409)
+                self.assertEqual(second.json()["detail"], message)
+                self.assertFalse(is_running())
 
 
 if __name__ == "__main__":

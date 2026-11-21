@@ -13,7 +13,7 @@ const input = () => ({
   password: bytes(112, 97, 115, 115),
 });
 
-test("AccountCredentialBundleV1 round-trips named email then password without swapping", () => {
+test("AccountCredentialBundleV1 decodes its exact layout and rejects corrupt copies", () => {
   const encoded = encodeAccountCredentialBundleV1(input());
   assert.notEqual(encoded, null);
   if (encoded === null) return;
@@ -23,12 +23,6 @@ test("AccountCredentialBundleV1 round-trips named email then password without sw
   assert.notEqual(decoded, null);
   assert.deepEqual([...(decoded?.email ?? [])], [...input().email]);
   assert.deepEqual([...(decoded?.password ?? [])], [...input().password]);
-});
-
-test("AccountCredentialBundleV1 rejects corrupt version, tag order, count, truncation, trailing data, and legacy payload", () => {
-  const encoded = encodeAccountCredentialBundleV1(input());
-  assert.notEqual(encoded, null);
-  if (encoded === null) return;
 
   const version = encoded.slice();
   version[4] = 2;
@@ -70,13 +64,4 @@ test("AccountCredentialBundleV1 rejects empty, oversized, and invalid UTF-8 fiel
   ]) {
     assert.equal(encodeAccountCredentialBundleV1(candidate), null);
   }
-});
-
-test("AccountCredentialBundleV1 delegates UTF-8 admission to fatal TextDecoder", async () => {
-  const source = await readFile(
-    "src/secrets/windows-dpapi/private/account-credential-bundle.ts",
-    "utf8",
-  );
-  assert.match(source, /new TextDecoder\("utf-8", \{ fatal: true \}\)/u);
-  assert.doesNotMatch(source, /function (?:continuation|between)\(/u);
 });

@@ -126,38 +126,29 @@ test('ambiguous country choices and existing phone numbers stay untouched', asyn
   }
 });
 
-test('edits during asynchronous country selection are neither overwritten nor rolled back',async()=>{
+test('manual phone or country edits survive asynchronous selection and post-write verification',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
-    for (const edit of ['number','country'] as const) {
+    for (const edit of ['number','country','post-write'] as const) {
       const page=await browser.newPage();await page.route(url,r=>r.fulfill({contentType:'text/html',body:widget()}));await page.goto(url);
       await page.evaluate(edit=>{
         const phone=document.getElementById('phone') as HTMLInputElement;
-        phone.addEventListener('countrychange',()=>{
-          if (document.querySelector<HTMLButtonElement>('.iti__selected-country')!.title!=='Canada') return;
-          setTimeout(()=>{
-            if(edit==='number'){phone.value='OWNER-EDIT';phone.dispatchEvent(new Event('input',{bubbles:true}));}
-            else (document.getElementById('iti-0__item-us') as HTMLElement).click();
-          },20);
-        },{once:true});
+        if(edit==='post-write') {
+          phone.addEventListener('input',()=>{if(phone.value==='6135550100')setTimeout(()=>{phone.value='OWNER-EDIT';},20);});
+        } else {
+          phone.addEventListener('countrychange',()=>{
+            if (document.querySelector<HTMLButtonElement>('.iti__selected-country')!.title!=='Canada') return;
+            setTimeout(()=>{
+              if(edit==='number'){phone.value='OWNER-EDIT';phone.dispatchEvent(new Event('input',{bubbles:true}));}
+              else (document.getElementById('iti-0__item-us') as HTMLElement).click();
+            },20);
+          },{once:true});
+        }
       },edit);
       const result=await page.evaluate(fillVisibleFields,{facts});assert.equal(result.filled.includes('Phone'),false);
-      assert.equal(await page.locator('#phone').inputValue(),edit==='number'?'OWNER-EDIT':'');
-      assert.equal(await page.getByRole('combobox',{name:'Selected country'}).getAttribute('title'),edit==='number'?'Canada':'United States');
+      assert.equal(await page.locator('#phone').inputValue(),edit==='country'?'':'OWNER-EDIT');
+      assert.equal(await page.getByRole('combobox',{name:'Selected country'}).getAttribute('title'),edit==='country'?'United States':'Canada');
       assert.equal(await page.evaluate('submits+advances'),0);await page.close();
     }
-  }finally{await browser.close();}
-});
-
-test('a phone edit during post-write verification survives without country rollback',async()=>{
-  const browser=await chromium.launch({headless:true});
-  try {
-    const page=await browser.newPage();await page.route(url,r=>r.fulfill({contentType:'text/html',body:widget()}));await page.goto(url);
-    await page.locator('#phone').evaluate((phone:HTMLInputElement)=>phone.addEventListener('input',()=>{
-      if(phone.value==='6135550100')setTimeout(()=>{phone.value='OWNER-EDIT';},20);
-    }));
-    const result=await page.evaluate(fillVisibleFields,{facts});assert.equal(result.filled.includes('Phone'),false);
-    assert.equal(await page.locator('#phone').inputValue(),'OWNER-EDIT');
-    assert.equal(await page.getByRole('combobox',{name:'Selected country'}).getAttribute('title'),'Canada');
   }finally{await browser.close();}
 });

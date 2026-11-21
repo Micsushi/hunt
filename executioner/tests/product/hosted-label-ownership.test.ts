@@ -49,25 +49,25 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     assert.equal(fields.find(field=>field.label==='Are you legally entitled to work in Canada?')?.required,true);
     const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
       preferred_name:'Saved',work_authorization_canada:'true',region:'Alberta',application_source:'Job board'});
-    await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),
-      /Required or invalid fields remain/);
+    const review=await fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
+    assert.equal(review.needsOwnerReview,true);
     assert.equal(await page.locator('#authorized').inputValue(),'Yes');
     assert.equal(await page.locator('#unrelated').inputValue(),'');
-    assert.equal(await page.locator('#qualified').inputValue(),'');
+    assert.equal(await page.locator('#qualified').inputValue(),'Yes');
     assert.equal(await page.locator('#region').inputValue(),'Alberta');
-    assert.equal(await page.locator('#source').inputValue(),'');
+    assert.equal(await page.locator('#source').inputValue(),'LinkedIn');
     assert.equal(await page.locator('#preferred').inputValue(),'Saved');
     assert.equal(await page.locator('#survey').inputValue(),'');
     assert.equal(await page.locator('#race').inputValue(),'');
-    assert.equal(await page.locator('#unknown').inputValue(),'');
+    assert.ok(await page.locator('#unknown').inputValue());
     assert.equal(await page.evaluate('window.submitted'),undefined);
     await page.reload();
     const unscoped = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
       preferred_name:'Saved',work_authorization:'true'});
-    await assert.rejects(fillApplication(page,{url,profile:unscoped,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),
-      /Required or invalid fields remain/);
-    assert.equal(await page.locator('#authorized').inputValue(),'');
-    assert.equal(await page.locator('#qualified').inputValue(),'');
+    const fallback=await fillApplication(page,{url,profile:unscoped,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
+    assert.equal(fallback.needsOwnerReview,true);
+    assert.equal(await page.locator('#authorized').inputValue(),'Yes');
+    assert.equal(await page.locator('#qualified').inputValue(),'Yes');
     assert.equal(await page.evaluate('window.submitted'),undefined);
   } finally { await browser.close(); }
 });

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { fillApplication } from '../../src/product/engine.ts';
 import { applicantProfile } from '../../src/product/sources.ts';
@@ -10,7 +13,7 @@ const location = 'This role requires employees to be based in the United States 
 const coop = 'Are you currently enrolled in a Co-op or Work-Integrated Learning (WIL) program through your school?';
 const select = (id: string, label: string) => `<label>${label}<select id="${id}" required><option value="">Choose</option><option>YES</option><option>NO</option></select></label>`;
 
-test('hosted campaign questions fill from saved profile authority and leave unsupported questions open', async () => {
+test('hosted campaign questions fill from saved profile authority and flag required fallbacks for Review', async () => {
   const browser = await chromium.launch({headless:true});
   try {
     const page = await browser.newPage();
@@ -31,18 +34,28 @@ test('hosted campaign questions fill from saved profile authority and leave unsu
       {section:'experience',rows:[{rowKey:'fixture',fields:[{fieldId:'experience.description',questionType:'experience',
         answerType:'text',allowedOptions:[],answer:{kind:'answered',value,provenance:'resume_verified',lane:'live_owner_fact'}}]}]},
     ]}});
-    for (const [description, expected] of [['Automated deployment pipelines using Kubernetes.', 'YES'],
-      ['Automated deployment pipelines without Kubernetes.', ''],['Familiar with AWS terminology.', '']]) {
+    for (const [description, verified] of [['Automated deployment pipelines using Kubernetes.', true],
+      ['Automated deployment pipelines without Kubernetes.', false],['Familiar with AWS terminology.', false]] as const) {
       await page.goto(url);
-      await assert.rejects(fillApplication(page,{url,profile:withExperience(description!),resume:Buffer.from('%PDF-fixture')},
-        AbortSignal.timeout(12000),()=>{}), /Required or invalid fields remain/);
-      assert.equal(await page.locator('#cloud').inputValue(),expected);
+      const learningRoot = mkdtempSync(join(tmpdir(), 'hunt-hosted-answers-'));
+      try {
+        const result = await fillApplication(page,{url,profile:withExperience(description),learningRoot,resume:Buffer.from('%PDF-fixture')},
+          AbortSignal.timeout(12000),()=>{});
+        assert.ok(result.reviewDigest);
+        assert.equal(result.needsOwnerReview,true);
+        const journal = JSON.parse(readFileSync(join(learningRoot,'matching-backlog.json'),'utf8'));
+        const entry = journal.entries.find((row: { question: string }) => row.question === cloud);
+        assert.ok(entry);
+        assert.equal(entry.attempts.some((attempt: { reason: string }) => attempt.reason === 'profile_answer'),verified);
+        if (!verified) assert.equal(entry.provisional,true);
+      } finally { rmSync(learningRoot,{recursive:true,force:true}); }
+      assert.equal(await page.locator('#cloud').inputValue(),'YES');
       assert.equal(await page.locator('#location').inputValue(),'YES');
       assert.equal(await page.locator('#gpa').inputValue(),'3.7/4.0');
       assert.equal(await page.locator('#coop').inputValue(),'Yes');
       assert.equal(await page.locator('#address').inputValue(),'123 Fixture St, Edmonton, Alberta T5A 0A1, Canada');
       assert.equal(await page.locator('#compensation').inputValue(),'CAD 80,000 per year');
-      assert.equal(await page.locator('#ai').inputValue(),'');
+      assert.equal(await page.locator('#ai').inputValue(),'YES');
       assert.equal(await page.evaluate('window.submitted'),undefined);
     }
   } finally { await browser.close(); }

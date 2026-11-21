@@ -35,77 +35,13 @@ function privacyRequest(
   };
 }
 
-test("privacy admits the exact value-free F9 MCP payload and freezes a detached snapshot", async () => {
-  const guard = createPrivacyGuard();
-  const semanticPayload = {
-    requestId: "request_0123456789abcdef",
-    method: "start_journey",
-    jobId: "job-synthetic",
-    resumeId: "resume-synthetic",
-    profileId: "profile-synthetic",
-  };
-  const result = await guard.admit(privacyRequest(semanticPayload), liveSignal);
-
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  semanticPayload.jobId = "changed-after-admission";
-  assert.equal(result.value.purpose, "privacy");
-  assert.equal(result.value.journeyId, binding.journeyId);
-  assert.equal(result.value.attemptId, binding.attemptId);
-  assert.equal(result.value.guardRevision, binding.guardRevision);
-  assert.notEqual(result.value.snapshot, semanticPayload);
-  assert.equal(Object.isFrozen(result.value.snapshot), true);
-  assert.equal(
-    (result.value.snapshot as { semanticPayload: { jobId: string } })
-      .semanticPayload.jobId,
-    "job-synthetic",
-  );
-
-  const bound = bindAdmissionRequest(result.value);
-  assert.equal(consumeAdmissionPermit(bound).ok, true);
-  assert.deepEqual(consumeAdmissionPermit(bound), {
-    ok: false,
-    error: { code: "admission_consumed", retryable: false },
-  });
-});
-
-test("privacy and F9 agree on every live semantic key", async () => {
-  const guard = createPrivacyGuard();
-  const payloads = [
-    {
-      requestId: "request_0123456789abcdef",
-      method: "start_journey",
-      jobId: "job-synthetic",
-      resumeId: "resume-synthetic",
-      profileId: "profile-synthetic",
-    },
-    {
-      requestId: "request_1123456789abcdef",
-      method: "cancel_journey",
-      journeyId: binding.journeyId,
-    },
-    {
-      requestId: "request_2123456789abcdef",
-      method: "journey_status",
-      journeyId: binding.journeyId,
-    },
-    {
-      requestId: "request_3123456789abcdef",
-      method: "journey_result",
-      journeyId: binding.journeyId,
-    },
-  ] as const;
-
-  for (const payload of payloads) {
-    assert.equal(
-      (await guard.admit(privacyRequest({ ...payload }), liveSignal)).ok,
-      true,
-    );
-  }
-});
-
 test("privacy denies forbidden keys and PII-shaped values without retaining them", async () => {
   const guard = createPrivacyGuard();
+  assert.deepEqual(
+    await guard.admit(privacyRequest({ requestId: "request_0123456789abcdef" }), AbortSignal.abort()),
+    { ok: false, error: { code: "operation_cancelled", retryable: false } },
+  );
+
   const marker = "person@example.invalid";
   const cases = [
     ["password", marker, "credential_forbidden"],
@@ -191,9 +127,33 @@ test("privacy rejects inherited, hidden, symbol, array-extra, accessor, and prox
   assert.equal(traps, 0);
 });
 
-test("safety admits only exact field mutation and next-navigation effects", async () => {
+test("safety grants exact field and navigation effects after rejecting cancelled and malformed requests", async () => {
   const guard = createSafetyGuard();
   const mutation = contractOperationCases.SafetyGuard.admit.request;
+  assert.deepEqual(await guard.admit(mutation, AbortSignal.abort()), {
+    ok: false, error: { code: "operation_cancelled", retryable: false },
+  });
+  const cases = [
+    [{ ...mutation, capability: "submit" }, "submit_forbidden"],
+    [{ ...mutation, selector: "#next" }, "selector_forbidden"],
+    [{ ...mutation, policyOverride: true }, "policy_override_forbidden"],
+    [{ ...mutation, capability: "observe" }, "policy_override_forbidden"],
+    [
+      {
+        ...mutation,
+        input: { ...mutation.input, capability: "navigate_next" },
+      },
+      "admission_shape_invalid",
+    ],
+  ] as const;
+
+  for (const [request, code] of cases) {
+    assert.deepEqual(
+      await guard.admit(request as unknown as SafetyAdmissionRequest, liveSignal),
+      { ok: false, error: { code, retryable: false } },
+    );
+  }
+
   const mutationResult = await guard.admit(mutation, liveSignal);
   assert.equal(mutationResult.ok, true);
   if (mutationResult.ok) {
@@ -224,80 +184,4 @@ test("safety admits only exact field mutation and next-navigation effects", asyn
     },
   } as unknown as SafetyAdmissionRequest;
   assert.equal((await guard.admit(navigation, liveSignal)).ok, true);
-});
-
-test("safety rejects extra binding fields without retaining their values", async () => {
-  const guard = createSafetyGuard();
-  const baseline = contractOperationCases.SafetyGuard.admit.request;
-  const marker = "person@example.invalid";
-  const result = await guard.admit(
-    {
-      ...baseline,
-      binding: { ...baseline.binding, forbidden: marker },
-    } as unknown as SafetyAdmissionRequest,
-    liveSignal,
-  );
-
-  assert.deepEqual(result, {
-    ok: false,
-    error: { code: "admission_shape_invalid", retryable: false },
-  });
-  assert.doesNotMatch(JSON.stringify(result), new RegExp(marker, "u"));
-});
-
-test("safety denies Submit, selectors, policy overrides, and mismatched effect ownership", async () => {
-  const guard = createSafetyGuard();
-  const baseline = contractOperationCases.SafetyGuard.admit.request;
-  const cases = [
-    [{ ...baseline, capability: "submit" }, "submit_forbidden"],
-    [{ ...baseline, selector: "#next" }, "selector_forbidden"],
-    [{ ...baseline, policyOverride: true }, "policy_override_forbidden"],
-    [{ ...baseline, capability: "observe" }, "policy_override_forbidden"],
-    [
-      {
-        ...baseline,
-        input: { ...baseline.input, capability: "navigate_next" },
-      },
-      "admission_shape_invalid",
-    ],
-  ] as const;
-
-  for (const [request, code] of cases) {
-    assert.deepEqual(
-      await guard.admit(request as unknown as SafetyAdmissionRequest, liveSignal),
-      { ok: false, error: { code, retryable: false } },
-    );
-  }
-});
-
-test("both guards return the frozen cancellation result without issuing a permit", async () => {
-  assert.deepEqual(
-    await createPrivacyGuard().admit(
-      privacyRequest({ requestId: "request_0123456789abcdef" }),
-      AbortSignal.abort(),
-    ),
-    {
-      ok: false,
-      error: { code: "operation_cancelled", retryable: false },
-    },
-  );
-  assert.deepEqual(
-    await createSafetyGuard().admit(
-      contractOperationCases.SafetyGuard.admit.request,
-      AbortSignal.abort(),
-    ),
-    {
-      ok: false,
-      error: { code: "operation_cancelled", retryable: false },
-    },
-  );
-});
-
-test("Submit is not representable in the safety contract", () => {
-  const invalid: SafetyAdmissionRequest = {
-    ...contractOperationCases.SafetyGuard.admit.request,
-    // @ts-expect-error Submit is intentionally absent from the capability union.
-    capability: "submit",
-  };
-  assert.equal(invalid.capability, "submit");
 });

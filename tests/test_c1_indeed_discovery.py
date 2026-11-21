@@ -20,45 +20,38 @@ def posting(index):
     )
 
 
-def test_indeed_cursors_reach_end_beyond_old_result_limit():
+@pytest.mark.parametrize("ending", ["complete", "rate_limited", "repeated"])
+def test_indeed_cursor_paging_preserves_results_and_closes_session(ending):
     client = SimpleNamespace(session=Mock())
     calls = []
 
-    def page(cursor):
+    def page_reader(_client, cursor):
         calls.append(cursor)
         index = int(cursor or 0)
-        return [posting(index)], str(index + 1) if index < 501 else None, False
+        if cursor and ending == "rate_limited":
+            raise HTTPError("https://example.com", 429, "limited", None, None)
+        following = cursor if cursor and ending == "repeated" else str(index + 1)
+        return [posting(index)], following if index < 501 else None, False
 
     jobs, health = discover_indeed_query(
         "IT support",
         "Canada",
         "it_support",
         client_factory=lambda *args: client,
-        page_reader=lambda client, cursor: page(cursor),
-    )
-    assert len(jobs) == 502 and health["status"] == "ok"
-    assert calls[0] is None and calls[-1] == "501"
-    assert all(
-        j["enrichment_status"] == "pending" and j["auto_apply_eligible"] is None for j in jobs
+        page_reader=page_reader,
     )
     client.session.close.assert_called_once()
-
-
-def test_indeed_keeps_prior_results_on_http_failure_or_repeated_cursor():
-    for second, expected in [
-        (HTTPError("https://example.com", 429, "limited", None, None), "http_429"),
-        (([posting(2)], "next", False), "pagination_repeated"),
-    ]:
-        client = SimpleNamespace(session=Mock())
-        jobs, health = discover_indeed_query(
-            "IT support",
-            "Canada",
-            "it_support",
-            client_factory=lambda *args: client,
-            page_reader=Mock(side_effect=[([posting(1)], "next", False), second]),
+    if ending == "complete":
+        assert len(jobs) == 502 and health["status"] == "ok"
+        assert calls[0] is None and calls[-1] == "501"
+        assert all(
+            j["enrichment_status"] == "pending" and j["auto_apply_eligible"] is None for j in jobs
         )
-        assert jobs and health["status"] == "partial" and health["error"] == expected
-        client.session.close.assert_called_once()
+    else:
+        assert jobs and health["status"] == "partial"
+        assert health["error"] == (
+            "http_429" if ending == "rate_limited" else "pagination_repeated"
+        )
 
 
 def indeed_card(index):
