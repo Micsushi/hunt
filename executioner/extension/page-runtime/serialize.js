@@ -20,7 +20,8 @@ import { observeFormDocument, currentPageInterruption } from '../form-page.js';
 import { addressGroupLabel } from '../page-adapters/jazz-address.js';
 import { clientAttachmentState, verifiedClientAttachment } from '../page-adapters/client-attachment.js';
 import { markedRequired, smartRecruitersUploadHeading } from '../page-adapters/required-markers.js';
-import { smartRecruitersCityChoices } from '../page-adapters/smartrecruiters-city.js';
+import { createSmartRecruitersScreening } from '../page-adapters/smartrecruiters-screening.js';
+import { smartRecruitersCityChoices, smartRecruitersOptions } from '../page-adapters/smartrecruiters-city.js';
 import { createSearchChoiceReader } from '../page-adapters/workday-choice.js';
 import { isPortalResumeBinding } from '../jobvite-resume.js';
 import { jobviteResumeAcknowledgment, jobviteScreeningPanel, watchJobviteScreening } from '../page-adapters/jobvite-screening.js';
@@ -29,7 +30,7 @@ import { runPageFill } from './fill.js';
 
 // Bind site-owned readers here, before serializing into the selected browser document.
 export function fillPageDocument(input) {
-  return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices,
+  return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices, createSmartRecruitersScreening,
     createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, watchJobviteScreening, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
     ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
 }
@@ -76,6 +77,8 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   createUploadStatusReader,
   createSearchChoiceReader,
   smartRecruitersCityChoices,
+  smartRecruitersOptions,
+  createSmartRecruitersScreening,
 ]);
 export const observePageSource = isolatedFunction(observeCurrentDocument, [observeFormDocument, observeWorkdayDocument]);
 export const checkPageSource = currentPageInterruption.toString();

@@ -111,7 +111,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
   const profile = applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'});
   const input = {url, profile, resume:Buffer.from(resume.base64,'base64')};
   try {
-    for (const mode of ['advance','invalid','submit','stall','conflict','rejected']) {
+    for (const mode of ['advance','invalid','submit','stall','conflict','rejected','twice','ambiguous-disclosure','foreign-disclosure']) {
       const page = await browser.newPage();
       await fixture(page,true);
       await page.evaluate(mode => {
@@ -135,14 +135,21 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
         if (mode==='conflict') first.querySelector<HTMLInputElement>('[name=first]')!.value='Other';
         const next=document.createElement('button');
         next.type=mode==='submit'?'submit':'button';next.textContent='Next';next.setAttribute('ng-click','nextStep()');
-        form.append(next);(window as any).advances=0;
+        form.append(next);(window as any).advances=0;(window as any).expands=0;
         next.onclick=event=>{
           if (!event.isTrusted) throw new Error('Expected trusted browser input');
           (window as any).advances++;
-          if (mode==='rejected' && (window as any).advances===1) {
-            form.insertAdjacentHTML('beforeend','<div class="jv-apply-form-actions"><p class="jv-apply-error"><a href="" ng-click="showAllFields = true">View Full Application Form</a></p></div>');
-            const link=form.querySelector<HTMLAnchorElement>('a[ng-click="showAllFields = true"]')!;
-            link.onclick=e=>{e.preventDefault();link.hidden=true;};
+          if (['rejected','twice','ambiguous-disclosure','foreign-disclosure'].includes(mode) &&
+              ((window as any).advances===1 || mode==='twice')) {
+            for(const label of first.querySelectorAll('label'))label.hidden=true;
+            const box=document.createElement('div');box.className='jv-apply-form-actions';
+            box.innerHTML='<p class="jv-apply-error"><a href="" ng-click="showAllFields = true">View Full Application Form</a></p>';
+            if(mode==='ambiguous-disclosure')box.firstElementChild!.append(box.querySelector('a')!.cloneNode(true));
+            if(mode==='foreign-disclosure')document.body.append(box);else form.append(box);
+            for(const link of box.querySelectorAll('a'))link.onclick=e=>{
+              e.preventDefault();(window as any).expands++;box.remove();
+              for(const label of first.querySelectorAll('label'))label.hidden=false;
+            };
             return;
           }
           if(mode==='stall')return;
@@ -153,19 +160,15 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
       const inspection=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
       assert.equal((inspection as {jobviteFirstStep?:boolean}).jobviteFirstStep===true,mode!=='submit');
       const attempt=()=>fillApplication(page,input,AbortSignal.timeout(15000),()=>{});
-      const stop = mode==='advance'?/Review the screening step/:mode==='stall'?/clicked Next once/:mode==='conflict'?/saved profile differs/:mode==='rejected'?/stayed on the first step/:/has not advanced/;
+      const stop = ['advance','rejected'].includes(mode) ? /Review the screening step/ :
+        ['stall','ambiguous-disclosure','foreign-disclosure'].includes(mode) ? /clicked Next once/ :
+        mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /stayed on the first step/ : /has not advanced/;
       await assert.rejects(attempt(),stop);
       if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
       if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
-      if (mode==='rejected') {
-        await assert.rejects(attempt(),/has not advanced/);
-        await page.getByText('View Full Application Form').click();
-        await assert.rejects(attempt(),/has not advanced/);
-        await page.locator('section').evaluate(e=>e.insertAdjacentHTML('beforeend','<label>Optional note<input value="Corrected"></label>'));
-        await assert.rejects(attempt(),/Review the screening step/);
-      }
-      const count=mode==='rejected'?2:mode==='advance'||mode==='stall'?1:0;
-      assert.deepEqual(await page.evaluate('([advances,submits,uploads])'),[count,0,1]);
+      if (mode==='twice') await assert.rejects(attempt(),/has not advanced|stayed on the first step/);
+      const count=['rejected','twice'].includes(mode)?2:['advance','stall','ambiguous-disclosure','foreign-disclosure'].includes(mode)?1:0;
+      assert.deepEqual(await page.evaluate('([advances,expands,submits,uploads])'),[count,['rejected','twice'].includes(mode)?1:0,0,1]);
       await page.close();
     }
   } finally { await browser.close(); }

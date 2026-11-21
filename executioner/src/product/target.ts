@@ -77,10 +77,11 @@ export function applicationTarget(input: string): { url: string; key: string; ho
 export function matchingContext(url?:string) {
   if (!url) return {url:null,company:null};
   const parsed=new URL(url);
+  const publication = smartRecruitersPublication(parsed);
   if (!['http:','https:'].includes(parsed.protocol)) throw new Error('Invalid application address');
   parsed.username='';parsed.password='';parsed.hash='';
   for (const key of [...parsed.searchParams.keys()]) if (!/^(?:jobid|job_id|requisitionid|requisition_id|gh_jid)$/iu.test(key)) parsed.searchParams.delete(key);
   const company=/\.(?:myworkdayjobs|myworkdaysite)\.com$/iu.test(parsed.hostname)
-    ? parsed.hostname.split('.')[0]! : parsed.pathname.split('/').filter(Boolean)[0]??parsed.hostname;
+    ? parsed.hostname.split('.')[0]! : publication?.company ?? parsed.pathname.split('/').filter(Boolean)[0] ?? parsed.hostname;
   return {url:parsed.href,company};
 }

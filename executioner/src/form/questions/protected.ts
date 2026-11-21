@@ -7,7 +7,13 @@ export type ProtectedQuestionCategory = "authorization" | "legal" | "consent";
 
 // Parse the whole declaration. A privacy keyword inside a second, unrelated
 // attestation cannot authorize that attestation.
-export function isRecruitmentTermsConsent(label: string): boolean {
+export function isRecruitmentTermsConsent(label: string, requiredEmployerNames: readonly string[] = []): boolean {
+  // A named privacy notice applies only to the employer on the required field.
+  const named = /^you declare that you have read and agree to the privacy notice of (.+)$/u.exec(normalizeCatalogText(label));
+  if (named) {
+    const companyKey = (name: string) => normalizeCatalogText(name).replace(/\bltée\b/gu, 'lte').replace(/\s+/gu, '');
+    return requiredEmployerNames.some(name => companyKey(name) === companyKey(named[1]!));
+  }
   const notices = label.split(/[.!?;\n]+/u).map(normalizeCatalogText).filter(Boolean);
   let requestsConsent = false;
   for (const notice of notices) {

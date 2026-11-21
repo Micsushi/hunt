@@ -7,31 +7,43 @@ import type { MatchedPageResult } from './page-matching.ts';
 const ordinarySkips = new Set(['saved_value_already_present','selected_resume_already_present','optional_field']);
 const attachmentSkips = new Set(['uploaded_attachment_requires_review','resume_upload_already_attempted_review_attachment']);
 
-export async function advanceJobviteScreening(page:Page, url:string, resume:Buffer, report:MatchedPageResult, signal:AbortSignal) {
-  if (new URL(url).hostname !== 'jobs.jobvite.com' || page.url() !== url) return false;
-  const attachment = report.resume === 'unverified' && report.skipped.some(row=>row.label==='Resume' && attachmentSkips.has(row.reason));
-  if (report.resume !== 'verified' && !attachment ||
-      report.componentFailure && !(attachment && report.componentFailure.component==='uploads' && report.componentFailure.operation==='verify_attachment') ||
-      report.skipped.some(row=>!ordinarySkips.has(row.reason) && !(attachment && row.label==='Resume' && attachmentSkips.has(row.reason)))) return false;
-
+async function clickOwnedControl(page:Page, url:string, hash:string, disclosure:boolean, verifiedFields:Record<string,string>, signal:AbortSignal) {
   signal.throwIfAborted();
-  const selectedHash = createHash('sha256').update(resume).digest('hex');
-  const claim = await page.evaluateHandle(({url,selectedHash}) => location.href === url
-    ? (globalThis as any).__huntC3PartialFill?.resumeAttempt?.claimJobviteNext?.(selectedHash) ?? null : null,{url,selectedHash});
+  const started=Date.now();
+  const claim = await page.evaluateHandle(({url,hash,disclosure,verifiedFields})=>{
+    const receipt=(globalThis as any).__huntC3PartialFill?.resumeAttempt;
+    if (!receipt || location.href!==url) return null;
+    return disclosure ? receipt.claimJobviteDisclosure?.(hash) ?? null : receipt.claimJobviteNext?.(hash,verifiedFields) ?? null;
+  },{url,hash,disclosure,verifiedFields});
   try {
     if (!await claim.evaluate(value=>!!value)) return false;
-    const button = await claim.getProperty('button');
+    const handle = await claim.getProperty('button');
     try {
       signal.throwIfAborted();
-      const next = button.asElement();
-      if (!next) return false;
-      await next.click({timeout:2500});
-      if (!await claim.evaluate(value=>value.clicked())) throw new ApplicationPause('The Jobvite Next control changed. Inspect the application before retrying.');
-    } finally { await button.dispose(); }
+      const button=handle.asElement(),remaining=2500-(Date.now()-started);
+      if (!button || remaining<=0) return false;
+      await button.click({timeout:remaining});
+      if (!await claim.evaluate(value=>value.clicked())) throw new ApplicationPause('The Jobvite control changed. Inspect the application before retrying.');
+    } finally { await handle.dispose(); }
   } finally {
     await claim.evaluate(value=>value?.release()).catch(()=>{});
     await claim.dispose();
   }
+  return true;
+}
+
+export async function advanceJobviteScreening(page:Page, url:string, resume:Buffer, report:MatchedPageResult, signal:AbortSignal):Promise<'screening'|'expanded'|undefined> {
+  if (new URL(url).hostname !== 'jobs.jobvite.com' || page.url() !== url) return;
+  const attachment = report.resume === 'unverified' && report.skipped.some(row=>row.label==='Resume' && attachmentSkips.has(row.reason));
+  if (report.resume !== 'verified' && !attachment ||
+      report.componentFailure && !(attachment && report.componentFailure.component==='uploads' && report.componentFailure.operation==='verify_attachment') ||
+      report.skipped.some(row=>!ordinarySkips.has(row.reason) && !(attachment && row.label==='Resume' && attachmentSkips.has(row.reason)))) return;
+  const verified:Record<string,string> = {};
+  for (const row of report.matching ?? []) {
+    if (row.required && row.outcome==='verified' && typeof row.observedAnswer==='string') verified[row.fieldId]=row.observedAnswer;
+  }
+  const hash = createHash('sha256').update(resume).digest('hex');
+  if (!await clickOwnedControl(page,url,hash,false,verified,signal)) return;
   const deadline = Date.now() + 3500;
   do {
     signal.throwIfAborted();
@@ -41,8 +53,17 @@ export async function advanceJobviteScreening(page:Page, url:string, resume:Buff
       if (receipt?.acknowledgedPanel?.()?.matches('[ng-form="scopeData.step2"]')) return 'screening';
       return receipt?.jobviteRejected?.() ? 'rejected' : 'waiting';
     },url);
-    if (result==='screening') return true;
-    if (result==='rejected') throw new ApplicationPause('Jobvite stayed on the first step and requested more information. Open View Full Application Form to check the employer’s requirements. The attached PDF contents remain unverified.');
+    if (result==='screening') return 'screening';
+    if (result==='rejected') {
+      if (await clickOwnedControl(page,url,hash,true,verified,signal)) {
+        for (let n=0;n<4;n++) {
+          signal.throwIfAborted();
+          if (await page.evaluate(url=>location.href===url && (globalThis as any).__huntC3PartialFill?.resumeAttempt?.jobviteExpanded?.()===true,url)) return 'expanded';
+          await pause(signal);
+        }
+      }
+      throw new ApplicationPause('Jobvite stayed on the first step and requested more information. Review the employer’s full application form. The attached PDF contents remain unverified.');
+    }
     if (result==='changed') break;
     await pause(signal);
   } while (Date.now()<deadline);

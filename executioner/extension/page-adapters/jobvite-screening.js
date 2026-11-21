@@ -105,7 +105,7 @@ export function watchJobviteScreening(receipt, binding, state) {
   first.addEventListener('click', event => {
     if (attachment && event.target.closest?.('[ng-click="removeResume()"],[jv-add-attachment][attachment-label="Resume"]')) invalidate();
   },options);
-  let queuedAttempts = 0, lastValues, rejectionSeen = false;
+  let queuedAttempts = 0, disclosureOpened = false;
   next.addEventListener('click', event => {
     observe(observer.takeRecords());
     if (!event.isTrusted || state.busy || controller.signal.aborted || !attachment || !accepted() || !active() ||
@@ -131,42 +131,55 @@ export function watchJobviteScreening(receipt, binding, state) {
     !el.closest('[hidden],[inert],[aria-hidden=true]');
   const disclosure = () => {
     const links = [...form.querySelectorAll('.jv-apply-form-actions .jv-apply-error a[ng-click="showAllFields = true"]')].filter(visible);
-    return links.length === 1 && links[0].closest('form') === form && links[0].getAttribute('href') === '' &&
-      links[0].textContent.trim().toLowerCase() === 'view full application form' && receipt.acknowledgedPanel() === first;
+    const link = links.length === 1 && links[0];
+    return link && link.closest('form') === form && link.getAttribute('href') === '' &&
+      !link.hasAttribute('target') && link.textContent.trim().toLowerCase() === 'view full application form' ? link : null;
   };
+  const firstReady = () => !state.busy && receipt.acknowledgedPanel() === first &&
+    ![...document.querySelectorAll('[role=dialog],dialog[open]')].some(visible) &&
+    ![...form.querySelectorAll('button[type=submit],input[type=submit]')].some(visible);
   receipt.jobviteRejected = () => {
-    if (!queuedAttempts || !disclosure()) return false;
-    rejectionSeen = true;
+    if (!queuedAttempts || !firstReady() || !disclosure()) return false;
     pending = false;
     clearTimeout(timer);
     return true;
   };
-  const fieldValues = () => [...first.querySelectorAll('input:not([type=hidden]):not([type=file]),textarea,select')].map(e=>
-    [e.name,e.type,e.type==='checkbox'||e.type==='radio' ? e.checked : e.value]);
-  receipt.claimJobviteNext = selectedHash => {
-    const ready = () => !pending && !state.busy && selectedHash === receipt.fileSha256 &&
-      receipt.acknowledgedPanel() === first && next.form === form && form.contains(next) &&
-      form.querySelectorAll('button[ng-click="nextStep()"]').length === 1 &&
-      next.type === 'button' && next.getAttribute('ng-click') === 'nextStep()' && !next.hasAttribute('formaction') &&
-      !next.disabled && next.getAttribute('aria-disabled') !== 'true' &&
-      (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() === 'next' && visible(next) &&
-      ![...document.querySelectorAll('[role=dialog],dialog[open]')].some(visible) &&
-      ![...first.querySelectorAll('input:invalid,select:invalid,textarea:invalid,[aria-invalid=true],[aria-busy=true]')].some(visible) &&
-      ![...form.querySelectorAll('button[type=submit],input[type=submit]')].some(visible);
-    if (!ready() || disclosure() || queuedAttempts >= 2) return null;
-    const values = JSON.stringify(fieldValues());
-    if (queuedAttempts && (!rejectionSeen || values === lastValues)) return null;
+  const required = () => [...first.querySelectorAll('input:required,textarea:required,select:required,input[aria-required=true],textarea[aria-required=true],select[aria-required=true]')].filter(visible);
+  receipt.jobviteExpanded = () => disclosureOpened && firstReady() && !disclosure() && required().length > 0;
+  const claim = (button,ready,onClick) => {
+    if (!ready()) return null;
     const guard = new AbortController();
     const opts = {capture:true,signal:guard.signal};
     let clicked = false;
     const stop = event => {event.preventDefault();event.stopImmediatePropagation();};
     window.addEventListener('click',event=>{
-      if (clicked || !event.isTrusted || !event.composedPath().includes(next) || !ready() ||
-          JSON.stringify(fieldValues()) !== values) { stop(event); return; }
-      clicked = true; queuedAttempts++; lastValues = values; rejectionSeen = false;
+      if (clicked || !event.isTrusted || !event.composedPath().includes(button) || !ready()) { stop(event); return; }
+      clicked = true; onClick();
     },opts);
     window.addEventListener('submit',stop,opts);
-    const timeout=setTimeout(()=>guard.abort(),3500);
-    return {button:next,clicked:()=>clicked,release:()=>{clearTimeout(timeout);guard.abort();}};
+    const timeout=setTimeout(()=>guard.abort(),5000);
+    return {button,clicked:()=>clicked,release:()=>{clearTimeout(timeout);guard.abort();}};
+  };
+  receipt.claimJobviteDisclosure = selectedHash => {
+    const link = disclosure();
+    if (!link) return null;
+    return claim(link,()=>queuedAttempts===1 && !disclosureOpened && selectedHash===receipt.fileSha256 &&
+      firstReady() && disclosure()===link && required().length===0,()=>{disclosureOpened=true;});
+  };
+  receipt.claimJobviteNext = (selectedHash,verifiedFields) => {
+    const ready = () => !pending && selectedHash === receipt.fileSha256 && firstReady() && !disclosure() &&
+      next.form === form && form.contains(next) && form.querySelectorAll('button[ng-click="nextStep()"]').length === 1 &&
+      next.type === 'button' && next.getAttribute('ng-click') === 'nextStep()' && !next.hasAttribute('formaction') &&
+      !next.disabled && next.getAttribute('aria-disabled') !== 'true' &&
+      (next.getAttribute('aria-label') || next.textContent).trim().toLowerCase() === 'next' && visible(next) &&
+      ![...first.querySelectorAll('input:invalid,select:invalid,textarea:invalid,[aria-invalid=true],[aria-busy=true]')].some(visible);
+    return claim(next,()=>{
+      if (!ready()) return false;
+      if (queuedAttempts===0) return true;
+      const fields=required();
+      return queuedAttempts===1 && receipt.jobviteExpanded() && fields.length===Object.keys(verifiedFields).length &&
+        fields.every(e=>e.validity.valid && e.getAttribute('aria-invalid')!=='true' && !!e.value.trim() &&
+          verifiedFields[state.matchingIds?.get(e)] === e.value);
+    },()=>{queuedAttempts++;});
   };
 }

@@ -13,6 +13,7 @@ export interface PartialFillResult {
 export function fillVisibleFields(input?: {
   matchingPlans?: PageAnswerPlan[];
   matchingRunId?: string;
+  queuedScreening?: boolean;
   facts?: readonly { factId: string; value: unknown }[];
   action?: 'fill' | 'undo' | 'redo' | 'status';
   scope?: 'application' | 'page';

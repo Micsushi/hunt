@@ -11,7 +11,7 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
@@ -61,7 +61,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     regionFor, norm, state, deepQuery, visible, editable, checkDeadline
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
-  const { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
+  const screeningFields = adapters.createSmartRecruitersScreening(checkedForm,deepQuery,composedClosest,visible);
+  const { semanticChoiceButton, rawLabelFor, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
+  const labelFor = element => screeningFields.label(element) || baseLabelFor(element);
   const cityChoices = adapters.smartRecruitersCityChoices(createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
   const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
@@ -390,7 +392,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return false;
     };
-    const collectFields = () => deepQuery(applicationStep || document, 'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && scopedControl(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
+    const screeningSelector = checkedForm?.screening ? 'fieldset[role=radiogroup],' : '';
+    const collectFields = () => deepQuery(applicationStep || document, screeningSelector+'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && scopedControl(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
       (fabricWidget(e) || provinceMenu.context(e) || semanticChoiceButton(e) || !['hidden', 'password', 'file', 'submit', 'button', 'reset'].includes(e.type))).map(element => {
       const label = provinceMenu.context(element) ? 'Province' : dialComposite(element)?'Phone country code':labelFor(element);
       return { element, identity:identity(element), controlIdentity:controlIdentity(element), boundLabels:[...element.labels??[]], region:regionFor(element), label,
@@ -419,9 +422,19 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const { isRequired } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
     });
-    const { observe } = createFieldObserver({
+    const { observe:baseObserve } = createFieldObserver({
       deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
+    const observe = (element,label) => {
+      const control = screeningFields.read(element);
+      if (!control) return baseObserve(element,label);
+      state.matchingIds ??= new WeakMap();
+      if (!state.matchingIds.has(element)) state.matchingIds.set(element,crypto.randomUUID());
+      const row = {pageId:location.href,fieldId:state.matchingIds.get(element),question:control.question,
+        control:control.control,options:control.options,required:control.required,selected:control.selected,
+        valid:control.valid,backing:control.value,...(!control.coherent && {state:'ambiguous'})};
+      return {...row,signature:JSON.stringify(row)};
+    };
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {
@@ -435,7 +448,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       result.navigationDiagnostics = readNavigationDiagnostics({noticeMarkers:adapters.noticeMarkers, deepQuery, composedClosest, composedParent, visible, norm});
       state.fabricOptions??=new WeakMap();state.committedChoices??=new WeakMap();
       for(const field of fields) {
-        if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
+        if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !screeningFields.read(field.element) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
           try {const proof=await inspectCommittedChoice(field.element);if(proof)state.committedChoices.set(field.element,proof);else state.committedChoices.delete(field.element);}
           catch {state.committedChoices.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}
         }
@@ -595,8 +608,25 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}
       if(!editable(e)){skip('field_no_longer_editable', 'field_recognition', 'identify_field');continue;}
       if (!fabricWidget(e) && provinceMenu.context(e)) continue; // Process the unique province menu with its country below.
-      if(!isRequired(e)){skip('optional_field');continue;}
+      if(!isRequired(e) && !screeningFields.read(e)?.required){skip('optional_field');continue;}
       if (scope !== 'page' && !applicationRegions.includes(f.region)) { skip('application_form_not_identified', 'page_state', 'identify_application'); continue; }
+      const screenControl = screeningFields.read(e);
+      if (screenControl) {
+        const row=observe(e,f.label), plan=matchingPlans?.find(candidate=>candidate.fieldId===row.fieldId);
+        if (!plan || plan.signature!==row.signature) { reportMatch(row,plan,'observed','field_changed_or_new'); continue; }
+        if (row.selected) { reportExisting(row,plan,row.selected===plan.answer,skip); continue; }
+        if (!queuedScreening || !screenControl.coherent || typeof plan.answer!=='string' || !row.options.includes(plan.answer)) {
+          const reason = !queuedScreening ? 'screening_choice_requires_queue' : plan.reason;
+          skip(reason); reportMatch(row,plan,'unconfirmed',reason,row.selected); continue;
+        }
+        if (await screeningFields.select(e,screenControl,plan.answer,checkDeadline)) {
+          result.filled.push(row.question);reportMatch(row,plan,'verified','product_readback_confirmed',plan.answer);
+        } else {
+          skip('screening_choice_not_confirmed','browser_interaction','verify_selection');
+          reportMatch(row,plan,'unconfirmed','screening_choice_not_confirmed',observe(e,f.label).selected);
+        }
+        continue;
+      }
       if(semanticChoiceButton(e)) {
         const row=observe(e,f.label),plan=matchingPlans?.find(plan=>plan.fieldId===row.fieldId);
         skip('button_choice_interaction_unsupported', 'browser_interaction', 'operate_choice');reportMatch(row,plan,'unconfirmed','button_choice_interaction_unsupported',row.observedAnswer);continue;

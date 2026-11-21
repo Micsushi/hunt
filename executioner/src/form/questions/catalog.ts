@@ -92,6 +92,11 @@ export const questionCatalog = Object.freeze([
   entry("s1-question-resume", "Resume", "file_upload", { kind: "resume" }),
 ] as const satisfies readonly QuestionCatalogEntry[]);
 
+export const canadianWorkEligibilityLabels = [
+  "Are you currently eligible to work in Canada?",
+  "Êtes vous présentement admissible à travailler au Canada? | Are you currently eligible to work in Canada?",
+] as const;
+
 const questionAliasCatalog = Object.freeze([
   // Existing current-page wording shares the same stable facts in both workflows.
   aliasEntry("s1-question-given-name", ["first name","legal first name","prénom"], ["text", "textarea"], {"kind":"profile","factId":"given_name"}),
@@ -150,7 +155,7 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry(
     "s1-question-work-authorization",
     ["Are you legally authorized to work in this country?", "Are you legally entitled to work in Canada?",
-      "Are you authorized to work lawfully in the Canada?"],
+      "Are you authorized to work lawfully in the Canada?", ...canadianWorkEligibilityLabels],
     ["radio", "select", "listbox"],
   ),
   aliasEntry(

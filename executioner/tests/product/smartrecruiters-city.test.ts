@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
+import { prepareCurrentPage } from '../../src/product/current-page-workflow.ts';
 import { advanceSmartRecruiters } from '../../src/product/smartrecruiters-workflow.ts';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
@@ -129,4 +130,83 @@ test('only the queued OneClick personal footer advances and the final action rem
     assert.match(String(await advanceSmartRecruiters(page,page.url(),report,signal)??''),/final submission button/);
     assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
   } finally { await browser.close(); }
+});
+
+
+test('queued screening choices require independent backing and the popup preserves them', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/abcd1234-1111-2222-3333-111111111111/screening';
+    await page.route(url,route=>route.fulfill({contentType:'text/html',body:
+      '<main><oc-screening-questions><h1>Preliminary questions</h1><oc-screening-questions-form>' +
+      '<sr-screening-questions-form data-test=screening-questions-form><sr-question-field-radio><spl-radio-group required value="">' +
+      '<span slot=label-content>Eligible for the role?</span><spl-radio label=Yes role=radio value=1 aria-checked=false aria-disabled=false>Yes</spl-radio>' +
+      '<spl-radio label=No role=radio value=0 aria-checked=false aria-disabled=false>No</spl-radio></spl-radio-group></sr-question-field-radio>' +
+      '<sr-question-field-select><spl-autocomplete id=question_past></spl-autocomplete></sr-question-field-select></sr-screening-questions-form>' +
+      '</oc-screening-questions-form><oc-consent-decisions><spl-checkbox data-test=consent-box><span slot=label-content>Employer privacy notice</span></spl-checkbox>' +
+      '</oc-consent-decisions><oc-nav-screening-questions><button>Submit</button></oc-nav-screening-questions></oc-screening-questions></main>'}));
+    await page.goto(url);
+    await page.evaluate(() => {
+      const group=document.querySelector('spl-radio-group')!;
+      group.attachShadow({mode:'open'}).innerHTML='<slot name=label-content></slot><fieldset role=radiogroup aria-required=true><slot></slot></fieldset>';
+      for (const node of group.querySelectorAll('spl-radio')) node.addEventListener('click',()=> {
+        group.setAttribute('value',node.getAttribute('value')!);
+        for (const peer of group.querySelectorAll('spl-radio')) peer.setAttribute('aria-checked',String(peer===node));
+      });
+      const consent=document.querySelector('spl-checkbox')!;
+      consent.attachShadow({mode:'open'}).innerHTML='<slot name=label-content></slot><label>*<input type=checkbox aria-required=true></label>';
+      const rows=[{fieldValue:'a',id:'a',label:'Non | No'},{fieldValue:'b',id:'b',label:'Oui | Yes'}];
+      document.querySelector('sr-screening-questions-form')!.setAttribute('definition',JSON.stringify({questions:[
+        {id:'past',label:'Former employee?',type:'select',required:true,fields:[{multipleChoice:false,questionsFieldValues:rows}]}]}));
+      const host=document.querySelector('spl-autocomplete')!;
+      const root=host.attachShadow({mode:'open'});
+      root.innerHTML='<input role=combobox id=question_past aria-required=true aria-invalid=false aria-controls=menu aria-expanded=false><div id=menu role=listbox hidden></div>';
+      const input=root.querySelector('input')!, menu=root.querySelector<HTMLElement>('[role=listbox]')!;
+      input.onclick=()=>{input.setAttribute('aria-expanded','true');menu.hidden=false;};
+      for (const row of rows) {
+        const node=document.createElement('spl-dropdown-item');
+        node.innerHTML='<div class="c-spl-autocomplete-default-option"><div class="c-spl-autocomplete-option-content"><spl-truncate></spl-truncate></div></div>';
+        const title=node.querySelector<HTMLElement>('spl-truncate')!;
+        title.title=row.label;title.textContent=row.label;
+        node.attachShadow({mode:'open'}).innerHTML='<div role=option aria-disabled=false><slot></slot></div>';
+        node.onclick=()=>{
+          input.value=row.label;input.setAttribute('aria-expanded','false');menu.hidden=true;
+          (host as HTMLElement & {value:unknown}).value={value:row.id};
+          host.setAttribute('value','[object Object]');
+        };
+        menu.append(node);
+      }
+    });
+    const snapshot=async()=> (await page.evaluate(fillVisibleFields,{action:'status' as const})).matching!;
+    const initial=await snapshot();
+    assert.deepEqual(initial.map(row=>row.question).sort(),['Eligible for the role?','Employer privacy notice','Former employee?'].sort());
+    const plans=initial.filter(row=>row.control!=='checkbox').map(row=>({fieldId:row.fieldId,signature:row.signature,
+      answer:row.control==='radio'?'Yes':'Non | No',provisional:false,reason:'saved_fact'}));
+    const popup=await page.evaluate(fillVisibleFields,{matchingPlans:plans});
+    assert.deepEqual(popup.filled,[]);
+    assert.equal((await snapshot()).filter(row=>row.selected).length,0);
+    const queued=await page.evaluate(fillVisibleFields,{matchingPlans:plans,queuedScreening:true});
+    assert.deepEqual(queued.filled.sort(),['Eligible for the role?','Former employee?'],JSON.stringify(queued.skipped));
+    const selected=await snapshot();
+    assert.equal(selected.find(row=>row.control==='radio')?.selected,'Yes');
+    assert.equal(selected.find(row=>row.control==='listbox')?.selected,'Non | No');
+    const checkbox=selected.find(row=>row.control==='checkbox')!;
+    const consent=await page.evaluate(fillVisibleFields,{matchingPlans:[{fieldId:checkbox.fieldId,signature:checkbox.signature,answer:true,provisional:false,reason:'saved_consent'}]});
+    assert.deepEqual(consent.filled,['Employer privacy notice']);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.equal(await page.locator('input[type=checkbox]').isChecked(),false);
+    await page.locator('spl-autocomplete').evaluate((host:any)=>{host.value=undefined;});
+    assert.equal((await snapshot()).find(row=>row.control==='listbox')?.selected,'');
+    await page.locator('spl-radio-group').evaluate(group=>{
+      group.setAttribute('value','');
+      for(const radio of group.querySelectorAll('spl-radio')) radio.setAttribute('aria-checked','false');
+      group.querySelector('span')!.textContent='Vérification d’emploi | If advanced to an offer, you consent to respecting the employment verification and background check process.';
+    });
+    const profile=applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'fixture@example.invalid'});
+    await assert.rejects(prepareCurrentPage(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(10000),()=>{}),
+      /Employment verification and background check consent: choose your answer on the employer page/);
+    assert.equal(await page.locator('spl-radio-group').getAttribute('value'),'');
+
+  } finally {await browser.close();}
 });

@@ -209,8 +209,10 @@ unavailable preview and a file that differs from the selected PDF.
 
 On a recognized two-step Jobvite form, **Prepare this job** adds the selected application
 to Applications with the saved default résumé. Choose **Run** there. Once Jobvite
-acknowledges the selected file and the first step is valid, C3 clicks **Next** once,
-fills the screening step and stops before submission. Use the existing queue entry
+acknowledges the selected file and the first step is valid, C3 clicks **Next**.
+If Jobvite requests more information in a collapsed form, C3 can open **View Full
+Application Form**, recheck the newly visible required fields and retry **Next** once.
+C3 fills the screening step and stops before submission. Use the existing queue entry
 for a job imported from C1 to preserve its selected résumé.
 
 **Fill current page** stays on the current Jobvite step. To continue manually, choose

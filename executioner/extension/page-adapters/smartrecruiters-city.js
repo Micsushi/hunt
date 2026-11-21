@@ -1,3 +1,23 @@
+// The dropdown item forwards its default slot through the enclosing select option.
+export function smartRecruitersOptions(widget, list, labelSelector, deepQuery, visible) {
+  const result = [];
+  for (const item of deepQuery(widget,'spl-dropdown-item').filter(visible)) {
+    const options = [...item.shadowRoot?.querySelectorAll('[role=option]')??[]];
+    if (options.length !== 1 || !visible(options[0])) continue;
+    let ancestor = item;
+    while (ancestor && ancestor !== list) ancestor = ancestor.assignedSlot || ancestor.parentNode || ancestor.host;
+    if (!ancestor) continue;
+    const slots = [...options[0].querySelectorAll('slot')].filter(slot => !slot.name);
+    const content = slots.length === 1 ? slots[0].assignedElements({flatten:true}) : [];
+    if (content.length !== 1 || !content[0].matches('.c-spl-autocomplete-default-option')) continue;
+    const labels = content[0].querySelectorAll(labelSelector);
+    if (labels.length === 1 && labels[0].title.trim()) {
+      result.push({node:options[0],label:labels[0].title.trim(),disabled:options[0].getAttribute('aria-disabled')==='true'});
+    }
+  }
+  return result;
+}
+
 // OneClick renders each suggestion in a dropdown item's shadow root and slots its full location label.
 export function smartRecruitersCityChoices(fallback, form, deepQuery, composedClosest, visible) {
   if (!form) return fallback;
@@ -28,21 +48,7 @@ export function smartRecruitersCityChoices(fallback, form, deepQuery, composedCl
     if (expanded && visible(lists[0])) {
       result.popup = lists[0];
       result.popupStatus = 'ready';
-      for (const item of deepQuery(widget,'spl-dropdown-item').filter(visible)) {
-        const options = [...item.shadowRoot?.querySelectorAll('[role=option]')??[]];
-        if (options.length !== 1 || !visible(options[0])) continue;
-        let ancestor = item;
-        while (ancestor && ancestor !== lists[0]) ancestor = ancestor.assignedSlot || ancestor.parentNode || ancestor.host;
-        if (!ancestor) continue;
-        // The dropdown item forwards its default slot through the enclosing select option.
-        const slots = [...options[0].querySelectorAll('slot')].filter(slot => !slot.name);
-        const content = slots.length === 1 ? slots[0].assignedElements({flatten:true}) : [];
-        if (content.length !== 1 || !content[0].matches('.c-spl-autocomplete-default-option')) continue;
-        const labels = content[0].querySelectorAll('[data-sr-id$="-content"] spl-truncate[title]');
-        if (labels.length === 1 && labels[0].title.trim()) {
-          result.options.push({node:options[0],label:labels[0].title.trim(),disabled:options[0].getAttribute('aria-disabled')==='true'});
-        }
-      }
+      result.options = smartRecruitersOptions(widget,lists[0],'[data-sr-id$="-content"] spl-truncate[title]',deepQuery,visible);
     }
     result.empty = !committed;
     result.valid = true;

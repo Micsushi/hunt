@@ -149,7 +149,7 @@ export async function fillGenericApplication(
       const interruption = await prepareGenericDocument(page);
       if (interruption) return interruption;
       return {...await page.evaluate(fillVisibleFields, {
-    action,matchingPlans,matchingRunId,facts: effectiveProfileFacts(settings),
+    action,matchingPlans,matchingRunId,queuedScreening:true,facts: effectiveProfileFacts(settings),
     expectedUrl: boundUrl,
     expiresAt,
     resume: action==='fill'?{name:'Resume.pdf', base64:resume.toString('base64')}:undefined,
