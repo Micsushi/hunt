@@ -7,7 +7,7 @@ export const applicationAttachmentControls = 'input[type=file],[role=group][aria
 /** OneClick uses a separate shadow root for each field inside its application component. */
 export function smartRecruitersForm(deepQuery, composedClosest, visible) {
   if (location.origin !== 'https://jobs.smartrecruiters.com' ||
-      !/^\/oneclick-ui\/company\/[\w-]+\/publication\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/?$/i.test(location.pathname)) return;
+      !/^\/oneclick-ui\/company\/[\w-]+\/publication\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/?$/i.test(location.pathname.replace(/\/screening\/?$/, ''))) return;
   const activeForms = () => deepQuery(document,'oc-oneclick-form').filter(form => composedClosest(form,'main') &&
     !composedClosest(form,'[hidden],[inert],[aria-hidden=true]'));
   const forms = activeForms();

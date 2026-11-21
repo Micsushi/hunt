@@ -1,3 +1,5 @@
+import { smartRecruitersPublication } from './smartrecruiters-target.ts';
+
 export type AtsFamily = "workday" | "greenhouse" | "lever" | "ashby" | "workable";
 
 /** Explicit unfamiliar application targets. These never use the hosted Review or Submit path. */
@@ -28,7 +30,7 @@ export function genericApplicationTarget(input: string): {
     posting = pathname.match(/^\/careers\/\d+(?=\/[\w-]+(?:\/application)?$|$)/)?.[0];
   } else if (host === "jobs.smartrecruiters.com") {
     posting = pathname.match(/^\/[\w-]+\/\d+(?:-[\w-]+)?$/)?.[0]?.match(/^\/[^/]+\/\d+/)?.[0] ??
-      pathname.match(/^\/oneclick-ui\/company\/[\w-]+\/publication\/[a-f0-9-]{36}$/i)?.[0];
+      smartRecruitersPublication(url)?.base;
   } else if (host === "www.amazon.jobs" || host === "amazon.jobs") {
     const id = pathname.match(/^\/(?:[a-z-]+\/)?(?:applicant\/)?jobs\/(\d+)\/[\w-]+$/i)?.[1];
     posting = id ? `/jobs/${id}` : undefined;
