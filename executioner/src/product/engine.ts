@@ -70,8 +70,10 @@ export async function fillApplication(page: Page, input: ProductInput, signal: A
         throw stopped;
       }
       const siteError = recoveryObservation.kind === 'employer_error';
-      const busyCatalog = error instanceof ApplicationPause && /\bprofile_answer_missing\b/.test(error.message) &&
-        await preserveFailure(error, () => page.locator('[data-automation-id="responsiveMonikerPrompt"][aria-busy="true"]:visible').evaluateAll(prompts => {
+      const sourceCommitFailed = error instanceof ApplicationPause &&
+        error.message.startsWith('Application paused: profile_port_unavailable (source.how_did_you_hear).');
+      const busyCatalog = error instanceof ApplicationPause && (sourceCommitFailed || /\bprofile_answer_missing\b/.test(error.message)) &&
+        await preserveFailure(error, () => page.locator('[data-automation-id="responsiveMonikerPrompt"][aria-busy="true"]:visible').evaluateAll((prompts, sourceOnly) => {
           const visible = (element: Element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
           return prompts.some(prompt => {
             const widget = prompt.getAttribute("data-associated-widget");
@@ -79,9 +81,10 @@ export async function fillApplication(page: Page, input: ProductInput, signal: A
             const controls = [...document.querySelectorAll('[data-automation-id="applyFlowPage"] input[data-uxi-multiselect-id]')]
               .filter(control => control.getAttribute("data-uxi-multiselect-id") === widget && visible(control));
             return controls.length === 1 && controls[0]!.getAttribute("aria-required") === "true" &&
+              (!sourceOnly || controls[0]!.id === 'source--source') &&
               ![...prompt.querySelectorAll('[role="option"], [data-automation-id="promptOption"], [data-automation-id="promptLeafNode"]')].some(visible);
           });
-        }));
+        }, sourceCommitFailed));
       if (!siteError && !busyCatalog) throw error;
       if (siteError && siteRecoveries >= 3 && !siteReopened) {
         // Reloading can preserve a broken Workday route. Reopen the original

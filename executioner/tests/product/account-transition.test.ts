@@ -14,7 +14,7 @@ test("missing answers reload only a bound required empty busy catalog and only o
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
-    for (const scenario of ["recovers", "persistent", "ordinary-missing", "wrong-owner", "has-options"]) {
+    for (const scenario of ["recovers", "persistent", "ordinary-missing", "wrong-owner", "has-options", "source-commit", "other-busy-widget"]) {
       const page = await browser.newPage();
       let loads = 0;
       await page.route("**/*", route => {
@@ -27,7 +27,7 @@ test("missing answers reload only a bound required empty busy catalog and only o
       // the recovery decision still reads actual browser ownership/loading DOM.
       const install = async () => page.evaluate(({ scenario }) => {
         document.querySelector('[data-automation-id="applyFlowPage"]')!.insertAdjacentHTML('beforeend',
-          '<input aria-required="true" data-uxi-multiselect-id="source-widget">');
+          `<input id="${scenario === "other-busy-widget" ? "phone--country" : "source--source"}" aria-required="true" data-uxi-multiselect-id="source-widget">`);
         if (scenario !== "ordinary-missing") document.body.insertAdjacentHTML('beforeend',
           `<div data-automation-id="responsiveMonikerPrompt" aria-busy="true" data-associated-widget="${scenario === "wrong-owner" ? "different-widget" : "source-widget"}"><div>Loading</div>${scenario === "has-options" ? '<div role="option">Available</div>' : ''}</div>`);
       }, { scenario });
@@ -40,11 +40,17 @@ test("missing answers reload only a bound required empty busy catalog and only o
         resume: Buffer.from("%PDF-1.4\nsynthetic fixture"),
       }, AbortSignal.timeout(25_000), stage => {
         stages.push(stage);
-        if (stage === "Filling profile" && (loads === 1 || scenario === "persistent")) throw new ApplicationPause("Application paused: profile_answer_missing.");
+        if (stage === "Filling profile" && (loads === 1 || scenario === "persistent")) {
+          if (scenario === "source-commit" || scenario === "other-busy-widget") {
+            throw new ApplicationPause("Application paused: profile_port_unavailable (source.how_did_you_hear). Review the tab before retrying.");
+          }
+          throw new ApplicationPause("Application paused: profile_answer_missing.");
+        }
       });
-      if (scenario === "recovers") assert.match((await fill).reviewDigest, /^[a-f0-9]{64}$/);
+      if (scenario === "recovers" || scenario === "source-commit") assert.match((await fill).reviewDigest, /^[a-f0-9]{64}$/);
+      else if (scenario === "other-busy-widget") await assert.rejects(fill, /profile_port_unavailable/);
       else await assert.rejects(fill, scenario === "persistent" ? /still loading required choices/ : /profile_answer_missing/);
-      const recoveryExpected = scenario === "recovers" || scenario === "persistent";
+      const recoveryExpected = ["recovers", "persistent", "source-commit"].includes(scenario);
       assert.equal(loads, recoveryExpected ? 2 : 1);
       assert.equal(stages.filter(stage => stage === "Recovering employer page").length, recoveryExpected ? 1 : 0);
       assert.equal(await page.evaluate("submits"), 0);
