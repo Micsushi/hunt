@@ -15,6 +15,7 @@ import { resolveQuestion } from '../form/questions/catalog.ts';
 import { applicationTarget } from './target.ts';
 import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt } from './application-contract.ts';
 import { hasHostedResume, prepareHostedResume, verifyHostedAttachments } from './uploads/hosted.ts';
+import type { WorkableReviewAttempt } from './workable-resume.ts';
 import { createMatchingBacklog, type MatchingObservation } from './matching-backlog.ts';
 
 export { inspectHostedFields };
@@ -44,12 +45,12 @@ export async function hostedReviewDigest(page: Page, expectedResumeSha256?: stri
   return (await hostedReviewSnapshot(page, expectedResumeSha256)).digest;
 }
 
-export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt): Promise<{ digest: string; resumeExpected: boolean }> {
+export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt, review?: WorkableReviewAttempt): Promise<{ digest: string; resumeExpected: boolean }> {
   requireHostedApplication(await observeHostedPage(page));
   const fields = await inspectHostedFields(page);
   const submit = page.getByRole('button', { name: submitName });
   if (!fields.length || await submit.count() !== 1 || !await submit.isVisible() || !await submit.isEnabled()) throw new ApplicationPause('The application is not ready for review.');
-  const upload = await verifyHostedAttachments(page, fields, resumeExpected, resumeUpload, expectedResumeSha256);
+  const upload = await verifyHostedAttachments(page, fields, resumeExpected, resumeUpload, expectedResumeSha256, review);
   for (const f of fields) {
     const filled = f.kind === 'file' ? upload.filledKeys.has(f.key) : f.kind === 'checkbox' || f.kind === 'radio' ? f.checked : !!f.value.trim();
     if (f.required && !filled || !f.valid) throw new ApplicationPause('Required or invalid fields remain. Inspect the application.');
@@ -86,6 +87,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
   const resumeSha256 = createHash('sha256').update(input.resume).digest('hex');
   let resumeExpected = input.resumeExpected;
   let resumeUpload=input.resumeUpload;
+  const workableReview = {selectedSize:input.resume.length,rechecked:false};
   let pendingPreview: {error: AttachmentPreviewUnavailable; documentKey: string} | undefined;
   const history: {label:string;kind:string;required:boolean;options:string[];result:string;question:ReturnType<typeof resolveQuestion>;answerKind?:string;lane?:string}[] = [];
   const postingEmployer = target.ats === 'ashby' ? await page.locator('script[type="application/ld+json"]').evaluateAll((scripts, id) => {
@@ -381,7 +383,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         known.set(identity,String(f.kind==='checkbox'?committed?.checked:committed?.value??expected)); changed = true;
       }
       if (!changed && pendingPreview) throw pendingPreview.error;
-      if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
+      if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
       await page.waitForTimeout(300);
     }
     throw new ApplicationPause('The form kept changing. Inspect the remaining fields.');

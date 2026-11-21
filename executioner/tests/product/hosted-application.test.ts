@@ -14,6 +14,7 @@ import {hostedReviewSnapshot} from '../../src/product/hosted-application.ts';
 import {uploadGreenhouseResume,verifiedGreenhouseResume} from '../../src/product/greenhouse-resume.ts';
 import {ApplicationQueue} from '../../src/product/queue.ts';
 import {componentFailure} from '../../src/product/component-diagnostics.ts';
+import type {ResumeUploadReceipt} from '../../src/product/application-contract.ts';
 
 const id='11111111-1111-4111-8111-111111111111';
 test('Ashby location retries once when a delayed country focus closes its uncommitted menu',async()=>{
@@ -217,12 +218,27 @@ test('restored Workable optional attachments are preserved and required uploads 
     await p.exposeFunction('recordUpload',()=>{uploadChanges++;});
     await p.locator('[name=attachment]').evaluate(e=>e.addEventListener('change',()=>(window as any).recordUpload()));
 
-    const initial=await fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{});
+    let receipt: ResumeUploadReceipt | undefined;
+    const initial=await fillApplication(p,{url,profile,resume,onResumeUpload:value=>{receipt=value;}},AbortSignal.timeout(15000),()=>{});
     assert.equal(initial.resumeExpected,true);
     assert.equal(await p.locator('[name=attachment]').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),resume.toString());
     assert.equal(await p.locator('[name=attachment]').evaluate((e:HTMLInputElement)=>e.files![0]!.name),`Resume-${createHash('sha256').update(resume).digest('hex').slice(0,12)}.pdf`);
     assert.equal(await p.locator('[data-action=view]').getAttribute('href'),'/first-upload.pdf');
     assert.equal(previewReads,1);
+    assert.equal(uploadChanges,1);
+    const review = {selectedSize:resume.length,rechecked:false};
+    const snapshot = () => hostedReviewSnapshot(p,createHash('sha256').update(resume).digest('hex'),true,receipt,review);
+    const rerender = () => p.locator('div[data-role=dropzone]').evaluate(group=>group.append(document.createElement('span')));
+    await p.locator('div[data-role=dropzone]').evaluate(group=>{
+      group.setAttribute('aria-busy','true');group.removeAttribute('aria-busy');
+    });
+    assert.equal((await snapshot()).resumeExpected,true);
+    assert.equal(previewReads,2);
+    await rerender();
+    await assert.rejects(snapshot(),error=>{
+      assert.equal(componentFailure(error)?.operation,'review_workable_already_rechecked_watcher_invalidated');return true;
+    });
+    assert.equal(previewReads,2);
     assert.equal(uploadChanges,1);
     await p.locator('[type=email]').fill('');
     await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-another-selection')},AbortSignal.timeout(15000),()=>{}),/preview does not confirm/i);
