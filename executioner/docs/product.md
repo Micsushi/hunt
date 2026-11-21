@@ -48,10 +48,12 @@ returns the approved question-to-fact mappings and answer groups. Review the bac
 after a batch, then approve changes separately. C3.2 observes the selected document,
 asks the service to resolve those exact controls, commits supported answers, and
 reads their resulting state. Newly revealed fields receive another bounded pass.
-One Undo reverses supported changes across fill passes and preserves later user edits.
-On SmartRecruiters screening pages, Undo can clear a list choice when the employer
-provides a Clear value button. A Yes/No question with no clear action stays answered.
-You can change that answer on the employer page before submitting.
+**Undo fill** reverses supported edits made by **Fill current page** across its fill
+passes. It preserves later edits. **Prepare this job** uses a separate workflow.
+To revise a screening answer filled during queued preparation, change it on the
+employer page. For a SmartRecruiters list choice, use the employer's **Clear value**
+control when it is available. A Yes/No question with no clear action stays answered
+until you choose a different answer.
 The popup reports when suggested answers or uncertain matches need review.
 
 Update the local service and reload the existing extension together. The service

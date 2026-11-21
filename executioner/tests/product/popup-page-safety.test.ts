@@ -4,6 +4,7 @@ import {cpSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {chromium,type BrowserContext} from 'playwright';
+import {fillVisibleFields} from '../../extension/generic-fill.js';
 import {startProductServer} from '../../src/product/server.ts';
 import {fixtureApplicantProfile} from './fixture.ts';
 
@@ -50,9 +51,27 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     assert.equal(await worker.evaluate(async()=> (await (globalThis as any).chrome.storage.local.get('token')).token),token);
     await page.screenshot({path:join(root,'unchanged-queued-draft.png')});
     await service.queue.action(queued.id,'remove');
+    // The queued filler evaluates in the employer document. Its journal is outside the extension's isolated world.
+    const mainWorldFill=await page.evaluate(fillVisibleFields,{facts:[{factId:'given_name',value:'Queued fixture'}]});
+    assert.equal(mainWorldFill.canUndo,true);
+    assert.equal(await page.locator('input').first().inputValue(),'Queued fixture');
+    const isolated=await send('inspect');
+    assert.equal(isolated.result.canUndo,false);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.equal(await page.locator('input').first().inputValue(),'');
     const allowed=await send('fill',inspect.result.documentId);assert.equal(allowed.ok,true,JSON.stringify(allowed));
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
     assert.equal(await page.locator('input[type=file]').evaluate((el:any)=>el.files.length),1);
+    assert.equal(allowed.result.canUndo,true);
+    const history=await send('inspect');
+    assert.equal(history.result.canUndo,true,'the popup and public page actions share standalone page history');
+    const undone=await send('undo',history.result.documentId);
+    assert.equal(undone.ok,true,JSON.stringify(undone));
+    assert.equal(undone.result.canRedo,true);
+    assert.equal(await page.locator('input').first().inputValue(),'');
+    const redone=await send('redo',history.result.documentId);
+    assert.equal(redone.ok,true,JSON.stringify(redone));
+    assert.equal(await page.locator('input').first().inputValue(),'Fixture');
     const oneClick='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
     const childUrl=new URL('/unrelated-contact',oneClick).href;
     const contact='<label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label>';
