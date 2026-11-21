@@ -347,7 +347,16 @@ test('custom required buttons and one-of questions must be answered before revie
     assert.equal(await p.locator('input[type=checkbox]').isChecked(),false);
     await p.locator('#source-copy').evaluate(e=>e.removeAttribute('hidden'));
     await assert.rejects(reviewDigest(p),/ambiguous/i);
+    await p.locator('[data-field-entry-id=source]').evaluate(entry=>{
+      entry.querySelector('label')!.classList.remove('_required_fixture');
+      const marker=document.createElement('span');
+      marker.className='ashby-application-form-field-required';
+      marker.textContent='*';
+      entry.prepend(marker);
+    });
+    await assert.rejects(reviewDigest(p),/ambiguous/i);
     await p.locator('#source-copy').evaluate(e=>e.setAttribute('hidden',''));
+    assert.equal((await inspectHostedFields(p)).find(field=>field.label==='How did you hear about us?')?.required,true);
     await p.locator('#title-copy').evaluate(e=>e.removeAttribute('hidden'));
     await assert.rejects(reviewDigest(p),/ambiguous/i);
     await p.locator('#title-copy').evaluate(e=>e.setAttribute('hidden',''));

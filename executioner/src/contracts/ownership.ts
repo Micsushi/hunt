@@ -518,6 +518,7 @@ export const productBoundary = {
       "extension/page-runtime/field-recognition.js",
       "extension/page-runtime/phone-reader.js",
       "extension/page-runtime/required-field.js",
+      "src/product/hosted-field-observation.ts",
     ],
     answer_matching: [
       "extension/page-runtime/legacy-page-answers.js",
@@ -735,10 +736,11 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/target.ts",
     ],
+    "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts"],
     "src/product/hosted-application.ts": [
       "extension/page-adapters/document.js",
       "extension/form-page.js",
-      "extension/question-context.js",
+      "src/product/hosted-field-observation.ts",
       "src/form/questions/protected.ts",
       "src/form/questions/catalog.ts",
       "src/product/matching-backlog.ts",
