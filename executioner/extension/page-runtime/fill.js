@@ -13,10 +13,11 @@ import { createPhoneReader } from './phone-reader.js';
 /** Runs in the exact document selected by the injection boundary. */
 export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
-  let checkedStep;
+  let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
     if (expiresAt !== undefined && Date.now() >= expiresAt) throw new Error('Field changes expired. Check the page and reopen C3 before retrying.');
     if (checkedStep && state.resumeAttempt?.acknowledgedPanel?.() !== checkedStep) throw new Error('The application step changed. Inspect the form again.');
+    if (checkedForm && !checkedForm.current() || checkedUpload && !checkedUpload()) throw new Error('The application form or attachment changed. Inspect the form again.');
   };
   checkDeadline();
   if (expectedUrl !== undefined && location.href !== expectedUrl) throw new Error('The page changed. Reopen C3 on the application.');
@@ -49,7 +50,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     try {return proof.valid()?proof:null;} catch {return null;}
   };
   const customForm = adapters.customApplicationForm(deepQuery, composedClosest, visible);
-  if (customForm) scope = 'application';
+  if (customForm) {
+    scope = 'application';
+    result.frameScope = 'document';
+    if (customForm.owner) checkedForm = customForm;
+  }
   const regionFor = e => verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
   const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
     regionFor, norm, state, deepQuery, visible, editable, checkDeadline
@@ -170,6 +175,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   };
   const { write:nativeWrite, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause, optionKey, selection } = createControlInteraction({ state, checkDeadline, boundChoice, editable, visible, choiceState });
   const write = (element,value) => {
+    if (customForm) {
+      checkDeadline();
+      if (!checkedForm || checkedForm.region(element)!==checkedForm.owner) throw new Error('The field moved outside the selected application form.');
+    }
     if (checkedStep && (!insideStep(element,checkedStep) || state.resumeAttempt?.acknowledgedPanel?.() !== checkedStep)) {
       throw new Error('The control moved outside the checked application step.');
     }
@@ -437,6 +446,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
 
     let uploadReceipt = state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
     let parserPending = false;
+    const acknowledged = receipt => !!receipt?.customUpload && checkedForm?.owner===receipt.region && receipt.selectedFileAccepted &&
+      !!receipt.fileSha256 && state.fileEvents?.get(receipt.element)===receipt.file &&
+      !parserBusy() && receipt.customUpload.acknowledged(receipt.file.name);
     if (validResume) {
       const resumeFields = deepQuery(document, 'input[type=file]').filter(e =>
         applicationRegions.includes(regionFor(e)) && fileBinding(e));
@@ -466,9 +478,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       } else if (targets.length === 1) {
         const e = targets[0], label = fileBinding(e).label, fileRegion = regionFor(e);
         result.resume = 'unverified';
-        if (externalAttachment(e)) {
+        const customUpload = customForm?.upload?.(e);
+        if (customUpload?.occupied || externalAttachment(e)) {
           addSkip(label, 'existing_remote_attachment_requires_review', 'uploads', 'verify_attachment');
-          parserPending=parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
+          parserPending=customUpload?.occupied || parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
         } else if ((e.files?.length ?? 0) > 1 && replaceExistingResume) {
           addSkip(label, 'ambiguous_resume_attachment', 'uploads', 'verify_attachment');
         } else if (e.files?.length && (!replaceExistingResume || isPortalResumeBinding(state.nativeFileBindings?.get(e)))) {
@@ -484,7 +497,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             if(!fileBinding(e) || regionFor(e)!==fileRegion || read(e)!==before || owner && (!owner.isConnected || !composedContains(owner, e))) {
               addSkip(label, 'resume_control_changed', 'uploads', 'verify_attachment');return result;
             }
-            uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,...adapters.clientAttachmentState(owner,fileBinding(e)),
+            uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,customUpload,...adapters.clientAttachmentState(owner,fileBinding(e)),
               externalized:false,parserCompleted:false,owner,fileSha256,hadAttachmentId:!!owner && attachmentIds(owner).some(input=>input.value),hadUploadSuccess:!!owner && (uploadSuccess(owner,file.name).length>0 || uploadRemoveControls(owner,file.name).length>0),selectedFileAccepted:false};
             state.resumeAttempt=uploadReceipt;
             adapters.watchJobviteScreening(uploadReceipt, state.nativeFileBindings?.get(e), state);
@@ -498,7 +511,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
                 await new Promise(resolve => setTimeout(resolve,100));
                 checkDeadline();observeParser();
                 uploadReceipt.externalized ||= !e.isConnected || externalAttachment(e) || read(e)!==file;
-                if (Date.now()-started>=600 && (!uploadReceipt.externalized && !parserBusy() || ownedUploadCompleted(uploadReceipt) || uploadReceipt.parserCompleted)) break;
+                if (Date.now()-started>=600 && (!uploadReceipt.externalized && !parserBusy() || ownedUploadCompleted(uploadReceipt) || uploadReceipt.parserCompleted || acknowledged(uploadReceipt))) break;
               } while (Date.now()-started<3000);
             } finally { observer.disconnect(); }
             if (!uploadReceipt.externalized && fileBinding(e) && regionFor(e) === fileRegion && e.files?.length === 1 && read(e) === file && e.validity.valid) {
@@ -523,6 +536,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           addSkip('Resume', 'ambiguous_duplicate', 'uploads', 'identify_attachment');
         } else addSkip('Resume', 'resume_control_not_identified');
       }
+    }
+    if (uploadReceipt?.customUpload && uploadReceipt.externalized) {
+      // An employer-rendered item acknowledges receipt of the selection, not the stored PDF bytes.
+      result.resume='unverified';
+      parserPending=!acknowledged(uploadReceipt);
+      if (!parserPending) checkedUpload=()=>acknowledged(uploadReceipt);
     }
     if (firstStep && state.resumeAttempt?.externalized && !checkedStep) parserPending = true;
     if (parserPending) {
@@ -557,7 +576,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     };
     const radiosHandled = new Set();
     for (const f of fields) {
-      if (checkedStep) checkDeadline();
+      if (checkedStep || checkedForm) checkDeadline();
       let e = currentElement(f);
       const skip = (reason, component, operation) => addSkip(f.label, reason, component, operation);
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}

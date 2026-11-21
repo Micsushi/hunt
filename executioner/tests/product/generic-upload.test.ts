@@ -146,7 +146,7 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
     const app='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
     await page.route(app,route=>route.fulfill({contentType:'text/html',body:'<main><oc-oneclick-form></oc-oneclick-form></main><label>First name<input id="outside"></label><label>Email<input id="outside-mail"></label>'}));
     await page.goto(app);
-    await page.evaluate(()=>{
+    const mount=()=>{
       const host=document.querySelector('oc-oneclick-form')!;
       host.innerHTML='<h2>Personal information</h2><oc-easy-apply><spl-dropzone id="parser"></spl-dropzone></oc-easy-apply><oc-resume-upload><div class="form-section" data-test="resume-upload-container"><spl-typography-title data-test="section-title">Resume <span data-test="section-required-mark">*</span></spl-typography-title><spl-form-field><spl-dropzone id="bound" data-test="resume-upload"></spl-dropzone></spl-form-field></div></oc-resume-upload><label>Profile image<input id="photo" type="file"></label><button type="button">Next</button>';
       for(const [id,label,autofill] of [['first-name-input','First name','given-name'],['last-name-input','Last name','family-name'],['email-input','Email','email'],['confirm-email-input','Confirm your email','email']]){
@@ -154,7 +154,8 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
         input.attachShadow({mode:'open'}).innerHTML='<label for="'+id+'">'+label+'*</label><input required id="'+id+'" autocomplete="'+autofill+'">';
       }
       for(const id of ['parser','bound']) document.getElementById(id)!.attachShadow({mode:'open'}).innerHTML='<label for="file">Choose a file</label><input hidden id="file" type="file">';
-    });
+    };
+    await page.evaluate(mount);
     const clean=await page.evaluate(fillVisibleFields,{facts:[...facts,{factId:'family_name',value:'Surname'}],resume:{name:'Resume.pdf',base64:selected.toString('base64')}});
     assert.equal(clean.resume,'verified');
     assert.deepEqual(await bytes(page,'#bound input'),[...selected]);
@@ -178,6 +179,55 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
     assert.notEqual(unowned.resume,'verified');
     assert.deepEqual(await bytes(page,'#bound input'),[]);
     assert.deepEqual(await bytes(page,'#parser input'),[]);
+    for (const mode of ['acknowledged','preexisting','duplicate','busy','wrong-name','wrong-button','error','late-owner','late-login']) {
+      await page.reload();await page.evaluate(mount);
+      await page.evaluate(mode=>{
+        const root=document.getElementById('bound')!.shadowRoot!, input=root.querySelector('input')!;
+        const filename=mode==='wrong-name'?'Other.pdf':'Resume.pdf';
+        const render=()=>{
+          const list=document.createElement('ul');list.className='c-spl-file-list';root.append(list);
+          for(let n=0;n<(mode==='duplicate'?2:1);n++){
+            const item=document.createElement('li');item.className='c-spl-file-list-item';
+            item.innerHTML='<div class="c-spl-file-list-item-label-container"><span class="c-spl-file-list-item-name">'+filename+'</span><spl-button></spl-button></div>';
+            item.querySelector('spl-button')!.attachShadow({mode:'open'}).innerHTML='<button aria-label="Delete file '+(mode==='wrong-button'?'Other.pdf':filename)+'">Delete</button>';
+            list.append(item);
+          }
+          if(mode==='busy')list.setAttribute('aria-busy','true');
+          if(mode==='error')list.insertAdjacentHTML('beforeend','<li role="alert">Upload failed</li>');
+        };
+        if(mode==='preexisting')render();
+        (window as any).uploads=0;
+        input.addEventListener('change',()=>{
+          (window as any).uploads++;(window as any).sent=input.files![0]!.arrayBuffer();
+          input.value='';render();
+          if(mode==='late-owner')document.querySelector('main')!.append(document.createElement('oc-oneclick-form'));
+          if(mode==='late-login')document.querySelector('main')!.insertAdjacentHTML('beforeend','<input type="password">');
+        });
+      },mode);
+      if (mode.startsWith('late-')) await assert.rejects(fill(page),/application form or attachment changed/);
+      else {
+        const updated=await fill(page);
+        assert.equal(updated.resume,'unverified',mode);
+        if(mode==='acknowledged'){
+          assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).sent))),[...selected]);
+          assert.equal((await fill(page)).resume,'unverified');
+        }
+      }
+      assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),mode==='acknowledged'?'Fixture':'',mode);
+      assert.equal(await page.locator('spl-input#email-input input').inputValue(),mode==='acknowledged'?'fixture@example.invalid':'',mode);
+      assert.equal(await page.evaluate('uploads'),mode==='preexisting'?0:1,mode);
+      if(mode==='acknowledged'){
+        await page.locator('spl-input#email-input input').fill('');
+        await page.locator('#bound li.c-spl-file-list-item').evaluate(item=>{
+          const replacement=item.cloneNode(false) as Element;
+          replacement.append(...item.childNodes);
+          item.replaceWith(replacement);
+        });
+        assert.equal((await fill(page)).resume,'unverified');
+        assert.equal(await page.locator('spl-input#email-input input').inputValue(),'');
+        assert.equal(await page.evaluate('uploads'),1);
+      }
+    }
   }finally{await browser.close();}
 });
 
