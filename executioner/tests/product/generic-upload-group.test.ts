@@ -4,6 +4,8 @@ import {chromium,type Page} from 'playwright';
 import {uploadLabelKind,readUploadOwnerLabels} from '../../extension/page-runtime/upload-label.js';
 import {inspectHostedFields} from '../../src/product/hosted-field-observation.ts';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {fillMatchedPage} from '../../src/product/page-matching.ts';
+import {applicantProfile} from '../../src/product/sources.ts';
 
 const pdf=Buffer.from('%PDF-native-group-fixture');
 const facts=[{factId:'given_name',value:'Fixture'},{factId:'email_address',value:'fixture@example.invalid'}];
@@ -58,6 +60,45 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     await fixture(page,'<fieldset><legend>Your documents</legend><div class="field"><label>Notes<input></label><div class="field"><label>Resume<input type="file" required></label></div></div></fieldset>');
     assert.equal((await inspectHostedFields(page)).find(field=>field.kind==='file')?.resumeTarget,true);
     assert.equal((await fill(page)).resume,'verified');
+
+    // Bamboo renders a required native picker behind a visible Choose File button.
+    await page.route('https://fixture.bamboohr.com/careers/1',route=>route.fulfill({contentType:'text/html',body:'<main></main>'}));
+    await page.goto('https://fixture.bamboohr.com/careers/1');
+    await fixture(page, group('resume','Resume/CV*') + '<div id="cover"><p>Cover Letter*</p><div><button type="button">Choose File*</button><span>No file selected</span><input id="extra" aria-label="file-input" type="file" required style="display:none"><input type="hidden" name="coverLetterFileId"></div></div>');
+    await page.evaluate(() => {
+      const unrelated = document.createElement('form');
+      unrelated.innerHTML = '<label>Portfolio<input required type="file"></label>';
+      document.body.append(unrelated);
+    });
+    const missing = (report:{skipped:{label:string;reason:string}[]}) => report.skipped.filter(row=>row.reason==='required_attachment_missing').map(row=>row.label);
+    const status = () => page.evaluate(fillVisibleFields,{action:'status' as const,facts});
+    assert.deepEqual(missing(await status()),['Cover Letter']);
+    const partial = await fillMatchedPage({
+      profile:applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),
+      resume:pdf,url:page.url(),workflow:'C3.2',signal:AbortSignal.timeout(10000),
+      call:async(action,matchingPlans,matchingRunId)=>({...await page.evaluate(fillVisibleFields,{
+        action,matchingPlans,matchingRunId,scope:'page' as const,facts,resume:action==='fill'?{name:'Resume.pdf',base64:pdf.toString('base64')}:undefined,
+      })}),
+    });
+    assert.equal(partial.incomplete,true);
+    assert.deepEqual(missing(partial),['Cover Letter']);
+    assert.deepEqual(await bytes(page,'extra'),[]);
+    assert.deepEqual(await bytes(page,'resume'),[...pdf]);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.deepEqual(await bytes(page,'resume'),[]);
+    const extra=page.locator('#extra');
+    await extra.evaluate((e:HTMLInputElement)=>{e.required=false;});
+    assert.deepEqual(missing(await status()),[]);
+    await extra.evaluate((e:HTMLInputElement)=>{e.required=true;});
+    await page.locator('#cover button').evaluate((e:HTMLButtonElement)=>{e.disabled=true;});
+    assert.deepEqual(missing(await status()),[]);
+    await page.locator('#cover button').evaluate((e:HTMLButtonElement)=>{e.disabled=false;});
+    await page.locator('[name=coverLetterFileId]').evaluate((e:HTMLInputElement)=>{e.value='uploaded-file';});
+    assert.deepEqual(missing(await status()),[]);
+    await page.locator('[name=coverLetterFileId]').evaluate((e:HTMLInputElement)=>{e.value='';});
+    await extra.setInputFiles({name:'Letter.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-existing-letter')});
+    assert.deepEqual(missing(await status()),[]);
+    assert.equal(await page.evaluate('submits'),0);
 
   }finally{await browser.close();}
 });

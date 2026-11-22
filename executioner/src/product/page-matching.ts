@@ -84,9 +84,9 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
       }
       observeFrames(result);
       result.filled.forEach(label=>filled.add(label));
-      // A later write can enable Apply. Keep its observed state only on the final fill or status.
+      // Conditional uploads and the submit button can change after a fill. Keep their final state.
       for (const row of result.skipped) {
-        if (row.reason!=='employer_submission_disabled' || finalRound) skipped.set(JSON.stringify(row),row);
+        if (finalRound || !['employer_submission_disabled','required_attachment_missing'].includes(row.reason)) skipped.set(JSON.stringify(row),row);
       }
       // A changed observation before any write is recoverable after a fresh plan.
       // Never clear a different field/frame or a post-write failure.

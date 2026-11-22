@@ -1,5 +1,5 @@
 export function createRequiredFieldReader({ uploadHeading, markedRequired,
-  verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
+  verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
 }) {
   const isRequired = e => {
     const attachment=verifiedDialogUpload(e);
@@ -39,5 +39,29 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     }
     return markedRequired(e, composedClosest, deepQuery);
   };
-  return { isRequired };
+  // Observe extra documents without opening a chooser or touching their files.
+  const missingAttachmentLabel = input => {
+    if (!input.willValidate || (!input.validity.valueMissing && input.getAttribute('aria-required')!=='true') || input.files?.length ||
+        composedClosest(input, '[inert],[aria-disabled=true]')) return;
+    const shown = node => node.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
+      !composedClosest(node,'[hidden],[inert],[aria-hidden=true]');
+    const ownLabel = rawLabelFor(input);
+    for (let group=composedParent(input); group && group!==regionFor(input); group=composedParent(group)) {
+      if (deepQuery(group,'input:not([type=hidden]),textarea,select').some(node=>node!==input)) break;
+      if (deepQuery(group,'input[type=hidden]').some(node=>node.value) ||
+          deepQuery(group,'a[download],[data-upload-state=success],[role=progressbar],[aria-busy=true]').length ||
+          deepQuery(group,'button').some(node=>/^(remove|delete)(?: file| attachment)?$/i.test((node.getAttribute('aria-label') || node.innerText).trim()))) return;
+      const lines=(group.innerText ?? '').split(/\n/).map(text=>text.trim()).filter(Boolean);
+      const label=[ownLabel,lines[0]].find(text=>text && otherAttachment(text));
+      if (!label) continue;
+      const pickerShown=shown(input);
+      const triggers=deepQuery(group,'button[type=button]').filter(button=>!button.matches(':disabled,[aria-disabled=true]') &&
+        shown(button) && /^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test(button.innerText.trim()));
+      const emptyNotice=deepQuery(group,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
+      if (pickerShown || triggers.length===1 && emptyNotice) {
+        return label.replace(/[✱*]/g,'').trim();
+      }
+    }
+  };
+  return { isRequired, missingAttachmentLabel };
 }

@@ -442,6 +442,16 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     let applicationRegions = identifyApplicationRegions(fields);
     const finalReport = () => {
       screeningGroups.reportMissing(result,addSkip);
+      if (applicationRegions.length===1 && applicationRegions[0] instanceof Element) {
+        for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
+          if (regionFor(input)!==applicationRegions[0] || !scopedControl(input)) continue;
+          const label=missingAttachmentLabel(input);
+          if (label) {
+            if (action==='status' || !matchingRunId) result.incomplete=true;
+            addSkip(label,'required_attachment_missing');
+          }
+        }
+      }
       // Read the employer's final action after filling. Never activate it to test readiness.
       const [form] = applicationRegions;
       if (applicationRegions.length === 1 && form instanceof HTMLFormElement && form.isConnected) {
@@ -458,8 +468,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return result;
     };
-    const { isRequired } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
-      verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
+    const { isRequired, missingAttachmentLabel } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
+      verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
     });
     const { observe:baseObserve } = createFieldObserver({
       deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
