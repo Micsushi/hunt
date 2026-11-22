@@ -327,9 +327,8 @@ trusted website with its public extension ID. Hunt checks it against its build
 configuration; a URL cannot select a different extension to receive resumes.
 Choose **Send to local C3** on a prepared job or in bulk actions. The existing
 authenticated export supplies the exact selected PDFs. The extension validates
-the bundle and calls `/handoff/import-paused`, then opens the local workspace.
-Applications arrive paused with the saved local profile. Choose when to fill
-there; sending does not sign in, create accounts, fill forms or submit.
+the bundle and calls `/handoff/import-paused`. In the extension, choose **Open
+workspace** to see the imported jobs and selected PDFs. Each job arrives paused.
 
 The website can request only minimal connection status, bundle preview and
 paused import. It cannot read saved answers or credentials, obtain the pairing
@@ -352,7 +351,9 @@ queue work or contain connection keys. Keep it private like a resume.
 
 In the local workspace, open **Applications**, expand **Import applications from
 Hunt**, choose the file and select **Preview applications**. Check the jobs and
-PDF versions, then choose **Add and fill applications**. Preview validates the
+PDF versions. Choose **Add and fill applications** to start a supported queue.
+When the file includes a recognized unfamiliar site, choose **Add applications
+paused** for the whole file. Preview validates the
 PDF checksums and existing queue entries without starting work. Import checks
 them again and uses the saved local profile; filling stops before submission.
 An unchanged application is reused. A conflicting PDF or source version is
@@ -367,12 +368,20 @@ removal does not erase employer drafts. For a local Hunt setup with C3 alongside
 its backend, **Retry connection** rechecks the embedded workspace after the
 service becomes available, and direct handoff remains available.
 
-With the backend and C3 connected locally, from a job's details choose
-**Fill application**, or select up to 30 jobs and choose the corresponding bulk
-action. C1 must have verified a supported external Workday, Greenhouse, Lever,
-Ashby or Workable destination and C2 must have a selected resume marked ready
-for C3. Each job receives that exact selected PDF.
-Easy Apply jobs remain excluded. C3 queue entries retain the C1 job ID.
+With the backend and C3 connected locally, **Fill application** starts queued
+preparation for Workday, Greenhouse, Lever, Ashby and Workable. For a recognized
+unfamiliar posting, **Send to local C3** stores the job and its selected C2 PDF
+as a paused current-page draft. Open its title link in **Applications**, follow
+the employer's application link, and choose **Fill current page** in the
+extension. C3 checks the posting and binds the selected PDF to the inspected
+document. You choose **Next** after reviewing each page.
+
+Bulk handoff accepts up to 30 jobs. Results identify confirmed queued jobs,
+paused current-page drafts, and posting links that Hunt could not transfer.
+Open any omitted posting yourself. Its selected C2 PDF was not transferred.
+Each transferred job retains its C1 ID, C2 version and selected PDF. C1 must have
+verified the external posting and C2 must have marked the résumé ready.
+Easy Apply jobs remain excluded.
 
 After editing a selected resume, save and compile it in C2. A successful
 one-page compile refreshes the selected PDF. A multipage or unknown-page result

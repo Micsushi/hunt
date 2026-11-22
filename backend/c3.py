@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -82,7 +82,47 @@ async def forward(method: str, path: str, content: bytes = b"") -> Response:
     )
 
 
-def prepared_jobs(job_ids: list[int], *, export: bool = False) -> list[dict]:
+def current_page_posting(url: str) -> bool:
+    """Keep explicit unfamiliar targets aligned with C3's product target validator."""
+    target = urlsplit(url)
+    host, route = target.hostname or "", target.path
+    patterns = {
+        "ats.rippling.com": r"(?i:/[\w-]+/jobs/[a-f0-9-]{36}(?:/apply)?)",
+        "ats.us1.rippling.com": r"(?i:/[\w-]+/jobs/[a-f0-9-]{36}(?:/apply)?)",
+        "jobs.jobvite.com": r"/[\w-]+/job/[\w-]+(?:/apply)?",
+        "job-boards.anz.greenhouse.io": r"/[\w-]+/jobs/\d+",
+        "forms-formulaires.alpha.canada.ca": r"/(?:en|fr)/id/[\w-]+",
+        "canonical.com": r"/careers/\d+(?:/[\w-]+(?:/application)?)?",
+        "www.amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
+        "amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
+    }
+    if host == "jobs.smartrecruiters.com":
+        if re.fullmatch(r"/[\w-]+/\d+(?:-[\w-]+)?/?", route, re.ASCII):
+            return True
+        match = re.fullmatch(
+            r"/oneclick-ui/company/([\w-]+)/publication/[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}(/screening)?/?",
+            route,
+            re.ASCII | re.I,
+        )
+        return bool(
+            match
+            and all(
+                company == match[1]
+                for company in parse_qs(target.query, keep_blank_values=True).get("dcr_ci", [])
+            )
+        )
+    if host.endswith(".bamboohr.com"):
+        pattern = r"/careers/\d+"
+    elif host.endswith(".applytojob.com"):
+        pattern = r"/apply/[\w-]+(?:/[\w-]+)?"
+    elif host.endswith(".recruitee.com"):
+        pattern = r"/o/[\w-]+(?:/c/new)?"
+    else:
+        pattern = patterns.get(host)
+    return bool(pattern and re.fullmatch(pattern + r"/?", route, re.ASCII))
+
+
+def prepared_jobs(job_ids: list[int]) -> list[dict]:
     from fletcher.resume.review_store import read_selected_resume_pdf
     from hunter.db import get_connection, get_job_by_id
 
@@ -92,12 +132,6 @@ def prepared_jobs(job_ids: list[int], *, export: bool = False) -> list[dict]:
         if not job:
             raise HTTPException(404, f"Job {job_id} was not found.")
         family = job.get("ats_type")
-        if family not in ("workday", "workable", "greenhouse", "lever", "ashby"):
-            if export:
-                continue
-            raise HTTPException(
-                409, f"Open job {job_id} on the employer site and choose Fill current page."
-            )
         if str(job.get("status") or "").strip().lower() in (
             "applied",
             "canceled",
@@ -112,6 +146,46 @@ def prepared_jobs(job_ids: list[int], *, export: bool = False) -> list[dict]:
             )
         if job.get("enrichment_status") not in ("done", "done_verified"):
             raise HTTPException(409, f"Finish discovery verification for job {job_id} first.")
+        try:
+            target = urlsplit(job.get("apply_url") or "")
+        except ValueError:
+            raise HTTPException(
+                409, f"Job {job_id} needs a verified supported posting link."
+            ) from None
+        host, route = target.hostname or "", target.path
+        supported = (
+            family == "workday"
+            and re.fullmatch(
+                r"[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com", host, re.I
+            )
+            and re.search(r"/job/.+", route, re.I)
+            or family == "workable"
+            and host == "apply.workable.com"
+            and re.fullmatch(r"/[^/]+/j/[A-Za-z0-9]+(?:/apply)?/?", route)
+            or family == "greenhouse"
+            and host
+            in ("job-boards.greenhouse.io", "boards.greenhouse.io", "job-boards.eu.greenhouse.io")
+            and re.fullmatch(r"/[^/]+/jobs/\d+/?", route)
+            or family in ("lever", "ashby")
+            and host
+            in (
+                ("jobs.lever.co", "jobs.eu.lever.co")
+                if family == "lever"
+                else ("jobs.ashbyhq.com",)
+            )
+            and re.fullmatch(r"/[^/]+/[a-fA-F0-9-]{36}(?:/(?:apply|application))?/?", route)
+        )
+        if (
+            not host
+            or target.scheme != "https"
+            or target.username
+            or target.password
+            or target.netloc != host
+            or re.search(r"%2f|%5c", route, re.I)
+        ):
+            raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.")
+        if not supported and not current_page_posting(job["apply_url"]):
+            continue
         if job.get("selected_resume_ready_for_c3") != 1 or not job.get("selected_resume_pdf_path"):
             raise HTTPException(409, f"Prepare and select a C2 resume for job {job_id} first.")
         version_id = job.get("selected_resume_version_id")
@@ -147,44 +221,6 @@ def prepared_jobs(job_ids: list[int], *, export: bool = False) -> list[dict]:
                 f"The selected resume for job {job_id} does not match its successful C2 version. Select it again.",
             )
         try:
-            target = urlsplit(job.get("apply_url") or "")
-        except ValueError:
-            raise HTTPException(
-                409, f"Job {job_id} needs a verified supported posting link."
-            ) from None
-        host, route = target.hostname or "", target.path
-        supported = (
-            family == "workday"
-            and re.fullmatch(
-                r"[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com", host, re.I
-            )
-            and re.search(r"/job/.+", route, re.I)
-            or family == "workable"
-            and host == "apply.workable.com"
-            and re.fullmatch(r"/[^/]+/j/[A-Za-z0-9]+(?:/apply)?/?", route)
-            or family == "greenhouse"
-            and host
-            in ("job-boards.greenhouse.io", "boards.greenhouse.io", "job-boards.eu.greenhouse.io")
-            and re.fullmatch(r"/[^/]+/jobs/\d+/?", route)
-            or family in ("lever", "ashby")
-            and host
-            in (
-                ("jobs.lever.co", "jobs.eu.lever.co")
-                if family == "lever"
-                else ("jobs.ashbyhq.com",)
-            )
-            and re.fullmatch(r"/[^/]+/[a-fA-F0-9-]{36}(?:/(?:apply|application))?/?", route)
-        )
-        if (
-            target.scheme != "https"
-            or target.username
-            or target.password
-            or target.netloc != host
-            or not supported
-            or re.search(r"%2f|%5c", route, re.I)
-        ):
-            raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.")
-        try:
             pdf = read_selected_resume_pdf(path, job_id)
         except OSError:
             raise HTTPException(
@@ -204,11 +240,19 @@ def prepared_jobs(job_ids: list[int], *, export: bool = False) -> list[dict]:
                 "resumeBase64": base64.b64encode(pdf).decode("ascii"),
             }
         )
-    if not result:
-        raise HTTPException(
-            409, "Open these applications on their employer sites and choose Fill current page."
-        )
     return result
+
+
+def portable_job(job: dict) -> dict:
+    if any(not job[key].strip() or len(job[key]) > 500 for key in ("resumeName", "resumeVersion")):
+        raise HTTPException(
+            409, "A selected resume has an invalid name or version. Select it again."
+        )
+    return {
+        **job,
+        "title": job["title"][:500],
+        "resumeSha256": hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest(),
+    }
 
 
 def selected_job_ids(body: object) -> list[int]:
@@ -225,18 +269,14 @@ def selected_job_ids(body: object) -> list[int]:
 @router.post("/handoff/export")
 async def export_handoff(request: Request):
     require_same_origin(request)
-    jobs = await run_in_threadpool(
-        prepared_jobs, selected_job_ids(await request.json()), export=True
-    )
-    for job in jobs:
-        job["title"] = job["title"][:500]
-        if any(
-            not job[key].strip() or len(job[key]) > 500 for key in ("resumeName", "resumeVersion")
-        ):
-            raise HTTPException(
-                409, "A selected resume has an invalid name or version. Select it again."
-            )
-        job["resumeSha256"] = hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
+    jobs = [
+        portable_job(job)
+        for job in await run_in_threadpool(prepared_jobs, selected_job_ids(await request.json()))
+    ]
+    if not jobs:
+        raise HTTPException(
+            409, "Open these applications on their employer sites and choose Fill current page."
+        )
     content = json.dumps(
         {"format": "hunt-c3-handoff", "version": 1, "jobs": jobs},
         ensure_ascii=False,
@@ -264,6 +304,18 @@ async def handoff(request: Request):
     outcomes = [{"sourceJobId": job_id, "status": "not_sent"} for job_id in dict.fromkeys(ids)]
     try:
         jobs = await run_in_threadpool(prepared_jobs, ids)
+        transfers = {}
+        for job in jobs:
+            page_only = current_page_posting(job["url"])
+            payload = (
+                {"format": "hunt-c3-handoff", "version": 1, "jobs": [portable_job(job)]}
+                if page_only
+                else {"jobs": [job]}
+            )
+            transfers[job["sourceJobId"]] = (
+                "handoff/import-paused" if page_only else "jobs",
+                payload,
+            )
     except HTTPException as error:
         return JSONResponse(
             {"detail": error.detail, "queued": [], "outcomes": outcomes},
@@ -271,11 +323,27 @@ async def handoff(request: Request):
         )
     # Validate the entire selection first; bound each transfer to one PDF.
     queued = []
-    for job, outcome in zip(jobs, outcomes):
+    for outcome in outcomes:
+        if outcome["sourceJobId"] not in transfers:
+            outcome["status"] = "current_page"
+    if not transfers:
+        return JSONResponse(
+            {
+                "detail": "Open these applications on their employer sites and choose Fill current page.",
+                "queued": [],
+                "outcomes": outcomes,
+            },
+            status_code=409,
+        )
+    for outcome in outcomes:
+        if outcome["status"] == "current_page":
+            continue
+        route, payload = transfers[outcome["sourceJobId"]]
+
         # Once forwarding starts, a missing confirmation does not prove rejection.
         outcome["status"] = "unconfirmed"
         try:
-            response = await forward("POST", "jobs", json.dumps({"jobs": [job]}).encode())
+            response = await forward("POST", route, json.dumps(payload).encode())
         except HTTPException as error:
             if isinstance(error, C3Rejected):
                 outcome["status"] = "rejected"
@@ -315,7 +383,8 @@ async def handoff(request: Request):
             not isinstance(accepted, list)
             or len(accepted) != 1
             or not isinstance(accepted[0], dict)
-            or accepted[0].get("sourceJobId") != job["sourceJobId"]
+            or accepted[0].get("sourceJobId") != outcome["sourceJobId"]
+            or (route == "handoff/import-paused" and accepted[0].get("status") != "paused")
         ):
             return JSONResponse(
                 {
@@ -325,8 +394,11 @@ async def handoff(request: Request):
                 },
                 status_code=502,
             )
-        queued.extend(accepted)
-        outcome["status"] = "confirmed"
+        page_only = route == "handoff/import-paused"
+        queued.append({**accepted[0], "workflow": "C3.2"} if page_only else accepted[0])
+        outcome["status"] = "bound_current_page" if page_only else "confirmed"
+    if any(row["status"] != "confirmed" for row in outcomes):
+        return JSONResponse({"queued": queued, "outcomes": outcomes})
     return JSONResponse(queued)
 
 

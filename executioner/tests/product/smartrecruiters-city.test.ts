@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { parseApplicationProfile } from '../../src/profile/application-profile.ts';
 import { chromium } from 'playwright';
-import { prepareCurrentPage } from '../../src/product/current-page-workflow.ts';
+import { prepareCurrentPage } from './retired-queue/current-page-workflow.ts';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
 import { disposeResumeArtifact } from '../../src/contracts/resume-artifact.ts';

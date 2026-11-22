@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,type Page} from 'playwright';
-import {fillGenericApplication,proveBambooResumeInput} from '../../src/product/generic-application.ts';
+import {fillGenericApplication,proveBambooResumeInput} from './retired-queue/generic-application.ts';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
-import {prepareCurrentPage} from '../../src/product/current-page-workflow.ts';
+import {prepareCurrentPage} from './retired-queue/current-page-workflow.ts';
 import {componentFailure} from '../../src/product/component-diagnostics.ts';
 
 const url='https://fixture.bamboohr.com/careers/123';

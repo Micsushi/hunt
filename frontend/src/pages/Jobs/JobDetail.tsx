@@ -28,6 +28,7 @@ import {
   downloadApplicationHandoff,
   sendApplicationsToBrowser,
   supportsQueuedApplication,
+  isGenericApplicationUrl,
 } from '@/api/c3'
 import { browserC3, usesBrowserC3, type BrowserC3Status } from '@/api/browserC3'
 
@@ -352,7 +353,8 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     }
   }, [])
   // Match the handoff gateway's families; it also validates the posting URL and resume.
-  const supported = supportsQueuedApplication(job.ats_type, job.apply_url)
+  const pageOnly = isGenericApplicationUrl(job.apply_url)
+  const supported = pageOnly || supportsQueuedApplication(job.ats_type, job.apply_url)
   const connection = useQuery({
     queryKey: ['c3-job', job.id],
     queryFn: () =>
@@ -477,6 +479,12 @@ function ApplicationActions({ job }: { job: JobDetail }) {
           </button>
         </p>
       )}
+      {pageOnly && !blocked && (
+        <p>
+          Send the selected résumé to Applications, then open the draft and choose Fill current
+          page.
+        </p>
+      )}
       {blocked && <p role="status">{blocked}</p>}
       {!eligibilityBlocked && connectionUnavailable && (isLocalHost || browserConnection) && (
         <p>
@@ -494,7 +502,7 @@ function ApplicationActions({ job }: { job: JobDetail }) {
         connection.data?.configured &&
         !connection.data.connected && (
           <p role="status">
-            Browser extension disconnected. New applications will wait in the queue.
+            Browser extension disconnected. Connect it before filling the application.
           </p>
         )}
       {handoffError && (
@@ -531,7 +539,11 @@ function ApplicationActions({ job }: { job: JobDetail }) {
         disabled={queuing || downloading || !!blocked || !!handoffError}
         onClick={handoff}
       >
-        {queuing ? 'Sending…' : browserConnection ? 'Send to local C3' : 'Fill application'}
+        {queuing
+          ? 'Sending…'
+          : browserConnection || pageOnly
+            ? 'Send to local C3'
+            : 'Fill application'}
       </button>
       <button
         className={styles.actionBtn}

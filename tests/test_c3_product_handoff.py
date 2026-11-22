@@ -103,15 +103,20 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
     async def forward(method, path, content=b""):
         body = json.loads(content)
         calls.extend(body["jobs"])
+        if path == "handoff/import-paused":
+            assert body["format"] == "hunt-c3-handoff" and body["version"] == 1
+            for job in body["jobs"]:
+                assert (
+                    job["resumeSha256"]
+                    == hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
+                )
+            return JSONResponse([{**job, "status": "paused"} for job in body["jobs"]])
+        assert path == "jobs"
         return JSONResponse(body["jobs"])
 
     monkeypatch.setattr(c3, "forward", forward)
     browser = client()
     if ats not in ("workday", "greenhouse", "lever", "ashby", "workable"):
-        for route in ("/api/c3/handoff", "/api/c3/handoff/export"):
-            declined = browser.post(route, json={"job_ids": [1, 2]})
-            assert declined.status_code == 409
-            assert "Fill current page" in declined.json()["detail"]
         with sqlite3.connect(database) as connection:
             connection.execute(
                 "UPDATE jobs SET ats_type='greenhouse',apply_url=? WHERE id=2",
@@ -119,13 +124,19 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
             )
         mixed = browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]})
         assert mixed.status_code == 200
-        assert [j["sourceJobId"] for j in mixed.json()["jobs"]] == [2]
-        assert (
-            base64.b64decode(mixed.json()["jobs"][0]["resumeBase64"])
-            == b"%PDF-1.4 selected resume 2"
-        )
+        assert [j["sourceJobId"] for j in mixed.json()["jobs"]] == [1, 2]
         assert not calls
-        return
+        mixed = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
+        assert mixed.status_code == 200
+        assert mixed.json()["outcomes"] == [
+            {"sourceJobId": 1, "status": "bound_current_page"},
+            {"sourceJobId": 2, "status": "confirmed"},
+        ]
+        assert [base64.b64decode(j["resumeBase64"]) for j in calls] == [
+            b"%PDF-1.4 selected resume 1",
+            b"%PDF-1.4 selected resume 2",
+        ]
+        calls.clear()
     response = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
     assert response.status_code == 200
     assert [base64.b64decode(j["resumeBase64"]) for j in calls] == [
@@ -146,12 +157,27 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
             job["resumeSha256"] == hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
         )
     assert calls == [], "export must not queue anything or require a local C3 service"
+    for unknown in [
+        "https://untrusted.example/apply",
+        "https://solace.bamboohr.com.evil.example/careers/823",
+    ]:
+        with sqlite3.connect(database) as connection:
+            connection.execute("UPDATE jobs SET apply_url=? WHERE id=1", (unknown,))
+        exported = browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]})
+        assert [row["sourceJobId"] for row in exported.json()["jobs"]] == [2]
+        mixed = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
+        assert mixed.json()["outcomes"] == [
+            {"sourceJobId": 1, "status": "current_page"},
+            {"sourceJobId": 2, "status": "confirmed"},
+        ]
+        assert [row["sourceJobId"] for row in calls] == [2]
+        calls.clear()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE jobs SET apply_url=? WHERE id=1", (records[1]["apply_url"],))
     for field, value in [
         ("enrichment_status", "pending"),
-        ("apply_url", "https://untrusted.example/apply"),
         ("apply_url", "https://user:password@solace.bamboohr.com/careers/823"),
         ("apply_url", "https://solace.bamboohr.com:444/careers/823"),
-        ("apply_url", "https://solace.bamboohr.com.evil.example/careers/823"),
         ("apply_url", "https://solace.bamboohr.com/careers/823%2fapply"),
         ("apply_url", "https://[malformed/careers/823"),
     ]:
@@ -303,7 +329,13 @@ def test_partial_handoff_preserves_confirmed_jobs_and_never_retries(
 ):
     from fastapi import HTTPException
 
-    monkeypatch.setattr(c3, "prepared_jobs", lambda ids: [{"sourceJobId": i} for i in ids])
+    monkeypatch.setattr(
+        c3,
+        "prepared_jobs",
+        lambda ids: [
+            {"sourceJobId": i, "url": f"https://boards.greenhouse.io/test/jobs/{i}"} for i in ids
+        ],
+    )
     sent = []
 
     async def forward(method, path, content=b""):
@@ -323,7 +355,7 @@ def test_partial_handoff_preserves_confirmed_jobs_and_never_retries(
     response = client().post("/api/c3/handoff", json={"job_ids": [1, 2, 3]})
     assert response.status_code == expected_http
     assert sent == [1, 2]
-    assert response.json()["queued"] == [{"sourceJobId": 1}]
+    assert [job["sourceJobId"] for job in response.json()["queued"]] == [1]
     assert response.json()["outcomes"] == [
         {"sourceJobId": 1, "status": "confirmed"},
         {"sourceJobId": 2, "status": expected_outcome},

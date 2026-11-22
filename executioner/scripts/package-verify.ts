@@ -105,7 +105,7 @@ try {
     "--eval",
     `await Promise.all([
       import("./node_modules/@hunt/executioner/dist/product/hosted-application.js"),
-      import("./node_modules/@hunt/executioner/dist/product/generic-application.js"),
+      import("./node_modules/@hunt/executioner/dist/product/page-matching.js"),
       import("./node_modules/@hunt/executioner/dist/product/queue.js"),
       import("./node_modules/@hunt/executioner/extension/page-actions.js"),
     ]);

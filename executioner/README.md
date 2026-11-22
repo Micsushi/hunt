@@ -1,9 +1,11 @@
 # C3 v3
 
-The new local [Applications product](docs/product.md) provides a batch-link UI,
-a current-tab Chrome extension action, and C1/C2 selected-resume handoff. It reuses
-the Workday and hosted ATS engines in one shared browser and stops at Review. Explicit per-job
-submission is isolated from the filling engine and the historical proof harness.
+The [Applications product](docs/product.md) prepares queued jobs on Workday,
+Greenhouse, Workable, Lever and Ashby. The extension can also fill the current
+employer page. From Hunt Jobs, send a verified application with its selected C2
+résumé. Recognized unfamiliar sites arrive paused. Open the posting from
+Applications, navigate to the form and choose **Fill current page** in the
+extension. You control each page change and the final submission.
 See that guide for setup and the current verification boundary.
 
 C3 v3 Stage 1 implements one local, controlled Workday fixture journey. It

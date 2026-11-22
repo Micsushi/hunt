@@ -1,22 +1,22 @@
 import { createHash } from 'node:crypto';
-import type { currentPageInterruption } from '../../extension/form-page.js';
-import { observePageSource, checkPageSource, oneClickPersonalReadySource } from '../../extension/page-runtime/serialize.js';
-import { inspectChoiceWidget } from '../../extension/shared-choice-widget.js';
+import type { currentPageInterruption } from '../../../extension/form-page.js';
+import { observePageSource, checkPageSource, oneClickPersonalReadySource } from '../../../extension/page-runtime/serialize.js';
+import { inspectChoiceWidget } from '../../../extension/shared-choice-widget.js';
 import type { Page, Frame, FileChooser, JSHandle } from 'playwright';
-import { parseApplicationProfile } from '../profile/application-profile.ts';
-import { fillVisibleFields } from '../../extension/generic-fill.js';
-import { bambooResumeControl } from '../../extension/page-adapters/bamboo-resume.js';
-import { annotateQuestionContext } from '../../extension/question-context.js';
-import { proveJobviteResumeInput } from '../../extension/jobvite-resume.js';
-import { genericApplicationTarget } from './target.ts';
-import { fillMatchedPage } from './page-matching.ts';
+import { parseApplicationProfile } from '../../../src/profile/application-profile.ts';
+import { fillVisibleFields } from '../../../extension/generic-fill.js';
+import { bambooResumeControl } from '../../../extension/page-adapters/bamboo-resume.js';
+import { annotateQuestionContext } from '../../../extension/question-context.js';
+import { proveJobviteResumeInput } from '../../../extension/jobvite-resume.js';
+import { genericApplicationTarget } from '../../../src/product/target.ts';
+import { fillMatchedPage } from '../../../src/product/page-matching.ts';
 import { openBambooApplication } from './bamboo-application-entry.ts';
-import { effectiveProfileFacts } from './sources.ts';
-import { ApplicationPause, type SelectedResumeFill } from './application-contract.ts';
-import { pause } from './application-wait.ts';
-import { smartRecruitersPublication } from './smartrecruiters-target.ts';
+import { effectiveProfileFacts } from '../../../src/product/sources.ts';
+import { ApplicationPause, type SelectedResumeFill } from '../../../src/product/application-contract.ts';
+import { pause } from '../../../src/product/application-wait.ts';
+import { smartRecruitersPublication } from '../../../src/product/smartrecruiters-target.ts';
 
-import { recordComponentFailure } from './component-diagnostics.ts';
+import { recordComponentFailure } from '../../../src/product/component-diagnostics.ts';
 
 function chooserPause(message: string, operation: string): ApplicationPause {
   const pause = new ApplicationPause(message);

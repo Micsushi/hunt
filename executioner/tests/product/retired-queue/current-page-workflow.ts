@@ -2,8 +2,8 @@ import type { Page } from 'playwright';
 import { advanceJobviteScreening, isJobviteAttachmentWarning } from './jobvite-workflow.ts';
 import { advanceSmartRecruiters } from './smartrecruiters-workflow.ts';
 import { fillGenericApplication } from './generic-application.ts';
-import { ApplicationPause, type ProductInput } from './application-contract.ts';
-import { componentFailure, recordComponentFailure } from './component-diagnostics.ts';
+import { ApplicationPause, type ProductInput } from '../../../src/product/application-contract.ts';
+import { componentFailure, recordComponentFailure } from '../../../src/product/component-diagnostics.ts';
 
 export async function prepareCurrentPage(page: Page, input: ProductInput, signal: AbortSignal, progress: (stage: string) => void): Promise<never> {
   progress("Filling this unfamiliar application page");

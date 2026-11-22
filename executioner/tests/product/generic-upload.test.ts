@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium, type Page} from 'playwright';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
-import {prepareCurrentPage} from '../../src/product/current-page-workflow.ts';
+import {prepareCurrentPage} from './retired-queue/current-page-workflow.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 
 const selected=Buffer.from('%PDF-selected-private-fixture');

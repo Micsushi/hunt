@@ -1,8 +1,8 @@
-import { smartRecruitersPublication } from './smartrecruiters-target.ts';
-import { smartRecruitersScreeningFooter } from '../../extension/page-adapters/document.js';
+import { smartRecruitersPublication } from '../../../src/product/smartrecruiters-target.ts';
+import { smartRecruitersScreeningFooter } from '../../../extension/page-adapters/document.js';
 import type { Page } from 'playwright';
-import type { ComponentFailure } from './component-diagnostics.ts';
-import { pause } from './application-wait.ts';
+import type { ComponentFailure } from '../../../src/product/component-diagnostics.ts';
+import { pause } from '../../../src/product/application-wait.ts';
 
 const firstFooter = 'oc-nav-first-page footer[data-test=footer]';
 const safeSkips = new Set(['optional_field','saved_value_already_present','selected_resume_already_present',

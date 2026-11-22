@@ -1,6 +1,50 @@
 import { post } from './client'
 import { browserC3, type BrowserC3Import, type BrowserC3Status } from './browserC3'
 
+// Keep these UI hints aligned with C3 genericApplicationTarget; export validates again.
+export function isGenericApplicationUrl(value: string | null | undefined) {
+  if (!value) return false
+  try {
+    const url = new URL(value)
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      /%2f|%5c/i.test(url.pathname)
+    )
+      return false
+    const host = url.hostname,
+      path = url.pathname.replace(/\/$/, '')
+    if (['ats.rippling.com', 'ats.us1.rippling.com'].includes(host))
+      return /^\/[\w-]+\/jobs\/[a-f0-9-]{36}(?=\/apply$|$)/i.test(path)
+    if (host.endsWith('.bamboohr.com')) return /^\/careers\/\d+$/.test(path)
+    if (host.endsWith('.applytojob.com')) return /^\/apply\/[\w-]+(?:\/[\w-]+)?$/.test(path)
+    if (host.endsWith('.recruitee.com')) return /^\/o\/[\w-]+(?=\/c\/new$|$)/.test(path)
+    if (host === 'jobs.jobvite.com') return /^\/[\w-]+\/job\/[\w-]+(?=\/apply$|$)/.test(path)
+    if (host === 'job-boards.anz.greenhouse.io') return /^\/[\w-]+\/jobs\/\d+$/.test(path)
+    if (host === 'forms-formulaires.alpha.canada.ca') return /^\/(?:en|fr)\/id\/[\w-]+$/.test(path)
+    if (host === 'canonical.com')
+      return /^\/careers\/\d+(?=\/[\w-]+(?:\/application)?$|$)/.test(path)
+    if (host === 'jobs.smartrecruiters.com') {
+      if (/^\/[\w-]+\/\d+(?:-[\w-]+)?$/.test(path)) return true
+      const publication =
+        /^\/oneclick-ui\/company\/([\w-]+)\/publication\/[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}(?:\/screening)?$/i.exec(
+          path,
+        )
+      return (
+        !!publication &&
+        url.searchParams.getAll('dcr_ci').every((tenant) => tenant === publication[1])
+      )
+    }
+    if (['amazon.jobs', 'www.amazon.jobs'].includes(host))
+      return /^\/(?:[a-z-]+\/)?(?:applicant\/)?jobs\/\d+\/[\w-]+$/i.test(path)
+  } catch {
+    /* Invalid URLs remain ineligible. */
+  }
+  return false
+}
+
 export function supportsQueuedApplication(
   family: string | null | undefined,
   value: string | null | undefined,
@@ -24,7 +68,9 @@ export function supportsQueuedApplication(
           /\/job\/.+/i.test(path)
         )
       case 'workable':
-        return host === 'apply.workable.com' && /^\/[^/]+\/j\/[A-Za-z0-9]+(?:\/apply)?\/?$/.test(path)
+        return (
+          host === 'apply.workable.com' && /^\/[^/]+\/j\/[A-Za-z0-9]+(?:\/apply)?\/?$/.test(path)
+        )
       case 'greenhouse':
         return (
           [
@@ -49,9 +95,12 @@ export function supportsQueuedApplication(
 }
 
 async function exportApplications(jobIds: number[]) {
-  const bundle = await post<{ jobs: { sourceJobId: number }[] }>('/api/c3/handoff/export', {
-    job_ids: jobIds,
-  })
+  const bundle = await post<{ jobs: { sourceJobId: number; url: string }[] }>(
+    '/api/c3/handoff/export',
+    {
+      job_ids: jobIds,
+    },
+  )
   const ids = bundle?.jobs?.map((job) => job.sourceJobId)
   if (!ids?.length || ids.some((id) => !jobIds.includes(id)) || new Set(ids).size !== ids.length)
     throw new Error('The exported applications do not match your selection.')
@@ -75,7 +124,12 @@ export async function sendApplicationsToBrowser(jobIds: number[]) {
   ) {
     throw new Error('Transfer not confirmed. Check the local C3 workspace before retrying.')
   }
-  return result
+  return {
+    ...result,
+    currentPageIds: bundle.jobs
+      .filter((job) => isGenericApplicationUrl(job.url))
+      .map((job) => job.sourceJobId),
+  }
 }
 
 export async function downloadApplicationHandoff(jobIds: number[]) {
@@ -86,5 +140,8 @@ export async function downloadApplicationHandoff(jobIds: number[]) {
   link.download = 'hunt-applications.hunt.json'
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
-  return bundle.jobs.map((job) => job.sourceJobId)
+  return bundle.jobs.map((job) => ({
+    id: job.sourceJobId,
+    currentPage: isGenericApplicationUrl(job.url),
+  }))
 }

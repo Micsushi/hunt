@@ -9,6 +9,7 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "!dist/product/{current-page-workflow,smartrecruiters-workflow,jobvite-workflow,generic-application,bamboo-application-entry}.{js,d.ts}",
     "extension/**/*.js",
     "extension/**/*.d.ts",
     "extension/manifest.json",

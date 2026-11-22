@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
-import { fillGenericApplication, fillGenericIdentityFields } from '../../src/product/generic-application.ts';
+import { fillGenericApplication, fillGenericIdentityFields } from './retired-queue/generic-application.ts';
 import { applicantProfile, effectiveProfileFacts } from '../../src/product/sources.ts';
 
 

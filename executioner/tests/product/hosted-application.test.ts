@@ -7,7 +7,7 @@ import test from 'node:test';
 import {chromium} from 'playwright';
 import {applicationTarget} from '../../src/product/target.ts';
 import {fillApplication, reviewDigest, submitReviewedApplication} from '../../src/product/engine.ts';
-import {fillGenericIdentityFields} from '../../src/product/generic-application.ts';
+import {fillGenericIdentityFields} from './retired-queue/generic-application.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 import {inspectHostedFields} from '../../src/product/hosted-application.ts';
 import {hostedReviewSnapshot} from '../../src/product/hosted-application.ts';

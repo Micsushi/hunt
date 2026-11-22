@@ -4,7 +4,7 @@ import {chromium} from 'playwright';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
 import {applicantProfile,effectiveProfileFacts} from '../../src/product/sources.ts';
 import {fillMatchedPage} from '../../src/product/page-matching.ts';
-import {prepareCurrentPage} from '../../src/product/current-page-workflow.ts';
+import {prepareCurrentPage} from './retired-queue/current-page-workflow.ts';
 
 test('Rippling final submission availability is read after the last fill across both workflows', async () => {
   const browser = await chromium.launch();
@@ -38,6 +38,24 @@ test('Rippling final submission availability is read after the last fill across 
       await page.goto(url);
     }
     const raw=await page.evaluate(fillVisibleFields,{action:'fill' as const,facts});
+    await page.setContent('<form><label>First name<input required></label></form>');
+    const inspected=await page.evaluate(fillVisibleFields,{action:'status' as const,scope:'page' as const,facts});
+    const row=inspected.matching!.find(row=>row.question==='First name')!;
+    assert.ok(row);
+    await page.locator('input').evaluate(input=>input.setAttribute('maxlength','40'));
+    const stale=await page.evaluate(fillVisibleFields,{action:'fill' as const,scope:'page' as const,facts,matchingPlans:[{
+      fieldId:row.fieldId,signature:row.signature,answer:'Test',reason:'saved_fact',provisional:false,
+    }]});
+    assert.ok(stale.skipped.some(skip=>skip.reason==='field_changed_before_fill' && skip.label==='First name'));
+    assert.equal(await page.locator('input').inputValue(),'');
+    for (const unidentifiedResume of [true,false]) {
+      const empty=await fillMatchedPage({url,profile,resume,workflow:'C3.2',signal:AbortSignal.timeout(5000),
+        call:async()=>({filled:[],matching:[],incomplete:false,canUndo:false,canRedo:false,
+          skipped:unidentifiedResume ? [{label:'Resume',reason:'resume_control_not_identified'}] : []})});
+      assert.equal(empty.incomplete,unidentifiedResume);
+      assert.equal(empty.needsOwnerReview,unidentifiedResume);
+    }
+    await page.goto(url);
 
     await assert.rejects(prepareCurrentPage(page,{url,profile,resume},AbortSignal.timeout(10000),()=>{}),/employer still has submission disabled/);
     for (const workflow of ['C3.1','C3.2'] as const) for (const disabled of [true,false]) {

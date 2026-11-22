@@ -1,8 +1,8 @@
 import type { Page } from 'playwright';
 import { createHash } from 'node:crypto';
-import { ApplicationPause } from './application-contract.ts';
-import { pause } from './application-wait.ts';
-import type { MatchedPageResult } from './page-matching.ts';
+import { ApplicationPause } from '../../../src/product/application-contract.ts';
+import { pause } from '../../../src/product/application-wait.ts';
+import type { MatchedPageResult } from '../../../src/product/page-matching.ts';
 
 const ordinarySkips = new Set(['saved_value_already_present','selected_resume_already_present','optional_field']);
 const attachmentSkips = new Set(['uploaded_attachment_requires_review','resume_upload_already_attempted_review_attachment']);
