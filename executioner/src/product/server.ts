@@ -176,7 +176,7 @@ export async function startProductServer(options: { root?: string; port?: number
             ? 'This saved draft uses an unfamiliar site. Finish it on the employer page to preserve its selected resume.'
             : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.');
         }
-        if (prior && !selected && prior.url !== url.href && new URL(prior.url).origin === url.origin &&
+        if (prior && !selected && prior.url !== url.href &&
             queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused')) {
           throw new Error('This page no longer identifies the selected job. Open its posting from Applications.');
         }
