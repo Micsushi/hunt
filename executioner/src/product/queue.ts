@@ -57,8 +57,14 @@ export interface BrowserConnection {
   focus?(tabId: number, url?: string): Promise<void>;
   prepareAccount?(options: import('./workday-sign-in.ts').WorkdayAccountOptions): Promise<void>;
 }
+function savedTarget(url: string) {
+  try { return productApplicationTarget(url); }
+  catch { return undefined; }
+}
 export class ApplicationQueue {
-  jobs: ProductJob[] = [];
+  // Keep unreadable legacy links on disk, outside every operational job lookup.
+  private records: ProductJob[] = [];
+  get jobs() { return this.records.filter(job=>savedTarget(job.url)); }
   concurrency = 6;
   credentials?: ProductInput["credentials"];
   verifyEmail?: import('./workday-sign-in.ts').WorkdayAccountOptions['verifyEmail'];
@@ -82,11 +88,17 @@ export class ApplicationQueue {
     if (existsSync(join(root, "jobs.json"))) {
       const saved = JSON.parse(readFileSync(join(root, "jobs.json"), "utf8"));
       if (!Array.isArray(saved.jobs) || !Number.isInteger(saved.concurrency) || saved.concurrency < 1 || saved.concurrency > 30 ||
-          saved.jobs.some((job: ProductJob) => !job || (job.resumeExpected !== undefined && typeof job.resumeExpected !== "boolean") || !/^[a-f0-9-]{36}$/.test(job.id) || !["queued", "running", "paused", "review", "submitting", "submitted", "submission_uncertain", "removed"].includes(job.status) || productApplicationTarget(job.url).key !== job.key) ||
+          saved.jobs.some((job: ProductJob) => !job || (job.resumeExpected !== undefined && typeof job.resumeExpected !== "boolean") || !/^[a-f0-9-]{36}$/.test(job.id) || !["queued", "running", "paused", "review", "submitting", "submitted", "submission_uncertain", "removed"].includes(job.status)) ||
           new Set(saved.jobs.map((job: ProductJob) => job.id)).size !== saved.jobs.length) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
-      this.jobs = saved.jobs;
+      this.records = saved.jobs;
       this.concurrency = saved.concurrency;
-      for (const job of this.jobs) {
+      const activeKeys=new Set<string>();
+      for (const job of this.records) {
+        const target=savedTarget(job.url);
+        if (!target) continue;
+        const {key}=target;
+        if (key!==job.key || job.status!=='removed' && activeKeys.has(key)) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
+        if (job.status!=='removed') activeKeys.add(key);
         delete job.tabId;
         if (job.status === "submitting") { job.status = "submission_uncertain"; job.stage = "Check the employer site before doing anything else"; }
         else if (["running", "queued", "review"].includes(job.status)) { job.status = "paused"; job.stage = "Service restarted. Retry to inspect the saved application"; }
@@ -106,22 +118,33 @@ export class ApplicationQueue {
       throw new ApplicationPause(this.storageError);
     }
   }
-  private save() { this.persist(join(this.root, "jobs.json"), { jobs: this.jobs, concurrency: this.concurrency }); }
+  private save(jobs=this.records) { this.persist(join(this.root, "jobs.json"), { jobs, concurrency: this.concurrency }); }
   private safePump() { try { this.pump(); } catch { /* save() exposes the failure and pauses active work. */ } }
   private changed(job: ProductJob) { job.updatedAt = new Date().toISOString(); this.save(); }
   snapshot() {
     const profileDigest=this.settings?createHash('sha256').update(JSON.stringify(this.settings.profile)).digest('hex'):undefined;
-    return { jobs: this.jobs.filter(j => j.status !== "removed").map(job => {
+    const visible=this.records.filter(job=>job.status!=="removed");
+    const jobs=visible.flatMap(job => {
+      const target=savedTarget(job.url);
+      if (!target) return [];
       let profileUpdateAvailable=false;
       if (job.status==='paused' && profileDigest) try {
         const input=JSON.parse(readFileSync(join(this.root,`${job.id}.input.json`),'utf8'));
         profileUpdateAvailable=createHash('sha256').update(JSON.stringify(input.profile)).digest('hex')!==profileDigest;
       } catch { /* A damaged saved input is reported by the explicit job action. */ }
-      const currentPageOnly = productApplicationTarget(job.url).ats === 'generic';
-      return {...job,currentPageOnly,profileUpdateAvailable,actionPending:this.running.has(job.id)||this.reviewActions.has(job.id)};
-    }), connected: this.bridge.connected,
+      return [{...job,currentPageOnly:target.ats==='generic',profileUpdateAvailable,actionPending:this.running.has(job.id)||this.reviewActions.has(job.id)}];
+    });
+    return { jobs, unavailableJobCount:visible.length-jobs.length, connected: this.bridge.connected,
     configured: !!this.settings, accountConfigured: !!this.credentials, emailConfigured: !!this.verifyEmail, concurrency: this.concurrency, storageError: this.storageError }; }
   getSettings() { return this.settings ?? null; }
+  assertAvailableLink(url:string, sourceJobId?:number) {
+    const key=savedTarget(url)?.key;
+    if (this.records.some(job=>job.status!=='removed' && !savedTarget(job.url) &&
+        (job.url===url || sourceJobId!==undefined && job.sourceJobId===sourceJobId ||
+         key && typeof job.key==='string' && possiblePostingAlias(job.key)===possiblePostingAlias(key)))) {
+      throw new Error('A saved application with an unreadable link needs recovery before using this posting.');
+    }
+  }
   currentPageInput(job: ProductJob): {profile: unknown; resume: string} {
     if (!job.pageHandoff || job.status !== 'paused' || !job.sourceJobId || !job.resumeVersion || !job.resumeSha256) {
       throw new Error('This application has no selected current-page handoff.');
@@ -154,6 +177,7 @@ export class ApplicationQueue {
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
       const target = options.paused && options.currentPageHandoff ? productApplicationTarget(input.url) : applicationTarget(input.url);
+      this.assertAvailableLink(input.url,input.sourceJobId);
       if (target.ats === 'generic' && (!input.resumeBase64 || !input.sourceJobId || !input.resumeVersion || input.tabId !== undefined)) {
         throw new Error('Import the complete selected Hunt job and resume for current-page filling.');
       }
@@ -167,11 +191,11 @@ export class ApplicationQueue {
     });
     const added: ProductJob[] = [];
     const pendingInputs = new Map<string, {profile: unknown; resume: string}>();
-    const next = this.jobs.map(job => ({ ...job }));
+    const next = this.records.map(job => ({ ...job }));
     for (const { input, target, resume, submissionAllowed } of prepared) {
       if (input.sourceJobId !== undefined && next.some(job => job.status !== 'removed' && job.sourceJobId === input.sourceJobId &&
           canonicalPostingKey(job.key) !== target.key)) throw new Error('The selected Hunt job already belongs to a different application link.');
-      const existing = next.find(j => canonicalPostingKey(j.key) === target.key && j.status !== "removed");
+      const existing = next.find(j => typeof j.key==='string' && canonicalPostingKey(j.key) === target.key && j.status !== "removed");
       if (existing) {
         if (options.paused && (existing.status !== "paused" || this.running.has(existing.id) || this.reviewActions.has(existing.id))) throw new Error("This application is already active. Pause it before importing a resume.");
         if (input.tabId !== undefined && input.tabId !== existing.tabId) {
@@ -199,9 +223,9 @@ export class ApplicationQueue {
       next.push(job); added.push(job);
     }
     for (const [id, value] of pendingInputs) this.persist(join(this.root, `${id}.input.json`), value);
-    this.persist(join(this.root, "jobs.json"), { jobs: next, concurrency: this.concurrency });
+    this.save(next);
     // Preserve active runner references when publishing metadata on existing jobs.
-    this.jobs = next.map(job => { const current = this.jobs.find(item => item.id === job.id); return current ? Object.assign(current, job) : job; });
+    this.records = next.map(job => { const current = this.records.find(item => item.id === job.id); return current ? Object.assign(current, job) : job; });
     this.safePump(); return added;
   }
   async action(id: string, action: string, digest?: string, confirmed?: boolean, options: {expectedProfileRevision?:unknown;expectedProfileDigest?:unknown;inputDigest?:unknown;refreshToken?:unknown} = {}) {
@@ -325,6 +349,7 @@ export class ApplicationQueue {
       job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.componentFailure; delete job.reviewDigest; this.changed(job); this.safePump(); return;
     }
     if (action === "remove" || action === "restore") {
+      if (action === "restore") this.assertAvailableLink(job.url,job.sourceJobId);
       if (action === "restore" && this.jobs.some(other => other.id !== id && other.status !== "removed" &&
           (possiblePostingAlias(other.key) === possiblePostingAlias(job.key) || job.sourceJobId !== undefined && other.sourceJobId === job.sourceJobId))) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
       if (action === "remove" && !["paused", "queued", "review"].includes(job.status) || action === "restore" && job.status !== "removed" || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for the job to pause and its review to finish before removing it.");

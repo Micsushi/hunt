@@ -321,6 +321,7 @@ async function refresh() {
   $('start').disabled=!state.configured || !state.connected; $('concurrency').disabled=false; $('concurrency').value=String(state.concurrency);
   renderProfileStatus();
   $('summary').textContent=`${state.jobs.filter(j=>j.status==='review').length} at review · ${state.jobs.filter(needsAttention).length} need attention · ${state.jobs.filter(j=>j.status==='running').length} running`;
+  if(state.unavailableJobCount) $('summary').textContent+=` · ${state.unavailableJobCount} saved ${state.unavailableJobCount===1?'application has an unreadable link':'applications have unreadable links'}`;
   $('empty').hidden=state.jobs.length>0;
   historyButtons(); renderJobs();
   if(!profileLoaded) {

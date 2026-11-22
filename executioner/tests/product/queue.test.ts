@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, unlinkSync, mkdirSync, rmdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, unlinkSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApplicationQueue, type BrowserConnection } from "../../src/product/queue.ts";
+import { startProductServer } from "../../src/product/server.ts";
 import { applicantProfile, productSources } from "../../src/product/sources.ts";
 import { disposeResumeArtifact } from '../../src/contracts/index.ts';
 
@@ -27,6 +28,56 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
   assert.equal(restored.jobs[1]!.status, "submission_uncertain");
   await assert.rejects(restored.action(second!.id, "retry"));
   await restored.close();
+
+  const stateFile=join(root,'jobs.json');
+  const saved=JSON.parse(readFileSync(stateFile,'utf8'));
+  const invalid={...saved.jobs[0],url:'javascript:private-legacy-evidence',title:'private-legacy-evidence',status:'submitting',tabId:23,submissionAllowed:true};
+  saved.jobs[0]=invalid;
+  writeFileSync(stateFile,JSON.stringify(saved));
+  const inputFile=join(root,invalid.id+'.input.json');
+  const originalInput=readFileSync(inputFile);
+  for (let restart=0; restart<2; restart++) {
+    const service=await startProductServer({root,port:0});
+    try {
+      const headers={Authorization:'Bearer '+readFileSync(service.tokenPath,'utf8').trim(),'Content-Type':'application/json'};
+      const post=(path:string,body:unknown)=>fetch(service.origin+path,{method:'POST',headers,body:JSON.stringify(body)});
+      const response=await fetch(service.origin+'/state',{headers});
+      assert.equal(response.status,200);
+      const state=await response.json();
+      assert.equal(state.unavailableJobCount,1);
+      assert.equal(service.queue.snapshot().unavailableJobCount,1);
+      assert.ok(state.jobs.some((job:{id:string})=>job.id===second!.id));
+      assert.ok(!JSON.stringify(state).includes('private-legacy-evidence'));
+      assert.ok(!service.queue.jobs.some(job=>job.id===invalid.id));
+      for(const action of ['open','retry','submit']) {
+        assert.equal((await post('/jobs/'+invalid.id+'/action',{action,confirmed:true})).status,400);
+      }
+      const heldPage=await post('/browser/page',{operation:'inspect',tabId:24,expectedUrl:first!.url});
+      assert.equal(heldPage.status,400);
+      assert.match((await heldPage.json()).error,/unreadable link/);
+      assert.equal((await post('/jobs',{jobs:[{url:first!.url}]})).status,400);
+      if (!restart) assert.equal((await post('/jobs',{jobs:[{url:'https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Test_R3'}]})).status,200);
+      else assert.ok(state.jobs.some((job:{url:string})=>job.url.endsWith('Test_R3')));
+      assert.equal((await post('/concurrency',{value:3})).status,200);
+    } finally { await service.close(); }
+    assert.deepEqual(JSON.parse(readFileSync(stateFile,'utf8')).jobs.find((job:{id:string})=>job.id===invalid.id),invalid);
+    assert.deepEqual(readFileSync(inputFile),originalInput);
+  }
+  saved.jobs[0]={...invalid,url:first!.url};
+  writeFileSync(stateFile,JSON.stringify(saved));
+  const recovered=new ApplicationQueue(root,bridge);
+  assert.equal(recovered.snapshot().unavailableJobCount,0);
+  assert.equal(recovered.jobs.find(job=>job.id===invalid.id)?.status,'submission_uncertain');
+  await recovered.close();
+  saved.jobs[0]={...invalid,url:first!.url,key:'tampered'};
+  writeFileSync(stateFile,JSON.stringify(saved));
+  assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
+  saved.jobs[0]={...invalid,id:second!.id};
+  writeFileSync(stateFile,JSON.stringify(saved));
+  assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
+  saved.jobs[0]={...saved.jobs[1],id:invalid.id};
+  writeFileSync(stateFile,JSON.stringify(saved));
+  assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
 });
 
 test("restoring a replaced job and silently changing its selected resume are rejected", async () => {

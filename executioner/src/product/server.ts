@@ -163,6 +163,7 @@ export async function startProductServer(options: { root?: string; port?: number
         }
         if (queue.snapshot().jobs.some(job=>job.tabId===body.tabId && (job.actionPending || ['queued','running','submitting'].includes(job.status)))) throw new Error('C3 is already operating this page. Wait for it to finish.');
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
+        queue.assertAvailableLink(url.href);
         const owner = await currentPageOwner(queue.jobs, body.tabId, url);
         const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
         if (prior && !selected && prior.url !== url.href &&
@@ -278,6 +279,7 @@ export async function startProductServer(options: { root?: string; port?: number
       } else if (path === '/handoff/preview' || path === '/handoff/import' || path === '/handoff/import-paused') {
         const allowCurrentPage = path !== '/handoff/import';
         const bundle = inspectHandoffBundle(body, queue.jobs, allowCurrentPage);
+        for (const job of bundle.jobs) queue.assertAvailableLink(job.url,job.sourceJobId);
         if (path === '/handoff/import-paused' && bundle.preview.some(job=>job.currentPageOnly) && pageActions.size) {
           throw new Error('Wait for the current page operation to finish before importing its selected resume.');
         }
