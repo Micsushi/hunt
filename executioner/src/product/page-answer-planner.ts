@@ -123,6 +123,9 @@ export function createPageAnswerPlanner(
         reason: inferred ? 'phone_country_inferred_from_residence' : 'answer_resolved'};
     }
     const questionFact=inspectQuestionMatch(row.question, employerNames).factId;
+    // A committed screening radio needs the expected answer for comparison. The browser preserves the selection.
+    const compareBackgroundCheck = state === 'populated' && row.valid && row.control === 'radio' &&
+      consent && questionFact === 'background_check_willing';
     let addressCountryConflict=false;
     if (questionFact==='postal_code' && row.formId) {
       const savedCountry=facts.find(fact=>fact.factId==='country')?.value;
@@ -140,7 +143,7 @@ export function createPageAnswerPlanner(
       behavior:row.control as ApplicationFieldObservation['behavior'],required:row.required,
       options:row.options.map((label,index)=>({id:optionId(String(index)),label:boundedText(isLong(label) ? `Unclassified option ${index}` : label)})),
       ...(longOptions && {rawOptions:row.options}), constraints, readOnly:constraints?.readOnly,
-      queryable:row.queryable,searchQuery:row.searchQuery,state, populatedValueValid:row.valid};
+      queryable:row.queryable,searchQuery:row.searchQuery,state:compareBackgroundCheck ? 'empty' : state, populatedValueValid:row.valid};
     const resolution=await resolver.resolve({field,mode:sources.profilePlan.mode,
       answerFallbackPolicy:sources.executionPolicy.answerFallbackPolicy,profileId:sources.profileId,profileRevision:sources.profileRevision,
       resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,

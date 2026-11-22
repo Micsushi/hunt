@@ -125,6 +125,9 @@ test('bilingual screening uses Canadian eligibility, separates background consen
         const result = await answer(q, 'radio', ['Yes','No']);
         assert.deepEqual([result.answer,result.lane], [expected,lane]);
       }
+      const filled = {pageId:'screening',fieldId:'q',signature:'fixture',question:background,options:['Yes','No'],
+        selected:'Yes',required:true,control:'radio' as const,valid:true};
+      assert.equal((await plan(filled,[filled],AbortSignal.timeout(3000))).answer,willing === undefined ? null : willing ? 'Yes' : 'No');
       const history = await answer(prior,'listbox',employers);
       assert.deepEqual([history.answer,history.provisional],['Non | No',true]);
       const notice = await answer(privacy,'checkbox',[]);
