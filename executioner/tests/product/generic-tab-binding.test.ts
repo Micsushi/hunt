@@ -45,7 +45,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal(job.status,'paused');
     assert.equal(job.id,id);
     assert.equal(job.currentPageOnly,true);
-    for (const action of ['retry','refresh_review','submit']) {
+    for (const action of ['retry','refresh_review','submit','refresh_profile']) {
       const response=await post('/jobs/'+id+'/action',{action});
       assert.equal(response.status,400);
       assert.match((await response.json()).error,/selected resume/);

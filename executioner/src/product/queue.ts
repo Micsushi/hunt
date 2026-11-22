@@ -194,6 +194,9 @@ export class ApplicationQueue {
     if (action === 'refresh_profile' || action === 'undo_profile_refresh') {
       const job=this.jobs.find(job=>job.id===id);
       if (!job || job.status!=='paused' || this.running.has(id) || this.reviewActions.has(id)) throw new Error('Wait for this application to pause before refreshing its profile.');
+      if (action === 'refresh_profile' && productApplicationTarget(job.url).ats === 'generic') {
+        throw new Error('Finish this saved draft on the employer page to preserve its selected resume.');
+      }
       if (this.storageError) throw new Error(this.storageError);
       const inputPath=join(this.root,`${id}.input.json`),backupPath=join(this.root,`${id}.profile-refresh.json`);
       const before=readFileSync(inputPath,'utf8');

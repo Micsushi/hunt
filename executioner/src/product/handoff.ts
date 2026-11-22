@@ -23,7 +23,10 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
         typeof entry.resumeBase64 !== 'string' || typeof entry.resumeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.resumeSha256)) {
       throw new Error('The application bundle contains invalid job or resume details. Export it again from Hunt.');
     }
-    const job = entry as unknown as HandoffJob, target = applicationTarget(job.url);
+    const job = entry as unknown as HandoffJob;
+    let target: ReturnType<typeof applicationTarget>;
+    try { target = applicationTarget(job.url); }
+    catch { throw new Error(`Job ${job.sourceJobId} cannot be queued. Export the supported jobs again and use Fill current page for this job.`); }
     if (keys.has(target.key) || ids.has(job.sourceJobId)) throw new Error('The application bundle contains duplicate jobs. Export each application once.');
     keys.add(target.key); ids.add(job.sourceJobId);
     const pdf = Buffer.from(job.resumeBase64,'base64');
