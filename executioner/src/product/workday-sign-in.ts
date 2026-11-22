@@ -147,19 +147,15 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
       check(state);
       if (state.state === 'account_exists') {
         if (!creationAttempted) throw new ApplicationPause('The account already exists. Inspect the account page before retrying.');
-        record('account_exists'); preferCreate = false; creationSince = 0;
-        check(await command({operation:'navigate',documentId:state.documentId,expectedUrl:state.url,action:'show_sign_in',preferCreate:false}));
-        continue;
+        preferCreate = false; creationSince = 0;
       }
       if (state.state === 'application') {
         if (attempted || creationAttempted) { record('sign_in_transition_observed'); record('application_opened'); }
         authenticated = true; return;
       }
       const document = { documentId: state.documentId, expectedUrl: state.url };
-      if (state.state === 'create_account' && !preferCreate && !creationAttempted) {
-        check(await command({operation:'navigate',...document,action:'show_sign_in',preferCreate:false}));
-        continue;
-      }
+      const openSignIn = state.state === 'account_exists' || (state.state === 'create_account' && !preferCreate && !creationAttempted);
+      const action = openSignIn ? 'show_sign_in' : state.state === 'navigation' ? state.action : undefined;
       const fieldKey=`${state.documentId}:${state.state}`;
       if (fieldKey!==fieldDocument) {fieldDeadline=0;fieldDocument=fieldKey;}
       const creating = state.state === 'create_account';
@@ -217,8 +213,8 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           if (creating) preferCreate = false;
           record('sign_in_diagnostic', 'submit_script_click_succeeded');
         }
-      } else if (state.state === 'navigation' && (!attempted || state.action === 'continue_application')) {
-        const key = `${state.documentId}:${state.url}:${state.action}`;
+      } else if (action && (!attempted || action === 'continue_application')) {
+        const key = `${state.documentId}:${state.url}:${action}`;
         const clickedAt = navigation.get(key);
         if (clickedAt !== undefined) {
           if (Date.now() - clickedAt >= 30_000) throw new ApplicationPause('The employer did not advance after opening sign-in. Inspect the tab before retrying.');
@@ -226,7 +222,8 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           continue;
         }
         navigation.set(key, Date.now());
-        check(await command({ operation: 'navigate', ...document, action: state.action, preferCreate }));
+        if (state.state === 'account_exists') record('account_exists');
+        check(await command({ operation: 'navigate', ...document, action, preferCreate }));
       }
       await delay(500, undefined, { signal });
     }

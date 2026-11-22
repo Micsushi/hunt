@@ -5,10 +5,43 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
 import {accountJournal} from '../../src/product/account-journal.ts';
+import {prepareWorkdayAccount} from '../../src/product/workday-sign-in.ts';
 import {fillApplication} from '../../src/product/engine.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 import {accountFixture} from './fixture.ts';
 import {PlaywrightAccountPageAdapter} from '../../src/browser/playwright-live/private/playwright-account-page.ts';
+
+test('delayed transition from Create Account to Sign In opens the link once', async () => {
+  const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';
+  for (const existingResponse of [false,true]) {
+    let creating=existingResponse, opened=0, readsAfterOpen=0, signedIn=false;
+    const clicks:string[]=[];
+    const events:string[]=[];
+    await prepareWorkdayAccount(async (method, request={})=>{
+      if (method==='agentStatus') return {capabilities:['workday-account-v1','workday-page-v1','workday-create-account-v1']};
+      switch (request.operation) {
+        case 'begin': return {tabId:1};
+        case 'inspect': {
+          const state=signedIn ? 'application' : opened && ++readsAfterOpen>1 ? 'sign_in' :
+            existingResponse && !creating ? 'account_exists' : 'create_account';
+          return {state, documentId:'same-document', url, ready:true, clickReady:true};
+        }
+        case 'fill': return {state:'filled',verified:true};
+        case 'navigate': assert.equal(request.action,'show_sign_in'); opened++; return {state:'navigated'};
+        case 'click':
+          clicks.push(String(request.accountMode));
+          if (request.accountMode==='create') creating=false; else signedIn=true;
+          return {state:'clicked'};
+        case 'end': return {};
+        default: throw new Error('Unexpected account operation');
+      }
+    },{url,signal:AbortSignal.timeout(10000),preferCreate:existingResponse,credentials:{email:'fixture@example.invalid',password:'synthetic'},record:event=>events.push(event),onTab:()=>{}});
+    assert.equal(opened,1);
+    assert.deepEqual(clicks,existingResponse ? ['create','sign_in'] : ['sign_in']);
+    assert.equal(events.filter(event=>event==='account_exists').length,Number(existingResponse));
+    assert.ok(events.includes('application_opened'));
+  }
+});
 
 test('account journal preserves attempted effects atomically and rejects values outside its catalog',()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-account-journal-'));
