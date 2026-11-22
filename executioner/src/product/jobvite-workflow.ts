@@ -55,10 +55,15 @@ export async function advanceJobviteScreening(page:Page, url:string, resume:Buff
       if (location.href!==url) return 'changed';
       const receipt=(globalThis as any).__huntC3PartialFill?.resumeAttempt;
       if (receipt?.acknowledgedPanel?.()?.matches('[ng-form="scopeData.step2"]')) return 'screening';
-      if (receipt?.jobviteRejected?.()) return 'rejected';
+      const rejection = receipt?.jobviteRejected?.();
+      if (rejection==='retry-rejected') return 'retry-rejected';
+      if (rejection) return 'rejected';
       return receipt?.jobviteNextPending?.() ? 'waiting' : 'expired';
     },url);
     if (result==='screening') return 'screening';
+    if (result==='retry-rejected') {
+      throw new ApplicationPause('C3 clicked Next, opened the full Jobvite form, checked the required fields and clicked Next again. Jobvite still requests more information. Review the first step. The attached PDF contents remain unverified.');
+    }
     if (result==='rejected') {
       if (await clickOwnedControl(page,url,hash,true,verified,signal)) {
         for (let n=0;n<4;n++) {

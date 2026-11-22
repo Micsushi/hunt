@@ -144,7 +144,7 @@ export function watchJobviteScreening(receipt, binding, state) {
     if (!queuedAttempts || !firstReady() || !disclosure()) return false;
     pending = false;
     clearTimeout(timer);
-    return true;
+    return queuedAttempts === 2 && disclosureOpened ? 'retry-rejected' : 'rejected';
   };
   const required = () => [...first.querySelectorAll('input:required,textarea:required,select:required,input[aria-required=true],textarea[aria-required=true],select[aria-required=true]')].filter(visible);
   receipt.jobviteExpanded = () => disclosureOpened && firstReady() && !disclosure() && required().length > 0;

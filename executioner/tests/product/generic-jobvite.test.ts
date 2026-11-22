@@ -167,7 +167,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
       const stop = ['advance','slow','rejected'].includes(mode) ? /Jobvite acknowledged the selected resume\. The employer PDF contents remain unverified\. Review the screening step\. C3 stopped before submission\./ :
         mode==='expanded-conflict' ? /saved profile differs.*C3 clicked Next and opened the full Jobvite form\. Review the first step/ :
         ['stall','ambiguous-disclosure','foreign-disclosure'].includes(mode) ? /clicked Next once/ :
-        mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /stayed on the first step/ : /has not advanced/;
+        mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /clicked Next, opened the full Jobvite form, checked the required fields and clicked Next again\. Jobvite still requests more information\. Review the first step\. The attached PDF contents remain unverified\./ : /has not advanced/;
       await assert.rejects(attempt(),stop);
       if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
       if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
