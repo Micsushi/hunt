@@ -14,6 +14,7 @@ import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
 import { applicationTarget } from './target.ts';
 import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt, type WorkableReviewAttempt } from './application-contract.ts';
+import { settleLeverResume } from './lever-resume.ts';
 import { hasHostedResume, prepareHostedResume, verifyHostedAttachments } from './uploads/hosted.ts';
 import { createMatchingBacklog, type MatchingObservation } from './matching-backlog.ts';
 
@@ -44,8 +45,9 @@ export async function hostedReviewDigest(page: Page, expectedResumeSha256?: stri
   return (await hostedReviewSnapshot(page, expectedResumeSha256)).digest;
 }
 
-export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt, review?: WorkableReviewAttempt): Promise<{ digest: string; resumeExpected: boolean }> {
+export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt, review?: WorkableReviewAttempt): Promise<{ digest: string; resumeExpected: boolean; resumeFilenameOnly?: boolean }> {
   requireHostedApplication(await observeHostedPage(page));
+  const filenameOnly = applicationTarget(page.url()).ats === 'lever' && await settleLeverResume(page);
   const fields = await inspectHostedFields(page);
   const submit = page.getByRole('button', { name: submitName });
   if (!fields.length || await submit.count() !== 1 || !await submit.isVisible() || !await submit.isEnabled()) throw new ApplicationPause('The application is not ready for review.');
@@ -59,7 +61,7 @@ export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: st
   if (await page.locator('[aria-invalid=true]:visible,[role=alert]:visible').filter({hasText:/required|invalid|error|failed/i}).count()) throw new ApplicationPause('The employer is showing a validation error.');
   const backing = await page.locator('input[type=hidden],select').evaluateAll(es=>es.map(raw=>{const e=raw as HTMLInputElement|HTMLSelectElement;return {name:e.name,value:e instanceof HTMLSelectElement?[...e.selectedOptions].map(o=>o.value):e.value}}));
   const digest = createHash('sha256').update(page.url()).update(JSON.stringify(backing)).update(JSON.stringify(upload.attachments)).update(JSON.stringify(upload.receipt)).update(JSON.stringify(fields.map(f => ({key:f.key,label:f.label,value:f.value,checked:f.checked,files:f.files,required:f.required})))).digest('hex');
-  return { digest, resumeExpected: upload.resumeExpected };
+  return { digest, resumeExpected: upload.resumeExpected, ...(filenameOnly && upload.resumeExpected && {resumeFilenameOnly:true}) };
 }
 
 export async function fillHostedApplication(page: Page, input: ProductInput, signal: AbortSignal, progress: (stage: string) => void) {
@@ -115,6 +117,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
       requireHostedApplication(pageObservation);
       if (pendingPreview && pendingPreview.documentKey !== pageObservation.documentKey) throw pendingPreview.error;
       progress('Filling application');
+      if (target.ats === 'lever') await settleLeverResume(page);
       const fields = (await inspectHostedFields(page)).sort((a,b)=>Number(b.kind==='file')-Number(a.kind==='file'));
       if (target.ats === 'ashby') await preserveAshbyChoices(page, fields);
       if (!resumeExpected && await hasHostedResume(page, fields)) {
@@ -385,7 +388,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         known.set(identity,String(f.kind==='checkbox'?committed?.checked:committed?.value??expected)); changed = true;
       }
       if (!changed && pendingPreview) throw pendingPreview.error;
-      if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
+      if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,resumeFilenameOnly:snapshot.resumeFilenameOnly,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
       await page.waitForTimeout(300);
     }
     throw new ApplicationPause('The form kept changing. Inspect the remaining fields.');

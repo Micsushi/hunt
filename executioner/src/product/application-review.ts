@@ -60,7 +60,7 @@ export async function restoreSavedReview(page: Page, reviewedUrl: string): Promi
   throw new ApplicationPause("The saved application did not reach Review within the navigation limit. Inspect its current page.");
 }
 
-export async function reviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt): Promise<{ digest: string; resumeExpected?: boolean }> {
+export async function reviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt): Promise<{ digest: string; resumeExpected?: boolean; resumeFilenameOnly?: boolean }> {
   if (applicationTarget(page.url()).ats !== "workday") return hostedReviewSnapshot(page, expectedResumeSha256, resumeExpected, resumeUpload);
   return { digest: await reviewDigest(page) };
 }

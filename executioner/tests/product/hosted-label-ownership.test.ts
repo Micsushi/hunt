@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { fillApplication } from '../../src/product/engine.ts';
+import { settleLeverResume } from '../../src/product/lever-resume.ts';
 import { inspectHostedFields } from '../../src/product/hosted-application.ts';
 import { applicantProfile } from '../../src/product/sources.ts';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
@@ -152,7 +153,21 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),
       /selected resume attachment could not be verified/);
     assert.deepEqual(await selectedBytes(),[...existing]);
+    await page.locator('.filename').evaluate(el=>{el.textContent='Resume.pdf';});
+    await page.evaluate(()=>{
+      const working=document.querySelector<HTMLElement>('.resume-upload-working')!;
+      const success=document.querySelector<HTMLElement>('.resume-upload-success')!;
+      working.style.display='block';
+      setTimeout(()=>{working.style.display='none';success.style.display='block';success.style.opacity='0';},300);
+      setTimeout(()=>{success.style.opacity='1';},700);
+    });
+    assert.equal(await settleLeverResume(page),true);
+    assert.equal(await page.locator('.resume-upload-success').evaluate(el=>getComputedStyle(el).opacity),'1');
+    await page.locator('.resume-upload-failure').evaluate(el=>{el.style.display='block';});
+    await assert.rejects(settleLeverResume(page),/could not auto-read/);
+    await page.locator('.resume-upload-failure').evaluate(el=>{el.style.display='none';});
     const matching=await fillApplication(page,{url,profile,resume:existing},AbortSignal.timeout(12000),()=>{});
+    assert.equal(matching.resumeFilenameOnly,true);
     assert.equal(matching.needsOwnerReview,true);
     assert.deepEqual(await selectedBytes(),[...existing]);
     assert.equal(await page.evaluate('window.submitted'),undefined);

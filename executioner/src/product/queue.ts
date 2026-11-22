@@ -14,6 +14,13 @@ import { viewportCleanupPending } from '../../extension/page-viewport.js';
 import { smartRecruitersPublication, verifySmartRecruitersApplication } from './smartrecruiters-target.ts';
 import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
 
+const filenameOnlyStage = " The employer shows the resume filename. PDF contents unverified.";
+function reviewStage(stage: string, filenameOnly?: boolean) {
+  const original = stage.endsWith(filenameOnlyStage) ? stage.slice(0, -filenameOnlyStage.length) : stage;
+  if (!filenameOnly) return original === "Ready to review." ? "Ready to review" : original;
+  return (original.endsWith(".") ? original : original + ".") + filenameOnlyStage;
+}
+
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
 
 const workdayApplicationConnection = "Connecting to the Workday application";
@@ -326,6 +333,7 @@ export class ApplicationQueue {
         const digest = verified.digest;
         if (this.closed) throw new Error("The application service is stopping.");
         if (job.status === "paused") job.stage = "Owner review needed: Check every answer and the attached resume.";
+        job.stage = reviewStage(job.stage, verified.resumeFilenameOnly);
         job.resumeExpected = job.resumeExpected === true || verified.resumeExpected;
         job.status = "review"; job.reviewDigest = digest; delete job.error; delete job.componentFailure; this.changed(job); return;
       } catch (error) {
@@ -431,6 +439,7 @@ export class ApplicationQueue {
       controller.signal.throwIfAborted();
       job.status = "review";
       job.stage = result.needsOwnerReview ? "Owner review needed: suggested or unverified answers. Check every answer in the draft." : "Ready to review";
+      job.stage = reviewStage(job.stage, result.resumeFilenameOnly);
       job.resumeExpected = job.resumeExpected === true || result.resumeExpected;
       job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error; delete job.componentFailure;
       this.changed(job);
