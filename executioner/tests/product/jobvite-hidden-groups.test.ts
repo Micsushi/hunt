@@ -20,10 +20,8 @@ const html = (groups:string) => `
       <label>School<input required value="x"></label>
     </section><button type="submit">Send Application</button>
   </form></article>`;
-const simpleGroups = group('Previous employment?', 'radio', 'f0', ['Yes', 'No']) +
-  group('Available intakes?', 'checkbox', 'f2', ['January', 'May']);
 
-async function openFixture(page:Page, groups = simpleGroups) {
+async function openFixture(page:Page, groups:string) {
   await page.route(url, route => route.fulfill({contentType:'text/html', body:html(groups)}));
   await page.goto(url);
   await page.evaluate(() => {
@@ -44,7 +42,7 @@ async function status(page:Page) {
 
 
 
-test('individual required checkboxes and single attestations remain unresolved', async () => {
+test('current-page matching reads committed Jobvite groups and leaves unsupported choices for the owner', async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
@@ -56,11 +54,26 @@ test('individual required checkboxes and single attestations remain unresolved',
       <fieldset class="jv-input-group"><legend>The statements in this application are true and complete*</legend>
         <label>Yes<input type="checkbox" name="f1" required></label>
       </fieldset></div>`;
-    await openFixture(page, groups);
+    await openFixture(page, groups + group('Available intakes?', 'checkbox', 'intake', ['January','May']));
     const observed = await status(page);
     assert.equal(observed.incomplete, true);
-    assert.equal(observed.skipped.filter(item => item.reason === 'required_choice_unconfirmed').length, 2);
+    assert.equal(observed.skipped.filter(item => item.reason === 'required_choice_unconfirmed').length, 3);
     assert.equal(observed.matching!.some(row => row.question.includes('statements')), false);
+    const intake=observed.matching!.find(row=>row.question.startsWith('Available intakes'));
+    assert.ok(intake);
+    assert.deepEqual(intake.options,['January','May']);
+    const plan={fieldId:intake.fieldId,signature:intake.signature,answer:'May',provisional:false,reason:'saved_fact'};
+    const direct=await page.evaluate(fillVisibleFields,{action:'fill' as const,scope:'page' as const,expectedUrl:url,matchingPlans:[plan]});
+    assert.ok(direct.incomplete);
+    assert.equal(await page.locator('[name=intake]:checked').count(),0);
+    await page.locator('label').filter({hasText:'January'}).click();
+    const selected=(await status(page)).matching!.find(row=>row.fieldId===intake.fieldId);
+    assert.equal(selected?.selected,'January');
+    assert.equal(selected?.valid,true);
+    await page.evaluate(fillVisibleFields,{action:'fill' as const,scope:'page' as const,expectedUrl:url,matchingPlans:[plan]});
+    assert.equal(await page.locator('[name=intake]').first().isChecked(),true);
+    assert.equal(await page.locator('[name=intake]').last().isChecked(),false);
+    assert.equal(await page.evaluate('window.submits'),0);
     assert.equal(await page.locator('input[name=f1]').isChecked(), false);
   } finally { await browser.close(); }
 });

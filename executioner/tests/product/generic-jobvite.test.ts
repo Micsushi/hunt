@@ -86,7 +86,7 @@ test('Jobvite external upload receipt prevents repeated upload after the portal 
   }finally {await browser.close();}
 });
 
-test('actual extension page action runs Jobvite proof and shared history in the same isolated world',{timeout:45000},async()=>{
+test('extension page actions verify Jobvite file history and the final SmartRecruiters screening footer',{timeout:45000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-jobvite-proof-'));
   cpSync(resolve('extension'),root,{recursive:true});
   writeFileSync(join(root,'manifest.json'),JSON.stringify({manifest_version:3,name:'Isolated Jobvite proof',version:'1.0',permissions:['debugger','tabs','storage'],background:{service_worker:'background.js',type:'module'}}));
@@ -100,5 +100,45 @@ test('actual extension page action runs Jobvite proof and shared history in the 
     assert.equal(result.resume,'verified',JSON.stringify(result));assert.deepEqual(await counts(page),[1,0]);
     await action('undo',inspection.documentId);assert.deepEqual(await counts(page),[0,0]);
     await action('redo',inspection.documentId);assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.evaluate('submits'),0);
+
+    const screening='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/abcd1234-1111-2222-3333-111111111111/screening';
+    await page.route(screening, route=>route.fulfill({contentType:'text/html',body:`
+      <main><oc-screening-questions><oc-screening-questions-form>
+        <label>First name<input required></label>
+      </oc-screening-questions-form><oc-nav-screening-questions>
+        <oc-button data-test="footer-submit"><spl-button>Submit</spl-button></oc-button>
+      </oc-nav-screening-questions></oc-screening-questions></main>
+      <script>
+        const footer=document.querySelector('spl-button');
+        footer.attachShadow({mode:'open'}).innerHTML='<button disabled><slot></slot></button>';
+        const button=footer.shadowRoot.querySelector('button');
+        window.clicks=0;
+        button.onclick=()=>window.clicks++;
+        document.querySelector('input').oninput=()=>{
+          if(window.mode==='enabled')button.disabled=false;
+          if(window.mode==='unknown' && !footer.nextSibling)footer.after(footer.cloneNode(true));
+        };
+      </script>`}));
+    for (const mode of ['disabled','enabled','unknown']) {
+      await page.goto(screening);
+      await page.evaluate(mode=>{(window as any).mode=mode;},mode);
+      const run=(operation:string, overrides:Record<string,unknown>={})=>worker.evaluate(
+        params=>(globalThis as any).runAction(params),
+        {operation,tabId,expectedUrl:screening,expiresAt:Date.now()+10000,...overrides},
+      );
+      const before=await run('inspect');
+      assert.equal(before.observation.screeningSubmissionControl,'disabled');
+      const row=before.matching.find((field:{question:string})=>/First name/i.test(field.question));
+      assert.ok(row,'required screening name must be available to matching');
+      const after=await run('fill',{documentId:before.documentId,facts,matchingPlans:[{
+        fieldId:row.fieldId,signature:row.signature,frameId:row.frameId,answer:'Fixture',reason:'saved_fact',provisional:false,
+      }]});
+      assert.equal(await page.locator('input').inputValue(),'Fixture');
+      assert.equal(after.observation.screeningSubmissionControl,mode);
+      assert.equal(after.skipped.some((item:{reason:string})=>item.reason==='employer_submission_disabled'),mode==='disabled');
+      if (mode==='unknown')assert.equal(after.observation.kind,'unknown');
+      if (mode==='disabled')assert.equal(after.incomplete,true);
+      assert.equal(await page.evaluate('window.clicks'),0);
+    }
   } finally {await context.close();}
 });

@@ -18,6 +18,25 @@ test('Rippling final submission availability is read after the last fill across 
         <label>Resume<input type="file"></label><button type="submit" aria-label="Apply for this position" aria-disabled="true">Apply</button></form>
       <script>window.submits=0;document.querySelector('form').onsubmit=e=>{e.preventDefault();window.submits++;};</script>`}));
     await page.goto(url);
+    for (const labelSource of ['text','aria']) {
+      const button=page.locator('button');
+      await button.evaluate((control:HTMLButtonElement,labelSource)=>{
+        const form=control.form!;
+        form.id='selected-application';
+        document.body.append(control);
+        control.setAttribute('form',form.id);
+        control.textContent=labelSource==='text'?'Submit':'';
+        if(labelSource==='aria')control.setAttribute('aria-label','Submit');
+        else control.removeAttribute('aria-label');
+        control.disabled=true;
+      }, labelSource);
+      const report=await page.evaluate(fillVisibleFields,{action:'status' as const,scope:'page' as const,facts});
+      assert.ok(report.skipped.some(item=>item.reason==='employer_submission_disabled'),labelSource);
+      await button.evaluate(control=>{control.setAttribute('form','another-form');});
+      const other=await page.evaluate(fillVisibleFields,{action:'status' as const,scope:'page' as const,facts});
+      assert.equal(other.skipped.some(item=>item.reason==='employer_submission_disabled'),false,labelSource);
+      await page.goto(url);
+    }
     const raw=await page.evaluate(fillVisibleFields,{action:'fill' as const,facts});
 
     await assert.rejects(prepareCurrentPage(page,{url,profile,resume},AbortSignal.timeout(10000),()=>{}),/employer still has submission disabled/);
