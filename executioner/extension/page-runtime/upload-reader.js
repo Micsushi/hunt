@@ -11,8 +11,6 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
     const widgetVisible = node => visible(node) && Number(getComputedStyle(node).opacity) > 0;
     const nativeVisible = editable(e) && widgetVisible(e);
     const proven=state.nativeFileBindings?.get(e);
-    if ([e,...labels].some(node=>(node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean)
-      .some(id=>node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`).length!==1))) return null;
     const refs = node => (node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean).flatMap(id => {
       const matches = [...node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`)];
       return matches.length === 1 && matches[0] !== e && widgetVisible(matches[0]) ? matches : [];
@@ -42,14 +40,14 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
     const uploadGroup=composedClosest(e,'[role=group][aria-labelledby]');
     if (uploadGroup && uploadGroup!==regionFor(e)) {
       const ids=(uploadGroup.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean);
-      const names=ids.length===1 ? [...uploadGroup.getRootNode().querySelectorAll(`[id="${CSS.escape(ids[0])}"]`)] : [];
-      if (names.length!==1 || !widgetVisible(names[0])) return null;
+      const names = ids.flatMap(id=>[...uploadGroup.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`)]);
+      if (!names.length) return null;
+      const primary = names[0];
       const namedGroups=deepQuery(uploadGroup.getRootNode(),'[role=group][aria-labelledby]').filter(group=>
         (group.getAttribute('aria-labelledby')??'').split(/\s+/).includes(ids[0]));
-      const labelGroup=names[0].closest('[role=group]');
-      if(namedGroups.length!==1 || regionFor(names[0])!==regionFor(e) || labelGroup && labelGroup!==uploadGroup)return null;
-      const name=names[0].textContent??'';
-      if (uploadLabelKind(name)==='other') return null;
+      const labelGroup=primary.closest('[role=group]');
+      if(namedGroups.length!==1 || regionFor(primary)!==regionFor(e) || labelGroup && labelGroup!==uploadGroup)return null;
+      const name=widgetVisible(primary) ? primary.textContent??'' : '';
       if (resumeLabel(name)) {
         if (!widgetVisible(uploadGroup) || composedClosest(uploadGroup,'[aria-hidden=true],[inert]') ||
             deepQuery(uploadGroup,'input,textarea,select').some(control=>control!==e)) return null;
@@ -57,7 +55,7 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
         return null;
       }
     }
-    if (text.some(resumeLabel)) {
+    if ([...text,...owner.visibleHeadings].some(resumeLabel)) {
       if (nativeVisible) return {label:'Resume', widget:e};
       if (boundLabels.length === 1) return {label:'Resume', widget:boundLabels[0]};
     }

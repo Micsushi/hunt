@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,type Page} from 'playwright';
+import {uploadLabelKind,readUploadOwnerLabels} from '../../extension/page-runtime/upload-label.js';
+import {inspectHostedFields} from '../../src/product/hosted-field-observation.ts';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
 
 const pdf=Buffer.from('%PDF-native-group-fixture');
@@ -20,16 +22,53 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     assert.deepEqual(await bytes(page,'resume'),[...pdf]);assert.deepEqual(await bytes(page,'cover_letter'),[]);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});assert.deepEqual(await bytes(page,'resume'),[]);
     await page.evaluate(fillVisibleFields,{action:'redo' as const});assert.deepEqual(await bytes(page,'resume'),[...pdf]);
+    for (const label of ['Upload your résumé (PDF or DOCX, max 5 MB)','Téléverser votre CV','Veuillez joindre votre curriculum vitae (CV)','Curriculum vitæ (obligatoire)']) {
+      assert.equal(uploadLabelKind(label),'resume',label);
+    }
+    for (const hint of ['Drag and drop a file here or click to browse','Choisir un fichier','Accepted file types: PDF, DOCX']) {
+      assert.equal(uploadLabelKind(hint),'action',hint);
+    }
+    for (const other of ['Resume.pdf','CV or academic transcript (PDF)','Téléverser votre relevé de notes','Cover letter instead of CV']) {
+      assert.equal(uploadLabelKind(other),'other',other);
+    }
     await page.locator('#upload-label-resume').evaluate(e=>e.textContent='Cover Letter');
     await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/Fields changed/);
     assert.deepEqual(await bytes(page,'resume'),[...pdf]);assert.equal(await page.evaluate('submits'),0);
+    // Both workflows recognize the owned heading when the picker itself names only an action.
+    for (const refs of ['resume-title missing-hint','resume-title empty-hint','resume-title format-hint']) {
+      await page.reload();
+      await fixture(page,`<fieldset aria-labelledby="${refs}"><legend id="resume-title">Téléverser votre CV (PDF, DOCX)</legend>
+        <span id="empty-hint"></span><span id="format-hint">Max 5 MB</span>
+        <input id="resume" type="file" required aria-label="Choose a file"></fieldset>`);
+      const [evidence]=await page.locator('#resume').evaluateAll(readUploadOwnerLabels);
+      assert.equal(evidence?.ambiguous,false,refs);
+      assert.ok(evidence.visibleHeadings.some(text=>uploadLabelKind(text)==='resume'));
+      const hosted=(await inspectHostedFields(page)).find(field=>field.kind==='file');
+      assert.equal(hosted?.resumeTarget,true,refs);
+      assert.equal((await fill(page)).resume,'verified',refs);
+      assert.deepEqual(await bytes(page,'resume'),[...pdf]);
+    }
+    await page.reload();
+    await fixture(page,'<div class="application-field"><span class="application-label">Résumé / CV</span>'+
+      '<input id="resume" type="file" required aria-label="Choose file"></div>');
+    const hosted=(await inspectHostedFields(page)).find(field=>field.kind==='file');
+    assert.equal(hosted?.label,'Résumé / CV');assert.equal(hosted.resumeTarget,true);
+    assert.equal((await fill(page)).resume,'verified');
+
   }finally{await browser.close();}
 });
 
 test('duplicate names, multiple inputs and foreign group labels cannot authorize upload',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
+    const conflictingOwners = [
+      '<fieldset aria-labelledby="missing-title"><input id="resume" type="file" required aria-label="Resume"></fieldset>',
+      '<div class="application-field"><div class="application-label">Relevé de notes</div><input type="file" required aria-label="Resume"></div>',
+      '<fieldset aria-labelledby="title hint"><legend id="title">Resume</legend><span hidden id="hint">Academic transcript</span><input type="file" required></fieldset>',
+      '<fieldset aria-labelledby="title hint"><legend id="title">Resume</legend><span id="hint"></span><span id="hint">PDF</span><input type="file" required></fieldset>',
+    ];
     for(const body of [
+      ...conflictingOwners,
       group('cover_letter','Cover Letter').replace('type="file"','type="file" required aria-label="Resume"'),
       group('resume','Resume/CV*').replace('</div><label','</div><input type="file"><label'),
       group('resume','Resume/CV*')+'<div id="upload-label-resume">Resume/CV</div>',
@@ -37,7 +76,12 @@ test('duplicate names, multiple inputs and foreign group labels cannot authorize
       '<div role="group"><div id="outside">Resume/CV*</div></div><div role="group" aria-labelledby="outside"><label for="resume">Attach</label><input id="resume" type="file" class="visually-hidden"></div>',
       group('resume','Resume/CV*').replace('for="resume"','for="different"'),
     ]) {
-      const page=await browser.newPage();await fixture(page,body);assert.notEqual((await fill(page)).resume,'verified');
+      const page=await browser.newPage();await fixture(page,body);
+      if (conflictingOwners.includes(body)) {
+        const observed=(await inspectHostedFields(page)).find(field=>field.kind==='file');
+        assert.equal(observed?.resumeTarget,false,body);
+      }
+      assert.notEqual((await fill(page)).resume,'verified');
       assert.equal(await page.locator('input[type=file]').evaluateAll(es=>es.some(e=>(e as HTMLInputElement).files!.length>0)),false);
       await page.close();
     }

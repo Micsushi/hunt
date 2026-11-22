@@ -1,8 +1,24 @@
 // A file picker action describes how to select a file, not which document belongs there.
 export function uploadLabelKind(value) {
-  const label = String(value ?? '').normalize('NFKC').replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/\s*[:：]\s*$/, '').trim();
-  if (/^(?:(?:upload|attach|add)\s+)?(?:your\s+)?(?:r[eé]sum[eé]|cv|curriculum vitae)(?:(?:\s*\/\s*|\s+or\s+)(?:r[eé]sum[eé]|cv))?(?:\s*\((?:required|optional)\))?$/i.test(label)) return 'resume';
-  if (!label || /^(?:file(?:-input)?|(?:attach|replace|choose|select|upload|browse)(?:\s+(?:a |your )?files?)?|drop or select (?:your )?files?|choose a file or drop it here)$/i.test(label)) return 'action';
+  const label = String(value ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/\s*[:：]\s*$/, '').trim();
+  const formatHint = text => {
+    const formats = /\b(?:pdf|docx?|rtf|odt|txt|word)\b/g;
+    const sizes = /\b\d+(?:[.,]\d+)?\s*(?:kb|mb|ko|mo)\b/g;
+    if (!text.match(formats) && !text.match(sizes)) return false;
+    return !text.replace(formats, '').replace(sizes, '')
+      .replace(/\b(?:accepted|accepts|allowed|supported|formats?|files?|types?|are|only|or|and|max(?:imum)?|size|limit|up to|au format|ou|et|taille|maximale?|acceptes?|autorises?)\b/g, '')
+      .replace(/[\s.(),:;|/+\-–—<>]/g, '');
+  };
+  const purpose = /^(?:(?:upload|attach|add|select|choose)(?:\s+(?:your|a))?\s+|(?:veuillez\s+)?(?:televerser|telecharger|joindre|joignez|ajouter|deposer|selectionner)(?:\s+(?:votre|un|le))?\s+|your\s+|votre\s+)?(?:resume|cv|curriculum vit(?:ae|æ)(?:\s*\(cv\))?)(?:(?:\s*\/\s*|\s+(?:or|ou)\s+)(?:resume|cv))?(?=$|[\s(:\-–—,])/;
+  const match = purpose.exec(label);
+  if (match) {
+    const suffix = label.slice(match[0].length).trim().replace(/^\((?:required|optional|obligatoire|facultatif)\)\s*/,'');
+    if (!suffix || formatHint(suffix)) return 'resume';
+  }
+  if (!label || formatHint(label)) return 'action';
+  const picker = /^(?:file(?:-input)?|(?:attach|replace|choose|select|upload|browse)(?:\s+(?:a |your )?files?)?|drop or select (?:your )?files?|choose a file or drop it here|(?:click to upload|browse files?)(?: or drag and drop)?|(?:drag(?: and| &)?)?\s*drop (?:a |your )?files? here(?: or (?:click to )?(?:browse|select|choose)(?: (?:a )?files?)?)?|click (?:here )?to (?:browse|select|upload)(?: (?:a )?files?)?|parcourir|(?:choisir|selectionner|televerser) (?:un |des |vos )?fichiers?|glissez[- ]deposez (?:un |vos )?fichiers? ici)$/;
+  if (picker.test(label)) return 'action';
   return 'other';
 }
 
@@ -15,13 +31,20 @@ export function readUploadOwnerLabels(inputs) {
   const children = node => node.localName==='slot' ? node.assignedElements({flatten:true}) : (node.shadowRoot || node).children;
   return inputs.map(input=>{
     const labels = [];
+    const visibleHeadings = [];
     let ambiguous = false;
     const names = node => {
       labels.push(node.getAttribute('aria-label') || '');
-      for (const id of (node.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
+      const ids = (node.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+      for (const [index,id] of ids.entries()) {
         const refs=node.getRootNode().querySelectorAll('[id="'+CSS.escape(id)+'"]');
-        if (refs.length!==1) ambiguous=true;
-        else if (refs[0]!==input) labels.push(refs[0].textContent || '');
+        if (refs.length>1 || index===0 && refs.length===0) ambiguous=true;
+        if (refs.length===1 && refs[0]!==input) {
+          const text=refs[0].textContent || '';
+          labels.push(text);
+          if (index===0 && !text.trim() && !refs[0].getAttribute('aria-label')?.trim()) ambiguous=true;
+          labels.push(refs[0].getAttribute('aria-label') || '');
+        }
       }
     };
     names(input);
@@ -37,12 +60,17 @@ export function readUploadOwnerLabels(inputs) {
       visit(group);
       if (controls.length!==1 || controls[0]!==input) break;
       names(group);
+      if (group.getClientRects().length && group.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
+          !group.closest('[hidden],[inert],[aria-hidden=true]')) visibleHeadings.push(group.getAttribute('aria-label') || '');
       if (group.matches('.application-field') && group.previousElementSibling?.matches('.application-label')) headings.push(group.previousElementSibling);
       for (const title of headings) {
         names(title);
-        labels.push(title.textContent || '');
+        const text=title.textContent || '';
+        labels.push(text);
+        if (title.getClientRects().length && !title.closest('[hidden],[inert],[aria-hidden=true]') &&
+            title.checkVisibility({visibilityProperty:true,opacityProperty:true})) visibleHeadings.push(text);
       }
     }
-    return {key:input.getAttribute('data-c3-hosted'), labels, ambiguous};
+    return {key:input.getAttribute('data-c3-hosted'), labels, visibleHeadings, ambiguous};
   });
 }

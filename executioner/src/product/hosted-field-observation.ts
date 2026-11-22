@@ -52,14 +52,14 @@ export async function inspectHostedFields(page: Page) {
       let group = radioGroup ?? e.closest('.ashby-application-form-field-entry,.application-question,.application-field,.field,fieldset') ?? e.parentElement;
       const referenceIds=[...new Set((e.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean))];
       const referenceMatches=referenceIds.map(id=>[...(e.getRootNode() as Document|ShadowRoot).querySelectorAll(`[id="${CSS.escape(id)}"]`)]);
-      const referenced=referenceMatches.every(matches=>matches.length===1)?referenceMatches.map(matches=>matches[0]!):[];
+      const referenced=referenceMatches.every((matches,index)=>matches.length===1 || e.type==='file' && index>0 && !matches.length)?referenceMatches.flat():[];
       const ownLabels = [...e.labels ?? []];
       const descriptiveIds = new Set((e.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean));
       const labelsOnly = referenced.filter(label => !descriptiveIds.has(label.id));
       let labelOwners: Element[] = labelsOnly.length ? labelsOnly : ownLabels;
       let label = labelsOnly.map(labelText).join(' ').trim() || clean(e.getAttribute('aria-label') ?? '') || ownLabels.map(labelText).join(' ');
       const fileLabels = e.type === 'file' ? [e.getAttribute('aria-label') ?? '', ...labelsOnly.map(labelText), ...ownLabels.map(labelText)] : [];
-      const ambiguousFile = e.type === 'file' && (referenceMatches.some(matches => matches.length!==1) || e.multiple);
+      const ambiguousFile = e.type === 'file' && (referenceMatches.some((matches,index) => matches.length>1 || index===0 && !matches.length) || e.multiple);
       if(uploadGroup) {
         const owners=(uploadGroup.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean).flatMap(id=>{
           const matches=[...document.querySelectorAll(`[id="${CSS.escape(id)}"]`)];
@@ -123,7 +123,7 @@ export async function inspectHostedFields(page: Page) {
           if (candidate) { labelOwners = [candidate]; label = labelText(candidate); break; }
         }
       }
-      if (e.type==='file' && !fileLabels.some(Boolean) && label) fileLabels.push(label);
+      if (e.type==='file' && label && !labelsOnly.length && !ownLabels.length) fileLabels.push(label);
       if (!label) label = e.getAttribute('placeholder') ?? '';
       if(radios.length) {
         const owner=document.getElementById(radioGroup?.getAttribute('aria-labelledby')??'') ?? radioGroup?.querySelector('legend,.ashby-application-form-question-title') ?? (radioGroup?.matches('[class*=consentRadioGroupItem]') ? radioGroup.querySelector('p') : null) ?? e.closest('.ashby-application-form-field-entry')?.querySelector('.ashby-application-form-question-title') ?? e.closest('.application-field')?.parentElement?.querySelector('.application-label');
@@ -197,6 +197,9 @@ export async function inspectHostedFields(page: Page) {
     const labels = fileLabels.map(uploadLabelKind);
     const owned = owners.filter(owner=>owner.key===field.key);
     const consistent = owned.length===1 && !owned[0]!.ambiguous && !owned[0]!.labels.some(label=>uploadLabelKind(label)==='other');
-    return {...field, ...(field.kind==='file' && {resumeTarget:consistent && !ambiguousFile && labels.includes('resume') && !labels.includes('other')})};
+    const resumeHeading = owned[0]?.visibleHeadings.find(text=>uploadLabelKind(text)==='resume');
+    const resumeTarget = consistent && !ambiguousFile && !labels.includes('other') && (labels.includes('resume') || !!resumeHeading);
+    return {...field, ...(field.kind==='file' && {resumeTarget,
+      label:resumeTarget && uploadLabelKind(field.label)==='action' && resumeHeading ? resumeHeading : field.label})};
   });
 }
