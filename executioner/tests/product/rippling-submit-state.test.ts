@@ -39,7 +39,12 @@ test('Rippling final submission availability is read after the last fill across 
       assert.equal(report.skipped.some(item=>item.reason==='employer_submission_disabled'),disabled,workflow);
       assert.equal(await page.evaluate('window.submits'),0);
     }
-    for (const workflow of ['C3.1','C3.2'] as const) for (const invalidEmail of [false,true]) {
+    const settlingCases = [
+      { staysDisabled: true, invalidEmail: false },
+      { staysDisabled: false, invalidEmail: false },
+      { staysDisabled: false, invalidEmail: true },
+    ];
+    for (const workflow of ['C3.1','C3.2'] as const) for (const { staysDisabled, invalidEmail } of settlingCases) {
       await page.goto(url);
       if (invalidEmail) await page.locator('input[type=email]').fill('invalid');
       let writes=0;
@@ -48,14 +53,15 @@ test('Rippling final submission availability is read after the last fill across 
         if(action==='fill') {
           writes++;
           assert.ok(result.skipped.some(item=>item.reason==='employer_submission_disabled'));
-          await page.evaluate(async()=>{await new Promise(resolve=>setTimeout(resolve,20));document.querySelector('button')!.removeAttribute('aria-disabled');});
+          if (!staysDisabled) await page.evaluate(async()=>{await new Promise(resolve=>setTimeout(resolve,20));document.querySelector('button')!.removeAttribute('aria-disabled');});
         }
         return {...result};
       }});
       assert.equal(writes,1);
-      assert.equal(settled.incomplete,invalidEmail,JSON.stringify(settled.skipped));
-      assert.equal(settled.skipped.some(item=>item.reason==='employer_submission_disabled'),false);
-      assert.equal(settled.needsOwnerReview,invalidEmail);
+      assert.equal(settled.incomplete,staysDisabled || invalidEmail,JSON.stringify(settled.skipped));
+      assert.equal(settled.skipped.some(item=>item.reason==='employer_submission_disabled'),staysDisabled);
+      assert.equal(settled.needsOwnerReview,staysDisabled || invalidEmail);
+      assert.equal(await page.evaluate('window.submits'),0);
     }
     await page.goto(url);
     await page.locator('button').evaluate(el=>Object.defineProperty(el,'innerText',{configurable:true,get(){throw new Error('readback interrupted');}}));
