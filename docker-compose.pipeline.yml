@@ -21,6 +21,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.review
+      args:
+        VITE_C3_EXTENSION_ID: ${VITE_C3_EXTENSION_ID:-}
     profiles: ["pipeline", "c0", "c1", "c2", "c1c2", "all"]
     depends_on:
       postgres:
@@ -209,6 +211,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
+      args:
+        VITE_C3_EXTENSION_ID: ${VITE_C3_EXTENSION_ID:-}
     profiles: ["pipeline"]
     depends_on:
       - review

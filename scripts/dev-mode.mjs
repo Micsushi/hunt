@@ -83,7 +83,7 @@ async function main() {
       },
     );
     if (mode === "full") {
-      console.log("C3 v3 is not implemented. C4 is not started.");
+      console.log("C3 runs separately as a local service and browser extension.");
     }
     env.VITE_BACKEND_URL = "http://127.0.0.1:18080";
   }

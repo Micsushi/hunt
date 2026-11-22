@@ -6,6 +6,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend ./
+ARG VITE_C3_EXTENSION_ID
 RUN npm run build
 
 

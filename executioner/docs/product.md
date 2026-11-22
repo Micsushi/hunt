@@ -324,7 +324,9 @@ The website build must pin the existing extension's public ID with
 `VITE_C3_EXTENSION_ID`. Obtain that ID from the authenticated local
 `/agent/status` response (`extension.extensionId`) after updating the existing
 extension. Do not change its installation directory or manifest key to obtain a
-different ID. The ID is public; the pairing key stays in extension storage.
+different ID. Set the public ID in the Compose environment before building the
+review and frontend images. Both images serve a copy of the website. The
+pairing key stays in extension storage.
 
 In the extension's connection settings, **Connect Hunt website** opens the
 trusted website with its public extension ID. Hunt checks it against its build

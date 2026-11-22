@@ -84,7 +84,13 @@ export function Layout({ children, username, onLogout, loggingOut }: Props) {
     try {
       await onLogout()
     } catch (error) {
-      if (mounted.current) showToast(error instanceof Error ? 'Sign out failed: ' + error.message : 'Sign out failed. Try again.', 'error')
+      if (mounted.current)
+        showToast(
+          error instanceof Error
+            ? 'Sign out failed: ' + error.message
+            : 'Sign out failed. Try again.',
+          'error',
+        )
       if (mounted.current)
         setLogoutError(error instanceof Error ? error.message : 'Please try again.')
     } finally {
