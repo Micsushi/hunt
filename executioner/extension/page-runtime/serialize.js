@@ -19,6 +19,7 @@ import { revealRipplingPhoneSelection } from '../page-adapters/rippling-phone.js
 import { observeWorkdayDocument } from '../workday-page.js';
 import { observeFormDocument, currentPageInterruption } from '../form-page.js';
 import { addressGroupLabel } from '../page-adapters/jazz-address.js';
+import { leverResumeTitle } from '../page-adapters/lever-resume.js';
 import { clientAttachmentState, verifiedClientAttachment } from '../page-adapters/client-attachment.js';
 import { markedRequired, smartRecruitersUploadHeading } from '../page-adapters/required-markers.js';
 import { createSmartRecruitersScreening } from '../page-adapters/smartrecruiters-screening.js';
@@ -33,7 +34,7 @@ import { runPageFill } from './fill.js';
 export function fillPageDocument(input) {
   return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices, createSmartRecruitersScreening,
     createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, jobviteRetainedResume, watchJobviteScreening, createJobviteGroups, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
-    ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
+    ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, wrappedUploadTitle:leverResumeTitle, noticeMarkers:workdayNoticeMarkers});
 }
 
 // Only shipped module functions enter the serialized program. Applicant data travels as a separate argument.
@@ -72,6 +73,7 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   observeFormDocument,
   currentPageInterruption,
   addressGroupLabel,
+  leverResumeTitle,
   markedRequired,
   clientAttachmentState,
   verifiedClientAttachment,

@@ -4,6 +4,7 @@ import { chromium } from 'playwright';
 import { fillApplication } from '../../src/product/engine.ts';
 import { inspectHostedFields } from '../../src/product/hosted-application.ts';
 import { applicantProfile } from '../../src/product/sources.ts';
+import { fillVisibleFields } from '../../extension/generic-fill.js';
 
 test('hosted labels exclude survey descriptions and requiredness stays with each control', async()=>{
   const browser=await chromium.launch({headless:true});
@@ -11,7 +12,16 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     const page=await browser.newPage();
     const url='https://jobs.lever.co/fixture/11111111-1111-4111-8111-111111111111/apply';
     await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:`
-      <label>Name<input required></label><label>Email<input type="email" required></label>
+      <form><label>Name<input required></label><label>Email<input type="email" required></label>
+      <li class="application-question resume"><label>
+        <div class="application-label">Resume/CV<span class="required">*</span></div>
+        <div class="application-field"><a class="visible-resume-upload" href="#"><span class="filename"></span><span class="default-label">Attach Resume/CV</span>
+          <input type="file" id="resume-upload-input" name="resume" data-qa="input-resume" style="opacity:0"></a>
+          <span class="resume-upload-failure" style="display:none">Couldn't auto-read resume.</span>
+          <span class="resume-upload-working" style="display:none">Analyzing resume...</span>
+          <span class="resume-upload-success" style="display:none">Success!</span></div>
+      </label></li>
+      <span hidden id="other-document">Cover Letter</span>
       <div class="application-question">
         <label id="demographic" for="survey">Disability status</label>
         <p id="survey-instructions">Optional information. ${'Long employer description * '.repeat(35)}</p>
@@ -40,9 +50,14 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
       <label>Wrapping asterisk only <span aria-hidden="true">*</span><select id="asterisk"><option value="">Choose</option><option>Yes</option></select></label>
       <label>Unknown required prompt ${'Full question text '.repeat(32)}<textarea id="unknown" required></textarea></label>
       <label>Preferred name<input id="preferred" required></label>
-      <button onclick="window.submitted=true">Submit application</button>`}));
+      <button type="button" onclick="window.submitted=true">Submit application</button></form>`}));
     await page.goto(url);
     const fields=await inspectHostedFields(page);
+    const resumeControl=page.locator('input[name=resume]');
+    const resume=fields.find(field=>field.kind==='file');
+    assert.equal(resume?.label,'Resume/CV');
+    assert.equal(resume?.resumeTarget,true);
+    assert.equal(resume?.required,true);
     assert.equal(fields.find(field=>field.label==='Disability status')?.required,false);
     assert.equal(fields.find(field=>field.label==='Race')?.required,false);
     assert.equal(fields.find(field=>field.label==='Wrapping asterisk only')?.required,true);
@@ -53,6 +68,7 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
       preferred_name:'Saved',work_authorization_canada:'true',region:'Alberta',application_source:'Job board'});
     const review=await fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
     assert.equal(review.needsOwnerReview,true);
+    assert.equal(await resumeControl.evaluate(async(e:HTMLInputElement)=>e.files?.[0]?.text()),'%PDF-fixture');
     assert.equal(await page.locator('#authorized').inputValue(),'Yes');
     assert.equal(await page.locator('#unrelated').inputValue(),'');
     assert.equal(await page.locator('#qualified').inputValue(),'Yes');
@@ -70,6 +86,44 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     assert.equal(fallback.needsOwnerReview,true);
     assert.equal(await page.locator('#authorized').inputValue(),'Yes');
     assert.equal(await page.locator('#qualified').inputValue(),'Yes');
+    assert.equal(await page.evaluate('window.submitted'),undefined);
+
+    await page.reload();
+    await resumeControl.evaluate((input:HTMLInputElement)=>{
+      input.addEventListener('change',()=>{
+        input.closest('a')!.querySelector('.filename')!.textContent=input.files?.[0]?.name ?? '';
+        (input.closest('label')!.querySelector('.resume-upload-success') as HTMLElement).style.display=input.files?.length?'':'none';
+      });
+    });
+    const facts=[{factId:'given_name',value:'Fixture'},{factId:'family_name',value:'Applicant'},{factId:'email_address',value:'fixture@example.invalid'}];
+    const fillPage = () => page.evaluate(fillVisibleFields,{facts,
+      resume:{name:'Resume.pdf',base64:Buffer.from('%PDF-current-page').toString('base64')},replaceExistingResume:true});
+    const currentPage = await fillPage();
+    assert.equal(currentPage.resume,'verified');
+    assert.equal(await resumeControl.evaluate(async(e:HTMLInputElement)=>e.files?.[0]?.text()),'%PDF-current-page');
+    assert.equal(await page.locator('.filename').textContent(),'Resume.pdf');
+    assert.equal((await inspectHostedFields(page)).find(field=>field.kind==='file')?.resumeTarget,true);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.equal(await resumeControl.evaluate((e:HTMLInputElement)=>e.files!.length),0);
+    for (const [selector,attribute,value] of [
+      ['input[name=resume]','aria-label','Cover letter'],
+      ['li.resume > label','aria-label','Cover letter'],
+      ['li.resume > label','aria-labelledby','other-document'],
+      ['li.resume > label','text','Cover letter only'],
+      ['.filename','text','Upload your transcript'],
+      ['.filename','aria-label','Cover letter'],
+      ['.resume-upload-success','text','Attach your academic transcript'],
+    ] as const) {
+      await page.reload();
+      await page.locator(selector).evaluate((node,[attribute,value])=>{
+        if (attribute==='text') { (node as HTMLElement).style.display=''; node.append(value); }
+        else node.setAttribute(attribute,value);
+      },[attribute,value] as const);
+      const conflict=selector+' '+attribute;
+      assert.equal((await inspectHostedFields(page)).find(field=>field.kind==='file')?.resumeTarget,false,conflict);
+      assert.notEqual((await fillPage()).resume,'verified',conflict);
+      assert.equal(await resumeControl.evaluate((e:HTMLInputElement)=>e.files!.length),0,conflict);
+    }
     assert.equal(await page.evaluate('window.submitted'),undefined);
   } finally { await browser.close(); }
 });

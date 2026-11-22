@@ -546,6 +546,7 @@ export const productBoundary = {
       "src/product/extension-bridge.ts",
     ],
     uploads: [
+      "extension/page-adapters/lever-resume.js",
       "extension/page-adapters/upload-status.js",
       "extension/page-adapters/bamboo-resume.js",
       "extension/page-adapters/client-attachment.js",
@@ -597,6 +598,7 @@ export const productBoundary = {
       "extension/page-adapters/document.js",
       "extension/page-adapters/fabric-control.js",
       "extension/page-adapters/jazz-address.js",
+      "extension/page-adapters/lever-resume.js",
       "extension/page-adapters/required-markers.js",
       "extension/page-adapters/rippling-location.js",
       "extension/page-adapters/rippling-phone.js",
@@ -738,7 +740,7 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/target.ts",
     ],
-    "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts", "extension/page-runtime/upload-label.js"],
+    "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts", "extension/page-runtime/upload-label.js", "extension/page-adapters/lever-resume.js"],
     "extension/page-runtime/field-recognition.js": ["extension/page-runtime/upload-label.js"],
     "src/product/hosted-autocomplete.ts": ["src/product/application-contract.ts"],
     "src/product/hosted-application.ts": [

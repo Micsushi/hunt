@@ -1,6 +1,6 @@
 import {uploadLabelKind,readUploadOwnerLabels} from './upload-label.js';
 
-export function createUploadReader({ isPortalResumeBinding, uploadHeading,
+export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrappedUploadTitle,
   state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
 }) {
   const fileBinding = e => {
@@ -15,8 +15,10 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
       const matches = [...node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`)];
       return matches.length === 1 && matches[0] !== e && widgetVisible(matches[0]) ? matches : [];
     });
+    const title = wrappedUploadTitle(e);
     const text = [e.getAttribute('aria-label') ?? '', ...refs(e).map(node=>node.textContent ?? ''),
-      ...labels.flatMap(label=>[label.getAttribute('aria-label') ?? '', ...refs(label).map(node=>node.textContent ?? ''), label.textContent ?? ''])];
+      ...labels.flatMap(label=>[label.getAttribute('aria-label') ?? '', ...refs(label).map(node=>node.textContent ?? ''),
+        (title?.parentElement === label ? title : label).textContent ?? ''])];
     const fieldset = composedClosest(e,'fieldset');
     const legend = fieldset?.querySelector(':scope > legend');
     if (legend && fieldset.querySelectorAll('input:not([type=hidden]),select,textarea').length===1) text.push(legend.textContent ?? '');

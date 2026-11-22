@@ -70,7 +70,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
   const screeningFields = adapters.createSmartRecruitersScreening(checkedForm,deepQuery,composedClosest,visible);
-  const { semanticChoiceButton, rawLabelFor, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
+  const { semanticChoiceButton, rawLabelFor, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, wrappedUploadTitle:adapters.wrappedUploadTitle, composedClosest, deepQuery, fabricWidget, norm });
   const labelFor = element => screeningFields.label(element) || baseLabelFor(element);
   const cityChoices = adapters.smartRecruitersCityChoices(createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
   const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
@@ -85,7 +85,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if(pending && choiceState(widget)===pending.before) {state.unconfirmedChoices.delete(widget.widget);return null;}
     return pending;
   };
-  const { fileBinding, uploadOwner } = createUploadReader({ isPortalResumeBinding, uploadHeading:adapters.uploadHeading,
+  const { fileBinding, uploadOwner } = createUploadReader({ isPortalResumeBinding, uploadHeading:adapters.uploadHeading, wrappedUploadTitle:adapters.wrappedUploadTitle,
     state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
   });
   const {parserComplete, parserBusy, uploadSuccess, hasPdfUploadNotice} = adapters.createUploadStatusReader(norm, deepQuery);
