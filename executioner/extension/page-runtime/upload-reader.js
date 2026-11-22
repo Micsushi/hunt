@@ -1,4 +1,4 @@
-import {uploadLabelKind} from './upload-label.js';
+import {uploadLabelKind,readUploadOwnerLabels} from './upload-label.js';
 
 export function createUploadReader({ isPortalResumeBinding, uploadHeading,
   state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
@@ -22,7 +22,8 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
     const fieldset = composedClosest(e,'fieldset');
     const legend = fieldset?.querySelector(':scope > legend');
     if (legend && fieldset.querySelectorAll('input:not([type=hidden]),select,textarea').length===1) text.push(legend.textContent ?? '');
-    if (text.some(label=>uploadLabelKind(label)==='other')) return null;
+    const [owner] = readUploadOwnerLabels([e]);
+    if (owner.ambiguous || [...text,...owner.labels].some(label=>uploadLabelKind(label)==='other')) return null;
     if (isPortalResumeBinding(proven)) {
       const proof=verifiedDialogUpload(e);
       return proof && !e.multiple ? {label:'Resume',widget:proof.label} : null;

@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import { uploadLabelKind } from '../../extension/page-runtime/upload-label.js';
+import { uploadLabelKind, readUploadOwnerLabels } from '../../extension/page-runtime/upload-label.js';
 import { annotateQuestionContext } from '../../extension/question-context.js';
 import { ApplicationPause } from './application-contract.ts';
 
@@ -191,8 +191,12 @@ export async function inspectHostedFields(page: Page) {
     return out;
   });
   if (fields === null) throw new ApplicationPause('A required choice has ambiguous controls. Inspect the application before retrying.');
+  const owners = fields.some(field=>field.kind==='file')
+    ? await page.locator('input[type=file][data-c3-hosted]').evaluateAll(readUploadOwnerLabels) : [];
   return fields.map(({fileLabels,ambiguousFile,...field}) => {
     const labels = fileLabels.map(uploadLabelKind);
-    return {...field, ...(field.kind==='file' && {resumeTarget:!ambiguousFile && labels.includes('resume') && !labels.includes('other')})};
+    const owned = owners.filter(owner=>owner.key===field.key);
+    const consistent = owned.length===1 && !owned[0]!.ambiguous && !owned[0]!.labels.some(label=>uploadLabelKind(label)==='other');
+    return {...field, ...(field.kind==='file' && {resumeTarget:consistent && !ambiguousFile && labels.includes('resume') && !labels.includes('other')})};
   });
 }

@@ -2122,23 +2122,31 @@ export async function enrichQuestionnaireFields(
         ? "multiple" as const
         : "single" as const;
       const fileLabels: string[] = [];
+      let unresolvedFileLabel = false;
       if (leaf instanceof HTMLInputElement && leaf.type === 'file') {
-        const owner = leaf.closest('[data-automation-id$="-FileUpload"]');
-        const field = leaf.closest('[data-automation-id="formField"],[data-automation-id^="formField-"]');
-        for (const node of [leaf, owner, field]) {
-          if (!node) continue;
-          fileLabels.push(node.getAttribute('aria-label') ?? '');
-          for (const id of (node.getAttribute('aria-labelledby') ?? '').split(/\s+/u)) {
-            if (id) fileLabels.push(document.getElementById(id)?.textContent ?? '');
+        const owners = '[data-automation-id$="-FileUpload"],[data-automation-id="formField"],[data-automation-id^="formField-"],fieldset,[role="group"]';
+        for (const label of leaf.labels ?? []) fileLabels.push(label.textContent ?? '');
+        for (let node: Element | null = leaf; node && !node.matches('form,main,body'); node = node.parentElement) {
+          if (node.querySelectorAll('input:not([type=hidden]),select,textarea').length === 1) {
+            for (const heading of node.querySelectorAll(':scope > .application-label,:scope > .application-question-title')) {
+              fileLabels.push(heading.textContent ?? '');
+            }
           }
-        }
-        for (const label of [...(leaf.labels ?? []), ...(field?.querySelectorAll('label,legend') ?? [])]) {
-          fileLabels.push(label.textContent ?? '');
+          if (node !== leaf && !node.matches(owners)) continue;
+          fileLabels.push(node.getAttribute('aria-label') ?? '');
+          for (const id of (node.getAttribute('aria-labelledby') ?? '').split(/\s+/u).filter(Boolean)) {
+            const references = document.querySelectorAll(`[id="${CSS.escape(id)}"]`);
+            if (references.length !== 1 || !references[0]?.textContent?.trim()) unresolvedFileLabel = true;
+            else fileLabels.push(references[0].textContent);
+          }
+          for (const label of node.querySelectorAll('label,legend,.application-label,.application-question-title')) {
+            if (label.closest(owners) === node) fileLabels.push(label.textContent ?? '');
+          }
         }
       }
       return {
         target: element.getAttribute("data-hunt-target-token") ?? "",
-        fileLabels,
+        fileLabels, unresolvedFileLabel,
         populatedValueValid: (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) &&
           leaf.value.trim() !== "" && leaf.validity.valid &&
           (leaf.minLength < 0 || leaf.value.length >= leaf.minLength) &&
@@ -2174,7 +2182,7 @@ export async function enrichQuestionnaireFields(
       field.behavior === "select" || field.behavior === "listbox";
     return Object.freeze({
       ...field,
-      ...(field.behavior === 'file_upload' && metadata.fileLabels.some(label=>uploadLabelKind(label)==='other')
+      ...(field.behavior === 'file_upload' && (metadata.unresolvedFileLabel || metadata.fileLabels.some(label=>uploadLabelKind(label)==='other'))
         ? {state:'ambiguous' as const} : {}),
       populatedValueValid: metadata.populatedValueValid,
       ...(text ? {
@@ -3497,7 +3505,7 @@ export async function bindQuestionnaireTargets(
       if (!visible(control) && !(uploadOwner !== null && visible(uploadOwner))) continue;
       if (uploadOwner !== null) {
         const labelledBy = uploadOwner.getAttribute("aria-labelledby");
-        if (labelledBy !== null) control.setAttribute("aria-labelledby", labelledBy);
+        if (labelledBy !== null && !control.hasAttribute("aria-labelledby")) control.setAttribute("aria-labelledby", labelledBy);
       }
       const genericCheckboxOwner = control.closest<HTMLElement>(
         '[data-automation-id="formField"], [data-automation-id^="formField-"]',
