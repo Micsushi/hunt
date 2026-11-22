@@ -5,7 +5,7 @@
 Application filling skips optional fields by default in C3.1 and C3.2, even when
 saved profile answers are available. Existing optional values are preserved. Fields that
 become required are reconsidered from the current page. Optional attachments are
-not uploaded automatically.
+not uploaded automatically. When an employer asks for a transcript, cover letter, or other supporting document, supply that file yourself. C3 uses the selected résumé only in a field identified as a résumé or CV.
 
 ## Diagnosing a paused draft
 
