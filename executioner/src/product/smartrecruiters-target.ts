@@ -33,8 +33,30 @@ export async function verifySmartRecruitersApplication(
   if (!source || !destination) return false;
   const [, company, id] = source;
   const {company:applicationCompany,uuid:applicationUuid} = destination;
-  if (company !== applicationCompany) return false;
+  if (!id || company !== applicationCompany) return false;
 
+  const record = await publicPosting(company, id, signal);
+  return record?.id === id && record.company?.identifier === company && record.active === true &&
+    typeof record.uuid === "string" && record.uuid.toLowerCase() === applicationUuid.toLowerCase();
+}
+
+/** Resolve a OneClick document to its authoritative public posting. */
+export async function smartRecruitersPostingForApplication(applicationUrl: string) {
+  const application = jobUrl(applicationUrl);
+  const publication = application && smartRecruitersPublication(application);
+  if (!publication) return;
+  const {company, uuid} = publication;
+  const record = await publicPosting(company, uuid);
+  if (!record || record.company?.identifier !== company || record.active !== true ||
+      typeof record.uuid !== "string" || record.uuid.toLowerCase() !== uuid.toLowerCase() ||
+      typeof record.id !== "string" || !/^\d+$/.test(record.id) ||
+      typeof record.postingUrl !== "string") return;
+  const posting = jobUrl(record.postingUrl);
+  const source = posting && /^\/([\w-]+)\/(\d+)(?:-[\w-]+)?\/?$/.exec(posting.pathname);
+  if (source?.[1] === company && source[2] === record.id) return posting!.origin + posting!.pathname;
+}
+
+async function publicPosting(company: string, id: string, signal?: AbortSignal) {
   const timeout = AbortSignal.timeout(5000);
   try {
     const response = await fetch(`${postingApi}/v1/companies/${company}/postings/${id}`, {
@@ -43,7 +65,7 @@ export async function verifySmartRecruitersApplication(
       credentials: "omit",
       headers: { Accept: "application/json" },
     });
-    if (!response.ok || !response.body) return false;
+    if (!response.ok || !response.body) return;
     // Only a small public metadata response can establish the binding.
     const reader = response.body.getReader();
     let size = 0;
@@ -55,20 +77,19 @@ export async function verifySmartRecruitersApplication(
         size += value.length;
         if (size > 256 * 1024) {
           await reader.cancel();
-          return false;
+          return;
         }
         chunks.push(value);
       }
     } finally { reader.releaseLock(); }
-    const record = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       id?: unknown;
       uuid?: unknown;
       active?: unknown;
+      postingUrl?: unknown;
       company?: { identifier?: unknown };
     } | null;
-    return record !== null && record.id === id && record.company?.identifier === company && record.active === true &&
-      typeof record.uuid === "string" && record.uuid.toLowerCase() === applicationUuid!.toLowerCase();
   } catch {
-    return false;
+    return;
   }
 }

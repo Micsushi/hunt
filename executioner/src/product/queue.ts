@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
 import { productApplicationTarget } from "./target.ts";
+import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
@@ -44,14 +45,14 @@ function runFailure(error: unknown, stage: string) {
 }
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
-  selectedDocument?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  selectedDocument?: string; selectedApplicationUrl?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
   componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
   resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
 }
 export interface BrowserConnection {
   connected: boolean;
-  open(url: string, tabId?: number, existingOnly?: boolean, selectedDocument?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
+  open(url: string, tabId?: number, existingOnly?: boolean, selectedDocument?: string, selectedApplicationUrl?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
   release(tabId: number): Promise<void>;
   focus?(tabId: number, url?: string): Promise<void>;
   prepareAccount?(options: import('./workday-sign-in.ts').WorkdayAccountOptions): Promise<void>;
@@ -137,13 +138,14 @@ export class ApplicationQueue {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
     this.concurrency = value; this.save(); this.safePump();
   }
-  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean; selectedDocument?: string } = {}) {
+  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean; selectedDocument?: string; selectedApplicationUrl?: string } = {}) {
     if (!this.settings) throw new Error("Choose a profile and resume first.");
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
       const target = productApplicationTarget(input.url);
       if (target.ats === "generic" && !options.paused) {
         const existing=this.jobs.find(job=>job.key===target.key && job.status!=='removed');
+        if (existing?.selectedApplicationUrl) throw new Error('To reconnect this application, use Prepare again on its selected tab.');
         if (!existing || existing.status!=='paused' || this.running.has(existing.id) || this.reviewActions.has(existing.id) ||
             !Number.isSafeInteger(input.tabId) || (input.tabId??0)<1 || Object.keys(input).some(key=>!['url','tabId'].includes(key))) {
           throw new Error("Import unfamiliar applications paused. Only an existing paused application can connect an explicitly selected tab using its original job link.");
@@ -176,13 +178,16 @@ export class ApplicationQueue {
           existing.resumeName ??= input.resumeName;
           existing.resumeVersion ??= input.resumeVersion;
         }
-        if (options.selectedDocument) existing.selectedDocument = options.selectedDocument;
+        if (options.selectedDocument) {
+          existing.selectedDocument = options.selectedDocument;
+          existing.selectedApplicationUrl = options.selectedApplicationUrl;
+        }
         added.push(existing); continue;
       }
       const id = randomUUID();
       pendingInputs.set(id, { profile: this.settings.profile, resume });
       const job: ProductJob = { id, ...target, title: input.title?.slice(0, 200) || target.posting,
-        ...(options.selectedDocument && {selectedDocument:options.selectedDocument}),
+        ...(options.selectedDocument && {selectedDocument:options.selectedDocument,selectedApplicationUrl:options.selectedApplicationUrl}),
         status: options.paused ? "paused" : "queued", stage: options.selectedDocument ? "Selected application ready. Choose Run in Applications" : options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
         resumeName: input.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
         resumeSha256: createHash("sha256").update(Buffer.from(resume, "base64")).digest("hex"),
@@ -359,8 +364,8 @@ export class ApplicationQueue {
         });
         job.stage = workdayApplicationConnection;
       }
-      if (job.selectedDocument && !job.tabId) throw new ApplicationPause('Reopen Prepare on the selected Jobvite application before retrying.');
-      const session = await this.bridge.open(job.url, job.tabId, !!job.selectedDocument || productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount, job.selectedDocument).catch(error => {
+      if (job.selectedDocument && !job.tabId) throw new ApplicationPause('Reopen Prepare on the selected application before retrying.');
+      const session = await this.bridge.open(job.url, job.tabId, !!job.selectedDocument || productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount, job.selectedDocument, job.selectedApplicationUrl).catch(error => {
         recordComponentFailure(error, "browser_interaction", "open_tab");
         throw error;
       });
@@ -370,6 +375,16 @@ export class ApplicationQueue {
       const executionUrl=productApplicationTarget(job.url).ats==='generic' ? session.applicationUrl ?? job.url : job.url;
       const result = await this.fill(session.page, { url: executionUrl, profile: input.profile, learningRoot: join(this.root, "learning", job.id, runId),
         screeningTransition: url => verifiedScreeningTransition(session.page,url),
+        onSmartRecruitersScreening: url => {
+          if (!job.selectedDocument || job.selectedApplicationUrl !== executionUrl) return;
+          const personal = new URL(executionUrl);
+          const publication = smartRecruitersPublication(personal);
+          if (!publication || publication.screening) return;
+          personal.pathname = publication.base + '/screening';
+          if (url !== personal.href || session.page.url() !== url) throw new ApplicationPause('The employer screening page changed. Inspect the selected application.');
+          job.selectedApplicationUrl = url;
+          this.changed(job);
+        },
         resume: Buffer.from(input.resume, "base64"), resumeExpected: job.resumeExpected,
         onResumeObserved: () => { job.resumeExpected = true; this.changed(job); },
         resumeUpload: job.resumeUpload, onResumeUpload: receipt => { job.resumeUpload = receipt; this.changed(job); },

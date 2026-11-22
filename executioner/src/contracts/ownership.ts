@@ -721,6 +721,7 @@ export const productBoundary = {
     ],
     "src/product/jobvite-workflow.ts": ["src/product/page-matching.ts"],
     "src/product/smartrecruiters-workflow.ts": [
+      "extension/page-adapters/document.js",
       "src/product/component-diagnostics.ts",
     ],
     "src/product/current-page-workflow.ts": [

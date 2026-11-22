@@ -96,6 +96,36 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
   return {owner, region, current, upload, writePhone, screening, personalReady};
 }
 
-export function observeCurrentDocument() {
-  return /\.(myworkdayjobs|myworkdaysite)\.com$/.test(location.hostname) ? observeWorkdayDocument() : observeFormDocument(applicationAttachmentControls);
+/** Read the OneClick screening footer without interacting with it or inferring form completeness. */
+export function smartRecruitersScreeningFooter(expectedUrl) {
+  if (!expectedUrl || location.href !== expectedUrl || location.origin !== 'https://jobs.smartrecruiters.com') return;
+  const url = new URL(expectedUrl);
+  const company = /^\/oneclick-ui\/company\/([\w-]+)\/publication\/[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}\/screening\/?$/i.exec(url.pathname)?.[1];
+  if (!company || url.username || url.password || url.searchParams.getAll('dcr_ci').some(value => value !== company)) return;
+  const only = (root, selector) => {
+    const matches = root?.querySelectorAll(selector);
+    return matches?.length === 1 ? matches[0] : null;
+  };
+  const owner = only(document, 'main oc-screening-questions');
+  const footer = only(owner, 'oc-nav-screening-questions');
+  const action = only(footer, 'oc-button[data-test=footer-submit]');
+  const host = only(action, 'spl-button');
+  const button = only(host?.shadowRoot, 'button');
+  const hidden = '[hidden],[inert],[aria-hidden=true]';
+  const bounds = button?.getBoundingClientRect();
+  if (!only(owner, 'oc-screening-questions-form') || !button || button.closest(hidden) || host.closest(hidden) ||
+      !bounds.width || !bounds.height || !button.checkVisibility({opacityProperty:true,visibilityProperty:true}) ||
+      !/^submit(?: application)?$/i.test(host.innerText.trim())) return 'unknown';
+  const disabled = '[disabled],[aria-disabled=true]';
+  return button.matches(':disabled') || button.closest(disabled) || host.closest(disabled) ? 'disabled' : 'enabled';
+}
+
+export function observeCurrentDocument(inspectedUrl) {
+  if (/\.(myworkdayjobs|myworkdaysite)\.com$/.test(location.hostname)) return observeWorkdayDocument();
+  const observed = observeFormDocument(applicationAttachmentControls);
+  const footer = smartRecruitersScreeningFooter(inspectedUrl);
+  if (!footer || observed.kind === 'security_challenge' || observed.kind === 'loading' || observed.signals.includes('account_or_code_control')) return observed;
+  const signals = observed.signals.filter(signal => signal !== 'submission_control' && signal !== 'application_submit');
+  if (footer !== 'unknown') signals.push('submission_control');
+  return {...observed, kind: footer === 'unknown' ? 'unknown' : 'application', signals, screeningSubmissionControl:footer};
 }

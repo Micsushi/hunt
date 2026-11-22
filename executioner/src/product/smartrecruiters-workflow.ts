@@ -1,4 +1,5 @@
 import { smartRecruitersPublication } from './smartrecruiters-target.ts';
+import { smartRecruitersScreeningFooter } from '../../extension/page-adapters/document.js';
 import type { Page } from 'playwright';
 import type { ComponentFailure } from './component-diagnostics.ts';
 import { pause } from './application-wait.ts';
@@ -16,15 +17,21 @@ export async function advanceSmartRecruiters(page:Page, url:string, report:{
   const owner = page.locator(publication.screening ? 'main oc-screening-questions' : 'main oc-oneclick-form');
   if (await owner.count() !== 1) return;
   const footer = owner.locator(firstFooter);
-  const submit = publication.screening
-    ? owner.locator('oc-nav-screening-questions oc-button[data-test=footer-submit] spl-button').filter({hasText:/^\s*Submit(?: application)?\s*$/i}).locator('button')
-    : owner.getByRole('button',{name:/^(?:submit(?: application)?|send application)$/i});
+  const submit = owner.getByRole('button',{name:/^(?:submit(?: application)?|send application)$/i});
   const terminal = async () => {
-    if (page.url() !== url || await submit.count() !== 1 || !await submit.isVisible()) return;
+    if (page.url() !== url) return;
+    if (publication.screening) {
+      const footer = await page.evaluate(smartRecruitersScreeningFooter,url);
+      if (footer === 'disabled') return 'The employer still has submission disabled on this screening page.';
+      if (footer !== 'enabled') return;
+    } else if (await submit.count() !== 1 || !await submit.isVisible()) return;
     const review = owner.getByRole('heading',{name:/^review(?: your application)?$/i});
-    return await review.count() === 1 && await review.isVisible()
-      ? 'The employer Review screen is open. C3 stopped before submission.'
-      : 'The employer shows its final submission button. C3 stopped before submission.';
+    const reviewVisible = await review.count() === 1 && await review.isVisible();
+    if (page.url() !== url) return;
+    if (publication.screening) return (reviewVisible ? 'The employer Review screen is open. ' : '') +
+      'The final submission button is enabled. C3 stopped before submission.';
+    return reviewVisible ? 'The employer Review screen is open. C3 stopped before submission.' :
+      'The employer shows its final submission button. C3 stopped before submission.';
   };
   const end = await terminal();
   if (end) return end;

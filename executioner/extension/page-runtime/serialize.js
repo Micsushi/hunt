@@ -1,4 +1,4 @@
-import { applicationAttachmentControls, observeCurrentDocument, smartRecruitersForm, workdayNoticeMarkers } from '../page-adapters/document.js';
+import { applicationAttachmentControls, observeCurrentDocument, smartRecruitersForm, smartRecruitersScreeningFooter, workdayNoticeMarkers } from '../page-adapters/document.js';
 import { createUploadReader } from './upload-reader.js';
 import { createLegacyAnswerReader } from './legacy-page-answers.js';
 import { createFabricControl } from '../page-adapters/fabric-control.js';
@@ -47,6 +47,7 @@ function isolatedFunction(entry, dependencies) {
 export const pageFillSource = isolatedFunction(fillPageDocument, [
   runPageFill,
   observeCurrentDocument,
+  smartRecruitersScreeningFooter,
   smartRecruitersForm,
   createUploadReader,
   createLegacyAnswerReader,
@@ -81,7 +82,7 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   smartRecruitersOptions,
   createSmartRecruitersScreening,
 ]);
-export const observePageSource = isolatedFunction(observeCurrentDocument, [observeFormDocument, observeWorkdayDocument]);
+export const observePageSource = isolatedFunction(observeCurrentDocument, [observeFormDocument, observeWorkdayDocument, smartRecruitersScreeningFooter]);
 export const oneClickPersonalReadySource = isolatedFunction(() => {
   const {deepQuery, composedClosest, visible} = createDomReader();
   return smartRecruitersForm(deepQuery, composedClosest, visible)?.personalReady?.() === true;

@@ -238,11 +238,11 @@ export class ExtensionBridge {
       this.extension!.send(JSON.stringify({ id, method, params }));
     });
   }
-  async open(url: string, existingTabId?: number, existingOnly = false, selectedDocument?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
+  async open(url: string, existingTabId?: number, existingOnly = false, selectedDocument?: string, selectedApplicationUrl = url): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
     const posting = productApplicationTarget(url);
     let target = await this.existingTarget(posting, existingTabId);
     let boundTabId = existingTabId;
-    if (selectedDocument && target.url!==url) throw new Error('The selected application address changed. Inspect the draft again.');
+    if (selectedDocument && target.url!==selectedApplicationUrl) throw new Error('The selected application address changed. Inspect the draft again.');
     const reportRedirect = existingTabId === undefined && !existingOnly && target.ats === 'generic' &&
       target.host === 'jobs.smartrecruiters.com' && !target.posting.startsWith('/oneclick-ui/');
     let result;

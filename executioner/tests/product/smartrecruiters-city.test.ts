@@ -6,12 +6,14 @@ import { verifiedScreeningTransition } from '../../src/product/extension-bridge.
 import { prepareCurrentPage } from '../../src/product/current-page-workflow.ts';
 import { advanceSmartRecruiters } from '../../src/product/smartrecruiters-workflow.ts';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
+import { observePageSource } from '../../extension/page-runtime/serialize.js';
 import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
 import { disposeResumeArtifact } from '../../src/contracts/resume-artifact.ts';
 import { createPageAnswerPlanner } from '../../src/product/page-answer-planner.ts';
 
 test('a postal dropdown selects only a unique match for the saved code', async () => {
-  const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid',postal_code:'K1A 0B1'});
+  const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid',
+    postal_code:'K1A 0B1',city:'Ottawa',region:'Ontario',country:'Canada'});
   const sources = productSources(profile, Buffer.from('%PDF-fixture'));
   try {
     const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), 'Fixture');
@@ -26,6 +28,14 @@ test('a postal dropdown selects only a unique match for the saved code', async (
     assert.equal((await propose(['K1A0B2'])).answer, null);
     assert.equal((await propose(['K1A0B1'], 'K1A 0B2')).answer, null);
     assert.equal((await propose([], 'K1A0B1')).answer, 'K1A0B1');
+    const saved = 'K1A 0B1, Ottawa, ON, CA';
+    const conflicts = ['K1A 0B2, Ottawa, ON, CA','K1A 0B1, Toronto, ON, CA',
+      'K1A 0B1, Ottawa, QC, CA','K1A 0B1, Ottawa, ON, US','K1A 0B1, Ottawa, CA'];
+    assert.equal((await propose([...conflicts, saved])).answer, saved);
+    assert.equal((await propose([], saved)).answer, saved);
+    assert.equal((await propose(conflicts)).answer, null);
+    assert.equal((await propose([saved, 'K1A0B1, Ottawa, Ontario, Canada'])).answer, null);
+    assert.equal((await propose([saved], conflicts[1])).answer, null);
   } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
 });
 
@@ -154,7 +164,30 @@ test('only the queued OneClick personal footer advances and the final action rem
     const result=await page.evaluate(fillVisibleFields,{matchingPlans:[{fieldId:field.fieldId,signature:field.signature,answer:'3',provisional:false,reason:'test_fact'}]});
     assert.deepEqual(result.filled,['Years of experience']);
     assert.equal(result.resume,'unverified');
-    assert.match(String(await advanceSmartRecruiters(page,page.url(),report,signal)??''),/final submission button/);
+    assert.match(String(await advanceSmartRecruiters(page,page.url(),report,signal)??''),/final submission button is enabled/);
+    const screeningUrl = page.url();
+    const inspect = (expected = screeningUrl) => page.evaluate<{kind:string;signals:string[];screeningSubmissionControl?:string}>(`(${observePageSource})(${JSON.stringify(expected)})`);
+    const final = page.locator('oc-nav-screening-questions spl-button button');
+    const enabled = await inspect();
+    assert.equal(enabled.kind,'application');
+    assert.equal(enabled.screeningSubmissionControl,'enabled');
+    assert.ok(enabled.signals.includes('submission_control'));
+    assert.equal((await inspect(url)).screeningSubmissionControl,undefined);
+    for (const [control,css] of [[final,'width:0;height:0;padding:0;border:0'],[final,'opacity:0'],
+      [page.locator('oc-nav-screening-questions spl-button'),'opacity:0'],[page.locator('main'),'opacity:0']] as const) {
+      await control.evaluate((e,css)=>e.setAttribute('style',css),css);
+      assert.equal((await inspect()).screeningSubmissionControl,'unknown');
+      assert.equal(await advanceSmartRecruiters(page,screeningUrl,report,signal),undefined);
+      await control.evaluate(e=>e.removeAttribute('style'));
+    }
+    await final.evaluate((el:HTMLButtonElement)=>{el.disabled=true;});
+    assert.equal((await inspect()).screeningSubmissionControl,'disabled');
+    assert.match(String(await advanceSmartRecruiters(page,screeningUrl,report,signal)),/submission disabled/);
+    await final.evaluate((el:HTMLButtonElement)=>{el.disabled=false;});
+    await page.locator('oc-nav-screening-questions').evaluate(nav=>nav.appendChild(nav.firstElementChild!.cloneNode(true)));
+    assert.equal((await inspect()).screeningSubmissionControl,'unknown');
+    assert.equal((await inspect()).signals.includes('submission_control'),false);
+    assert.equal(await advanceSmartRecruiters(page,screeningUrl,report,signal),undefined);
     assert.equal(await page.evaluate(()=>(globalThis as any).submissions),0);
     await openPersonal();
     await next.evaluate((button:HTMLButtonElement)=>{
@@ -174,7 +207,7 @@ test('only the queued OneClick personal footer advances and the final action rem
 });
 
 
-test('queued screening choices require independent backing and the popup preserves them', async () => {
+test('direct screening fills reversible listboxes and leaves radios to the queue', async () => {
   const browser = await chromium.launch({headless:true});
   try {
     const page = await browser.newPage();
@@ -209,6 +242,10 @@ test('queued screening choices require independent backing and the popup preserv
       clear.onclick=()=>{
         input.value='';(host as HTMLElement & {value:unknown}).value=undefined;
         host.removeAttribute('value');clear.hidden=true;
+        for (const option of menu.querySelectorAll('spl-dropdown-item')) {
+          const state=option.shadowRoot!.querySelector('[role=option]')!;
+          if (state.hasAttribute('aria-selected'))state.setAttribute('aria-selected','false');
+        }
       };
       for (const row of rows) {
         const node=document.createElement('spl-dropdown-item');
@@ -220,6 +257,10 @@ test('queued screening choices require independent backing and the popup preserv
           input.value=row.label;input.setAttribute('aria-expanded','false');menu.hidden=true;
           (host as HTMLElement & {value:unknown}).value={value:row.id};
           host.setAttribute('value','[object Object]');clear.hidden=false;
+          for (const option of menu.querySelectorAll('spl-dropdown-item')) {
+            const state=option.shadowRoot!.querySelector('[role=option]')!;
+            if (state.hasAttribute('aria-selected'))state.setAttribute('aria-selected',String(option===node));
+          }
         };
         menu.append(node);
       }
@@ -227,19 +268,94 @@ test('queued screening choices require independent backing and the popup preserv
     const snapshot=async()=> (await page.evaluate(fillVisibleFields,{action:'status' as const})).matching!;
     const initial=await snapshot();
     assert.deepEqual(initial.map(row=>row.question).sort(),['Eligible for the role?','Employer privacy notice','Former employee?'].sort());
-    const plans=initial.filter(row=>row.control!=='checkbox').map(row=>({fieldId:row.fieldId,signature:row.signature,
+    const plansFor=(rows:typeof initial)=>rows.filter(row=>row.control!=='checkbox').map(row=>({fieldId:row.fieldId,signature:row.signature,
       answer:row.control==='radio'?'Yes':'Non | No',provisional:false,reason:'saved_fact'}));
-    const popup=await page.evaluate(fillVisibleFields,{matchingPlans:plans});
-    assert.deepEqual(popup.filled,[]);
-    assert.equal((await snapshot()).filter(row=>row.selected).length,0);
+    const cdp=await page.context().newCDPSession(page);
+    const {frameTree}=await cdp.send('Page.getFrameTree');
+    const {executionContextId}=await cdp.send('Page.createIsolatedWorld',{frameId:frameTree.frame.id,worldName:'screening-popup'});
+    const directAction=async (input:Parameters<typeof fillVisibleFields>[0]):Promise<Awaited<ReturnType<typeof fillVisibleFields>>>=>{
+      const response=await cdp.send('Runtime.evaluate',{contextId:executionContextId,awaitPromise:true,returnByValue:true,
+        expression:'('+fillVisibleFields.toString()+')('+JSON.stringify({...input,scope:'page',expectedUrl:url})+')'});
+      if(response.exceptionDetails)throw new Error(response.exceptionDetails.exception?.description ?? response.exceptionDetails.text);
+      return response.result.value;
+    };
+    const directPlans=plansFor((await directAction({action:'status'})).matching!);
+    const popup=()=>directAction({matchingPlans:directPlans});
+    const choice=page.locator('spl-autocomplete input');
+    const clear=page.locator('spl-autocomplete [aria-label="Clear value"]');
+    const backing=()=>page.locator('spl-autocomplete').evaluate((host:Element & {value?:{value:string}})=>host.value?.value ?? '');
+    assert.deepEqual((await popup()).filled,[]);
+    assert.equal(await backing(),'');
+    assert.equal(await choice.getAttribute('aria-expanded'),'false');
+    const publishSelection=(id:string)=>page.locator('spl-autocomplete').evaluate((host:Element & {value?:{value:string}},id)=>{
+      const options=host.shadowRoot!.querySelectorAll('spl-dropdown-item');
+      [...options].forEach((option,index)=>option.shadowRoot!.querySelector('[role=option]')!
+        .setAttribute('aria-selected',String(id===['a','b'][index])));
+      if(id)host.value={value:id};
+    },id);
+    await publishSelection('');
+    await clear.evaluate(node=>node.setAttribute('aria-disabled','true'));
+    assert.deepEqual((await popup()).filled,[]);
+    assert.equal(await backing(),'');
+    assert.equal(await choice.getAttribute('aria-expanded'),'false');
+    await clear.evaluate(node=>node.removeAttribute('aria-disabled'));
+    await clear.evaluate(node=>node.removeAttribute('aria-label'));
+    assert.deepEqual((await popup()).filled,[]);
+    assert.equal(await backing(),'');
+    assert.equal(await choice.getAttribute('aria-expanded'),'false');
+    await page.locator('spl-autocomplete spl-icon').evaluate(node=>node.setAttribute('aria-label','Clear value'));
+
+    const direct=await popup();
+    assert.deepEqual(direct.filled,['Former employee?']);
+    assert.equal(await backing(),'a');
+    const host=page.locator('spl-autocomplete');
+    const selectedLabel=async()=> (await directAction({action:'status'})).matching?.find(row=>row.control==='listbox')?.selected;
+    await host.evaluate((el:Element & {value?:{value:string}})=>{
+      el.value={value:'retired-id'};el.setAttribute('value','retired-id');
+    });
+    assert.equal(await selectedLabel(),'');
+    await assert.rejects(directAction({action:'undo'}),/edits were preserved/);
+    assert.equal(await backing(),'retired-id');
+    await publishSelection('a');
+    for (const reflection of [null,'','[object Object]','a']) {
+      await host.evaluate((el,value)=>value===null?el.removeAttribute('value'):el.setAttribute('value',value),reflection);
+      assert.equal(await selectedLabel(),'Non | No');
+      await publishSelection('');
+      assert.equal(await selectedLabel(),'');
+      await publishSelection('a');
+    }
+    assert.equal((await snapshot()).find(row=>row.control==='radio')?.selected,'');
+    assert.equal(page.url(),url);
+    assert.deepEqual((await directAction({action:'undo'})).filled,['Former employee?']);
+    assert.equal(await backing(),'');
+    await clear.evaluate(node=>node.setAttribute('aria-disabled','true'));
+    await assert.rejects(directAction({action:'redo'}),/edits were preserved/);
+    assert.equal(await backing(),'');
+    await clear.evaluate(node=>node.removeAttribute('aria-disabled'));
+    assert.deepEqual((await directAction({action:'redo'})).filled,['Former employee?']);
+    assert.equal(await backing(),'a');
+    await publishSelection('b');
+    assert.equal(await choice.inputValue(),'Non | No','display can remain stale after backing changes');
+    await assert.rejects(directAction({action:'undo'}),/edits were preserved/);
+    assert.equal(await backing(),'b');
+    await choice.click();
+    await page.getByRole('option',{name:'Oui | Yes'}).click();
+    await assert.rejects(directAction({action:'undo'}),/edits were preserved/);
+    assert.equal(await backing(),'b');
+    assert.equal((await popup()).filled.length,0);
+    assert.equal(await backing(),'b');
+    await choice.click();
+    await page.getByRole('option',{name:'Non | No'}).click();
+    await directAction({action:'undo'});
+    await cdp.detach();
+    const plans=plansFor(initial);
+    const undoChoice=()=>page.evaluate(fillVisibleFields,{action:'undo' as const});
+    const redoChoice=()=>page.evaluate(fillVisibleFields,{action:'redo' as const});
     const queued=await page.evaluate(fillVisibleFields,{matchingPlans:plans,queuedScreening:true});
     assert.deepEqual(queued.filled.sort(),['Eligible for the role?','Former employee?'],JSON.stringify(queued.skipped));
     const selected=await snapshot();
     assert.equal(selected.find(row=>row.control==='radio')?.selected,'Yes');
     assert.equal(selected.find(row=>row.control==='listbox')?.selected,'Non | No');
-    const undoChoice=()=>page.evaluate(fillVisibleFields,{action:'undo' as const});
-    const redoChoice=()=>page.evaluate(fillVisibleFields,{action:'redo' as const});
-    const choice=page.locator('spl-autocomplete input');
     assert.deepEqual((await undoChoice()).filled,['Former employee?']);
     assert.equal(await choice.inputValue(),'');
     assert.equal((await snapshot()).find(row=>row.control==='radio')?.selected,'Yes');

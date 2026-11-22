@@ -14,6 +14,7 @@ export interface ProductInput {
   learningRoot?: string;
   /** Queue-owned authorization for the selected browser document. */
   screeningTransition?: (url:string) => () => Promise<void>;
+  onSmartRecruitersScreening?: (url:string) => void;
   /** Queue-owned durable recorder. Absence forbids account mutation. */
   recordAccountAction?: (event: AccountEvent, trace?: string) => void;
   resumeExpected?: boolean;

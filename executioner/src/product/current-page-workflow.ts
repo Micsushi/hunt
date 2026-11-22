@@ -20,6 +20,7 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
       advanced = true;
       signal.throwIfAborted();
       if (page.url() !== smartStep.screeningUrl) throw new ApplicationPause('The employer screening page changed before filling.');
+      input.onSmartRecruitersScreening?.(smartStep.screeningUrl);
       progress('Filling the SmartRecruiters screening step');
       const screening = await fill();
       const terminal = await advanceSmartRecruiters(page,smartStep.screeningUrl,screening,signal);

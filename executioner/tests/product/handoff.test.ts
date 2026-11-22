@@ -103,6 +103,26 @@ test('explicit paused import keeps the exact portable contract and never schedul
       const conflict=await post('browser/page',{operation,tabId:1,expectedUrl:job(1).url,documentId:'fixture'});
       assert.equal(conflict.status,400);assert.match((await conflict.json() as {error:string}).error,/queued application/);
     }
+    const workday='https://fixture.wd5.myworkdayjobs.com/External/job/Developer_R1';
+    service.queue.add([{url:workday,tabId:2}],{paused:true});
+    service.queue.credentials={email:'fixture@example.invalid',password:'fixture-only'};
+    const bridge=(service.queue as unknown as {bridge:ExtensionBridge}).bridge;
+    const accountOperations:unknown[]=[];
+    bridge.call=async(method,args={})=>{
+      if (method==='agentStatus') return {capabilities:['workday-account-fill-v1','workday-page-v1']};
+      assert.equal(method,'workdayAccount');
+      assert.equal(args.tabId,2);
+      accountOperations.push(args.operation);
+      if (args.operation==='inspect') return {state:'sign_in',documentId:'account-document'};
+      if (args.operation==='fill_page') return {state:'account_filled',filled:['Email','Password']};
+      return {};
+    };
+    const account=await post('browser/page',{operation:'fill',tabId:2,expectedUrl:workday,documentId:'account-document'});
+    assert.equal(account.status,200);
+    assert.equal((await account.json() as {accountPage:boolean}).accountPage,true);
+    assert.deepEqual(accountOperations,['begin','inspect','fill_page','end']);
+    assert.equal(service.queue.jobs.find(job=>job.url===workday)?.status,'paused');
+
     const expired=await post('browser/page',{operation:'fill',tabId:1,expectedUrl:job(2).url,documentId:'fixture',expiresAt:Date.now()-1});
     assert.equal(expired.status,400);assert.match((await expired.json() as {error:string}).error,/expired/);
     const synthetic=structuredClone(service.queue.getSettings()!.profile) as any;

@@ -171,7 +171,16 @@ export async function pageAction(params, attached) {
         }
         const response = await send('Runtime.callFunctionOn', {
           executionContextId,
-          functionDeclaration: `async function(input) { const observation=${observeCurrentDocument}; const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input); return {observation,...await (${pageFillSource})(input)}; }`,
+          functionDeclaration: `async function(input) { const observe=(${observePageSource}); const observation=observe(input.action==='status'||input.action==='fill'?input.expectedUrl:undefined); const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input);
+            const result=await (${pageFillSource})(input);
+            if ((input.action==='status' || observation.screeningSubmissionControl) && location.href!==input.expectedUrl) throw new Error('The inspected frame changed.');
+            if (result.componentFailure?.component==='page_state') return {observation,...result};
+            const current=observation.screeningSubmissionControl?observe(input.expectedUrl):observation;
+            if (current.screeningSubmissionControl==='disabled') {
+              result.incomplete=true;
+              (result.skipped??=[]).push({label:'Application',reason:'employer_submission_disabled'});
+            }
+            return {observation:current,...result}; }`,
           arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',expectedUrl:frame.url,expiresAt}}],
           awaitPromise:true,returnByValue:true,
         });
@@ -188,9 +197,12 @@ export async function pageAction(params, attached) {
     const observation = completed.find(result=>result.frameId===root.id)?.observation;
     const componentFailure = completed.find(result => result.componentFailure)?.componentFailure;
     const resume = completed.find(result=>result.frameId === root.id)?.resume;
-    const firstStep = operation === 'inspect' && completed.some(result=>result.frameId===root.id && result.jobviteFirstStep===true);
+    const rootResult = operation === 'inspect' && completed.find(result=>result.frameId===root.id);
+    const jobviteFirstStep = Boolean(rootResult && rootResult.jobviteFirstStep);
+    const smartRecruitersFirstStep = Boolean(rootResult && rootResult.smartRecruitersFirstStep);
+    const smartRecruitersScreening = Boolean(rootResult && rootResult.smartRecruitersScreening);
     return {tabId,url:expectedUrl,documentId:binding,operation,...(observation?{observation}:{}),
-      ...(firstStep && root.loaderId ? {jobviteFirstStep:true,mainDocumentId:root.loaderId} : {}),
+      ...((jobviteFirstStep || smartRecruitersFirstStep || smartRecruitersScreening) && root.loaderId ? {jobviteFirstStep,smartRecruitersFirstStep,smartRecruitersScreening,mainDocumentId:root.loaderId} : {}),
       ...(componentFailure ? {componentFailure} : {}),
       ...(['verified','missing','unverified','optional'].includes(resume) ? {resume} : {}),
       incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true),

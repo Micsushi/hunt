@@ -2,6 +2,18 @@ import { smartRecruitersOptions } from './smartrecruiters-city.js';
 
 // The fieldset and its radio hosts live in different shadow roots. The group publishes the selected option's value.
 export function createSmartRecruitersScreening(form, deepQuery, composedClosest, visible) {
+  const optionLabel = '.c-spl-autocomplete-option-content spl-truncate[title]';
+  const publishedSelection = (host, element, labels) => {
+    const id = element.getAttribute('aria-controls');
+    const lists = id ? deepQuery(host,'[role=listbox]').filter(list=>list.id===id) : [];
+    if (lists.length!==1) return;
+    // The menu can hide after a selection. Its owned option state must remain readable.
+    const options = smartRecruitersOptions(host,lists[0],optionLabel,deepQuery,()=>true);
+    if (options.length!==labels.length || new Set(options.map(option=>option.label)).size!==labels.length ||
+        options.some(option=>!labels.includes(option.label) || !/^(true|false)$/.test(option.node.getAttribute('aria-selected')??''))) return;
+    const selected = options.filter(option=>option.node.getAttribute('aria-selected')==='true');
+    if (selected.length<=1) return {label:selected[0]?.label ?? ''};
+  };
   const labelOf = host => {
     const labels = [...host?.children??[]].filter(child=>child.slot==='label-content');
     return labels.length===1 ? labels[0].textContent.trim() : '';
@@ -22,13 +34,22 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     if (!Array.isArray(choices) || !choices.length || choices.some(choice=>!choice?.label || !choice.id || choice.fieldValue!==choice.id)) return null;
     const options=choices.map(choice=>choice.label), values=choices.map(choice=>choice.id);
     if (new Set(options).size!==options.length || new Set(values).size!==values.length) return null;
-    // A search string can equal an option. Require the same employer option identifier behind the display.
+    // A visible input string and an opaque reflected object cannot identify the committed option.
+    const propertyReadable = 'value' in host;
     const backing=host.value;
-    const value=typeof backing==='string' ? backing : backing?.value ?? backing?.id;
+    let value=typeof backing==='string' ? backing : backing?.value ?? backing?.id;
+    const reflected = host.getAttribute('value');
+    const published = propertyReadable ? undefined : publishedSelection(host,element,options);
+    if (published?.label && element.getAttribute('aria-expanded')==='false' && element.getAttribute('aria-invalid')==='false') {
+      const id = values[options.indexOf(published.label)];
+      if (!reflected || reflected==='[object Object]' || reflected===id) value=id;
+    }
     const index=values.indexOf(value);
     const selected=index>=0 && element.value===options[index] && element.getAttribute('aria-invalid')!=='true' ? options[index] : '';
     return {host,question:rows[0].label,control:'listbox',options,values,selected,value:value??'',
-      coherent:!!selected || !element.value && (backing==null || backing==='') && !host.getAttribute('value'),required:rows[0].required===true && element.getAttribute('aria-required')==='true',valid:!!selected};
+      canReadBacking:propertyReadable || !!published,
+      coherent:!!selected || !element.value && (backing==null || backing==='') && !reflected && !published?.label,
+      required:rows[0].required===true && element.getAttribute('aria-required')==='true',valid:!!selected};
   };
   const label = element => {
     if (!form?.screening || form.region(element)!==form.owner) return '';
@@ -56,8 +77,11 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
       value,coherent,required:element.getAttribute('aria-required')==='true',valid:coherent && selected.length===1};
   };
   const select = async (element, observed, answer, checkDeadline, onChoiceClick) => {
-    const before = read(element);
+    const readCurrent = () => observed.clear ? currentChoice(element,observed) : read(element);
+    const clearStillBound = () => !observed.clear || clearButton(observed.host,false)===observed.clear;
+    const before = readCurrent();
     if (!before?.coherent || before.host!==observed.host || before.selected || !form.current()) return false;
+    if (!clearStillBound()) return false;
     const index = before.options.indexOf(answer);
     if (index<0 || before.values[index]!==observed.values[index]) return false;
     checkDeadline();
@@ -67,12 +91,12 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
       for (let attempt=0; attempt<10 && !option; attempt++) {
         await new Promise(resolve=>setTimeout(resolve,50));
         checkDeadline();
-        const active=read(element);
-        if (!form.current() || active?.host!==before.host || !active.coherent || active.selected ||
+        const active=readCurrent();
+        if (!form.current() || !clearStillBound() || active?.host!==before.host || !active.coherent || active.selected ||
             active.values[active.options.indexOf(answer)]!==before.values[index]) return false;
         const menus=deepQuery(before.host,'[role=listbox]').filter(list=>list.id===element.getAttribute('aria-controls') && visible(list));
         if (element.getAttribute('aria-expanded')!=='true' || menus.length!==1) continue;
-        const rendered=smartRecruitersOptions(before.host,menus[0],'.c-spl-autocomplete-option-content spl-truncate[title]',deepQuery,visible);
+        const rendered=smartRecruitersOptions(before.host,menus[0],optionLabel,deepQuery,visible);
         const matches=rendered.filter(row=>row.label===answer);
         if (matches.length===1 && !matches[0].disabled) option=matches[0].node;
       }
@@ -87,31 +111,44 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     for (let attempt=0; attempt<10; attempt++) {
       await new Promise(resolve=>setTimeout(resolve,50));
       checkDeadline();
-      const current=read(element);
+      const current=readCurrent();
       if (!current || current.host!==before.host || !form.current()) return false;
-      if (current.valid) return current.selected===answer && current.value===before.values[index];
+      if (current.valid) {
+        if (current.selected!==answer || current.value!==before.values[index] || !clearStillBound()) return false;
+        if (!observed.clear || clearButton(current.host)===observed.clear) return true;
+      }
     }
     return false;
   };
   const currentChoice = (element, original) => {
     if (!element.isConnected || !form?.current()) return null;
     const current = read(element);
-    if (current?.control !== 'listbox' || !current.coherent || current.host !== original.host ||
+    if (current?.control !== 'listbox' || !current.coherent || original.clear && !current.canReadBacking || current.host !== original.host ||
         current.question !== original.question || current.options.length !== original.options.length ||
         current.options.some((label,i) => label !== original.options[i] || current.values[i] !== original.values[i])) return null;
     return current;
   };
-  const clearButton = host => {
+  const clearButton = (host, requireVisible = true) => {
     const buttons = deepQuery(host,'spl-icon[role=button][aria-label],button[aria-label]').filter(node =>
       composedClosest(node,'spl-autocomplete')===host && node.getAttribute('aria-label')?.trim().replace(/\s+/g,' ')==='Clear value' &&
-      visible(node) && !node.disabled && !composedClosest(node,'[inert],[aria-disabled=true],[aria-hidden=true]') &&
+      (!requireVisible || visible(node)) && !node.matches(':disabled') && !node.disabled &&
+      !composedClosest(node,'[inert],[aria-disabled=true],[aria-hidden=true]') &&
       !(node instanceof HTMLButtonElement && node.form && node.type==='submit'));
     return buttons.length===1 ? buttons[0] : null;
+  };
+  const reversibleChoice = (element, observed) => {
+    const current = currentChoice(element,observed);
+    // The blank widget can hide its Clear value action until a choice is committed.
+    const clear = current?.canReadBacking && !current.selected && clearButton(current.host,false);
+    return clear ? {...observed,clear} : null;
   };
   const historyValue = (element, original) => {
     const current = currentChoice(element,original);
     // A radio has no supported way back to unanswered. Only journal choices with an employer-provided inverse.
-    return current && (!current.selected || clearButton(current.host)) ? current.value : null;
+    if (!current) return null;
+    const clear = clearButton(current.host,Boolean(current.selected));
+    if (original.clear && clear!==original.clear || current.selected && !clear) return null;
+    return current.value;
   };
   const restore = async (element, original, from, to, checkDeadline) => {
     if (historyValue(element,original)!==from) throw new Error('The screening choice changed. Your edits were preserved.');
@@ -131,5 +168,5 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     }
     throw new Error('The employer did not confirm the restored screening choice.');
   };
-  return {label,read,select,historyValue,restore};
+  return {label,read,select,reversibleChoice,historyValue,restore};
 }

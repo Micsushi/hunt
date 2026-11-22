@@ -142,15 +142,26 @@ export function createPageAnswerPlanner(
       if (addressCountryConflict || typeof postal !== 'string' || !postal.trim() || isLong(postal)) {
         return {...binding, answer:null, provisional:true, reason:addressCountryConflict ? 'address_country_conflict' : 'postal_code_requires_review'};
       }
-      // Canadian postal codes may omit the internal space. A city or partial code does not establish the postal selection.
+      // Canadian postal codes may omit the internal space.
       const postalKey = (value:string) => value.trim().toUpperCase().replace(/^([A-Z]\d[A-Z]) (\d[A-Z]\d)$/, '$1$2');
+      const matchesPostal = (label:string) => {
+        const [code, ...location] = label.split(',');
+        if (postalKey(code!) !== postalKey(postal)) return false;
+        if (!location.length) return true;
+        const city = ownerFact('city');
+        return location.length === 3 && !!canadianRegion && typeof city === 'string' && !!city.trim() &&
+          matchLocationOption([location.join(',')], city, canadianRegion, country) === 0;
+      };
       if (populated) {
-        if (row.valid && typeof row.selected === 'string' && postalKey(row.selected) === postalKey(postal)) {
+        if (row.valid && typeof row.selected === 'string' && matchesPostal(row.selected)) {
           return {...binding, answer:row.selected, provisional:false, reason:'profile_answer', lane:'profile_fact'};
         }
         return {...binding, answer:null, provisional:true, reason:'postal_code_requires_review'};
       }
-      const matching = row.options.filter(option => postalKey(option) === postalKey(postal));
+      if (row.searchQuery && postalKey(row.searchQuery) !== postalKey(postal)) {
+        return {...binding, answer:null, provisional:true, reason:'postal_code_requires_review'};
+      }
+      const matching = row.options.filter(matchesPostal);
       if (matching.length === 1) return {...binding, answer:matching[0]!, provisional:false, reason:'profile_answer', lane:'profile_fact'};
       if (row.queryable && !row.searchQuery && !matching.length) {
         return {...binding, answer:null, query:postal, provisional:false, reason:'choice_options_query', lane:'profile_fact'};

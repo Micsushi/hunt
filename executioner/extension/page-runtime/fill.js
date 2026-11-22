@@ -54,7 +54,15 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   if (customForm) {
     scope = 'application';
     result.frameScope = 'document';
-    if (customForm.owner) checkedForm = customForm;
+    if (customForm.owner) {
+      checkedForm = customForm;
+      if (action === 'status' && customForm.screening) result.smartRecruitersScreening = true;
+      if (action === 'status' && !customForm.screening &&
+          deepQuery(customForm.owner,'oc-personal-information').length === 1 &&
+          deepQuery(customForm.owner,'oc-nav-first-page footer[data-test=footer] oc-button[data-test=footer-next]').length === 1) {
+        result.smartRecruitersFirstStep = true;
+      }
+    }
   }
   const regionFor = e => checkedForm?.screening ? checkedForm.region(e) ?? e.getRootNode() : verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
   const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
@@ -651,18 +659,19 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const row=observe(e,f.label), plan=matchingPlans?.find(candidate=>candidate.fieldId===row.fieldId);
         if (!plan || plan.signature!==row.signature) { reportMatch(row,plan,'observed','field_changed_or_new'); continue; }
         if (row.selected) { reportExisting(row,plan,row.selected===plan.answer,skip); continue; }
-        if (!queuedScreening || !screenControl.coherent || typeof plan.answer!=='string' || !row.options.includes(plan.answer)) {
-          const reason = !queuedScreening ? 'screening_choice_requires_queue' : plan.reason;
+        const choice = queuedScreening ? screenControl : screeningFields.reversibleChoice(e,screenControl);
+        if (!choice || !choice.coherent || typeof plan.answer!=='string' || !row.options.includes(plan.answer)) {
+          const reason = !choice ? 'screening_choice_not_reversible' : plan.reason;
           skip(reason); reportMatch(row,plan,'unconfirmed',reason,row.selected); continue;
         }
         let confirmed, clickedListOption=false;
         try {
-          confirmed = await screeningFields.select(e,screenControl,plan.answer,checkDeadline,()=>{clickedListOption=true;});
+          confirmed = await screeningFields.select(e,choice,plan.answer,checkDeadline,()=>{clickedListOption=true;});
         } finally {
           if (clickedListOption) {
-            const after = screenControl.values[screenControl.options.indexOf(plan.answer)];
-            if (after && screeningFields.historyValue(e,screenControl)===after) {
-              changes.push({element:e,region:f.region,label:row.question,url:location.href,screeningChoice:screenControl,before:'',after});
+            const after = choice.values[choice.options.indexOf(plan.answer)];
+            if (after && screeningFields.historyValue(e,choice)===after) {
+              changes.push({element:e,region:f.region,label:row.question,url:location.href,screeningChoice:choice,before:'',after});
             }
           }
         }
