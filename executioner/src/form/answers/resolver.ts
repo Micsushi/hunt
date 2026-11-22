@@ -1,3 +1,4 @@
+import { uploadLabelKind } from '../../../extension/page-runtime/upload-label.js';
 import {
   boundedText,
   optionId,
@@ -444,6 +445,12 @@ export function createApplicationAnswerResolver(
         );
         return generated === undefined ? unsupported(field) : generatedSuccess(field, generated);
       };
+      const questionText = field.rawQuestion ?? field.label;
+      // A required upload can be a transcript, portfolio or another document.
+      // A draft fallback never authorizes attaching the applicant's résumé to it.
+      if (field.behavior === 'file_upload' && (field.state === 'ambiguous' || uploadLabelKind(questionText) !== 'resume')) {
+        return unsupported(field);
+      }
       if (field.readOnly === true || field.constraints?.readOnly === true) {
         return field.state === "populated"
           ? success({ kind: "readback_only", fieldId: field.fieldId })
@@ -456,7 +463,7 @@ export function createApplicationAnswerResolver(
       ) {
         return unsupported(field);
       }
-      const questionText = field.rawQuestion ?? field.label;
+
       // The saved profile has no conviction-history fact. Existing answers still need owner review.
       if (isCriminalConvictionDisclosure(questionText) || isApplicationAccuracyDeclaration(questionText)) {
         return failure("protected_answer_denied");

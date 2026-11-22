@@ -8,13 +8,14 @@ import { applicationTarget } from '../target.ts';
 
 interface UploadField {
   kind: string;
+  resumeTarget?: boolean;
   label: string;
   required: boolean;
   files: number;
   key: string;
 }
 
-const isResume = (field: UploadField) => /resume|cv/i.test(field.label);
+const isResume = (field: UploadField) => field.resumeTarget === true;
 
 async function hasGreenhouseAttachment(page: Page) {
   return applicationTarget(page.url()).ats === 'greenhouse' &&
@@ -46,7 +47,7 @@ export async function prepareHostedResume(
         entry.name.includes('/uncacheable_attributes/presigned_fields') && (entry as PerformanceResourceTiming).responseEnd > 0
       ), undefined, { timeout: 20000 });
       await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-      save(await uploadGreenhouseResume(page, file));
+      save(await uploadGreenhouseResume(page, file, control));
     } else if (ats === 'workable' && await control.getAttribute('data-ui') === 'resume') {
       if (await verifiedWorkableResume(page, previous, sha256, field.key)) return 'existing';
       save(await uploadWorkableResume(page, control, file));

@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { uploadLabelKind } from '../../extension/page-runtime/upload-label.js';
 import { annotateQuestionContext } from '../../extension/question-context.js';
 import { ApplicationPause } from './application-contract.ts';
 
@@ -57,6 +58,8 @@ export async function inspectHostedFields(page: Page) {
       const labelsOnly = referenced.filter(label => !descriptiveIds.has(label.id));
       let labelOwners: Element[] = labelsOnly.length ? labelsOnly : ownLabels;
       let label = labelsOnly.map(labelText).join(' ').trim() || clean(e.getAttribute('aria-label') ?? '') || ownLabels.map(labelText).join(' ');
+      const fileLabels = e.type === 'file' ? [e.getAttribute('aria-label') ?? '', ...labelsOnly.map(labelText), ...ownLabels.map(labelText)] : [];
+      const ambiguousFile = e.type === 'file' && (referenceMatches.some(matches => matches.length!==1) || e.multiple);
       if(uploadGroup) {
         const owners=(uploadGroup.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean).flatMap(id=>{
           const matches=[...document.querySelectorAll(`[id="${CSS.escape(id)}"]`)];
@@ -65,6 +68,7 @@ export async function inspectHostedFields(page: Page) {
         if(!owners.length && uploadGroup.matches('fieldset')) {const legend=uploadGroup.querySelector(':scope > legend');if(legend)owners.push(legend);}
         if(owners.length){
           group=uploadGroup;
+          fileLabels.push(...owners.map(labelText));
           if(!label || /^(?:attach|replace file|choose files?|select files?|upload)(?:\s*[✱*])?$/i.test(label))label=owners.map(labelText).join(' ');
           labelOwners=[...labelOwners,...owners];
         }
@@ -113,12 +117,13 @@ export async function inspectHostedFields(page: Page) {
       if(e.matches('.application-field:has(>ul[data-qa=checkboxes])')){const owner=e.parentElement?.querySelector('.application-label');if(owner)label=labelText(owner);}
       if (!label) {
         for (let parent = e.parentElement, depth = 0; parent && depth < 4; parent = parent.parentElement, depth++) {
+          if (e.type==='file' && parent.querySelectorAll('input:not([type=hidden]),select,textarea').length!==1) break;
           const candidate = parent.querySelector('label,legend,.application-label,.application-question-title');
           if (candidate && !ownsLabel(candidate)) break;
           if (candidate) { labelOwners = [candidate]; label = labelText(candidate); break; }
         }
       }
-      if (e.type === 'file' && /resume/i.test(e.id + e.name)) label = 'Resume';
+      if (e.type==='file' && !fileLabels.some(Boolean) && label) fileLabels.push(label);
       if (!label) label = e.getAttribute('placeholder') ?? '';
       if(radios.length) {
         const owner=document.getElementById(radioGroup?.getAttribute('aria-labelledby')??'') ?? radioGroup?.querySelector('legend,.ashby-application-form-question-title') ?? (radioGroup?.matches('[class*=consentRadioGroupItem]') ? radioGroup.querySelector('p') : null) ?? e.closest('.ashby-application-form-field-entry')?.querySelector('.ashby-application-form-question-title') ?? e.closest('.application-field')?.parentElement?.querySelector('.application-label');
@@ -179,12 +184,15 @@ export async function inspectHostedFields(page: Page) {
       }
       const owner = e.form ?? (e.hasAttribute('form') ? null : e.closest('form,[role=form]'));
       const formId = owner ? forms.indexOf(owner) : -1;
-      out.push({ key, ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
+      out.push({ key, fileLabels, ambiguousFile, ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
         ...(buttonConflict && {buttonConflict: true}), valid: !buttonConflict && e.getAttribute('aria-invalid') !== 'true' && (!e.validity || e.validity.valid), name: e.name ?? '',
         inputType: e.type, min: e.min === '' ? null : Number(e.min), max: e.max === '' ? null : Number(e.max), step: e.step === 'any' ? null : Number(e.step || '1'), minLength: e.minLength, maxLength: e.maxLength, pattern: e.pattern ?? '', readOnly: e.readOnly ?? false });
     }
     return out;
   });
   if (fields === null) throw new ApplicationPause('A required choice has ambiguous controls. Inspect the application before retrying.');
-  return fields;
+  return fields.map(({fileLabels,ambiguousFile,...field}) => {
+    const labels = fileLabels.map(uploadLabelKind);
+    return {...field, ...(field.kind==='file' && {resumeTarget:!ambiguousFile && labels.includes('resume') && !labels.includes('other')})};
+  });
 }

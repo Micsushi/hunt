@@ -1,3 +1,5 @@
+import {uploadLabelKind} from './upload-label.js';
+
 export function createFieldRecognition({ addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm }) {
   const semanticChoiceButton = e => e.tagName==='BUTTON' && (e.getAttribute('aria-haspopup')==='listbox' || e.getAttribute('role')==='combobox') && !fabricWidget(e);
   const rawLabelFor = element => {
@@ -17,7 +19,7 @@ export function createFieldRecognition({ addressGroupLabel, composedClosest, dee
     }).join(' ').trim() || addressGroupLabel(element,norm) || ({'given-name':'First name','family-name':'Last name',name:'Full name',email:'Email',tel:'Phone','address-line1':'Address line 1','address-line2':'Address line 2','address-level2':'City','address-level1':'State','postal-code':'Postal code','country-name':'Country'}[element.autocomplete]) || element.name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ') || element.placeholder || '';
   };
   const labelFor = element => element.getAttribute('data-hunt-question-context') ?? rawLabelFor(element);
-  const resumeLabel = text => /^(?:(?:upload|attach|add) )?(?:your )?(?:resume|résumé|cv|resume\s*\/\s*cv|cv or resume)$/i.test(norm(text));
-  const otherAttachment = text => /\b(?:cover\s*letter|photo(?:graph)?|headshot|transcript|certificate|portfolio)\b/i.test(norm(text));
+  const resumeLabel = text => uploadLabelKind(text)==='resume';
+  const otherAttachment = text => /\b(?:cover\s*letter|photo(?:graph)?|headshot|transcript|certificate|portfolio|relev[ée] de notes|lettre de (?:motivation|pr[ée]sentation))\b/i.test(norm(text));
   return { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment };
 }

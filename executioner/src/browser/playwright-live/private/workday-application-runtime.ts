@@ -1,3 +1,4 @@
+import { uploadLabelKind } from '../../../../extension/page-runtime/upload-label.js';
 import { observeWorkdayPage } from '../../../ats/workday/page-observation.ts';
 import { createHash, randomBytes } from "node:crypto";
 
@@ -41,7 +42,7 @@ import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
 import type { UploadedArtifactReadback } from "../../adapter.ts";
-import { clickWorkdayApplicationHeading, expandWorkdayPromptCategory, workdayPromptOpener } from "../../adapter.ts";
+import { questionnaireUploadFileName, clickWorkdayApplicationHeading, expandWorkdayPromptCategory, workdayPromptOpener } from "../../adapter.ts";
 import {
   annotateCheckboxGroups,
   checkboxGroupKindAttribute,
@@ -1675,7 +1676,10 @@ export class OwnedWorkdayApplicationRuntime {
       if (completed.value.kind === "blocked") {
         this.#trace?.("questionnaire_date_diagnostics", await dateFailureDiagnostics(page));
         this.#trace?.("questionnaire_checkbox_diagnostics", await checkboxFailureDiagnostics(page));
+        const blockedId = completed.value.fieldId;
+        const blockedField = snapshot.fields.find(field => field.fieldId === blockedId);
         this.#trace?.("questionnaire_reconciliation_blocked", {
+          uiBehavior: blockedField?.behavior,
           pageId: input.pageId,
           fieldId: completed.value.fieldId,
           code: completed.value.code,
@@ -1782,7 +1786,7 @@ export class OwnedWorkdayApplicationRuntime {
           normalizeReviewValue(field.label),
         )) continue;
         const target = field === undefined ? undefined : targets.get(field.target);
-        const value = target === undefined ? undefined : reviewReadbackValue(target.readback);
+        const value = target === undefined ? undefined : reviewReadbackValue(target.readback, uploadedArtifacts.get(target.token));
         if (value === undefined) throw new TypeError("questionnaire review truth unavailable");
         this.#recordReviewExpectation(answer.fieldId, answer.provenance, value);
       }
@@ -2078,7 +2082,9 @@ function isExactVerifiedApplicationSource(
   return JSON.stringify(fieldKeys(observed)) === JSON.stringify(fieldKeys(source));
 }
 
-function reviewReadbackValue(readback: BrowserReadback): string | undefined {
+function reviewReadbackValue(readback: BrowserReadback, uploaded?: UploadedArtifactReadback): string | undefined {
+  if (readback.kind === "upload" && uploaded && readback.resumeId === uploaded.resumeId &&
+      readback.sha256 === uploaded.sha256) return questionnaireUploadFileName(uploaded.sha256);
   if (readback.kind === "text") return readback.value;
   if (readback.kind === "selected") return readback.option ?? undefined;
   if (readback.kind === "checked") return readback.checked ? "Yes" : "No";
@@ -2115,8 +2121,24 @@ export async function enrichQuestionnaireFields(
           leaf.getAttribute("aria-multiselectable") === "true"
         ? "multiple" as const
         : "single" as const;
+      const fileLabels: string[] = [];
+      if (leaf instanceof HTMLInputElement && leaf.type === 'file') {
+        const owner = leaf.closest('[data-automation-id$="-FileUpload"]');
+        const field = leaf.closest('[data-automation-id="formField"],[data-automation-id^="formField-"]');
+        for (const node of [leaf, owner, field]) {
+          if (!node) continue;
+          fileLabels.push(node.getAttribute('aria-label') ?? '');
+          for (const id of (node.getAttribute('aria-labelledby') ?? '').split(/\s+/u)) {
+            if (id) fileLabels.push(document.getElementById(id)?.textContent ?? '');
+          }
+        }
+        for (const label of [...(leaf.labels ?? []), ...(field?.querySelectorAll('label,legend') ?? [])]) {
+          fileLabels.push(label.textContent ?? '');
+        }
+      }
       return {
         target: element.getAttribute("data-hunt-target-token") ?? "",
+        fileLabels,
         populatedValueValid: (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) &&
           leaf.value.trim() !== "" && leaf.validity.valid &&
           (leaf.minLength < 0 || leaf.value.length >= leaf.minLength) &&
@@ -2152,6 +2174,8 @@ export async function enrichQuestionnaireFields(
       field.behavior === "select" || field.behavior === "listbox";
     return Object.freeze({
       ...field,
+      ...(field.behavior === 'file_upload' && metadata.fileLabels.some(label=>uploadLabelKind(label)==='other')
+        ? {state:'ambiguous' as const} : {}),
       populatedValueValid: metadata.populatedValueValid,
       ...(text ? {
         constraints: Object.freeze({ ...metadata.constraints }),

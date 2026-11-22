@@ -156,6 +156,9 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         if (!f.required) { known.set(identity,'optional'); continue; }
         if (f.buttonConflict) throw new ApplicationPause('The employer shows an inconsistent choice. Inspect it before retrying.');
         if (f.kind === 'file') {
+          if (f.resumeTarget && currentFields.filter(field=>field.resumeTarget).length!==1) {
+            throw new ApplicationPause('The application has multiple resume fields. Choose the attachment on the employer page.');
+          }
           if (pendingPreview) continue;
           try {
             const upload = await prepareHostedResume(page, loc, f, input.resume, resumeSha256, resumeUpload, receipt => {

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Page, Request } from 'playwright';
+import type { Locator, Page, Request } from 'playwright';
 import { ApplicationPause, type ResumeUploadReceipt } from './application-contract.ts';
 import { applicationTarget } from './target.ts';
 
 const groupSelector='[role=group][aria-labelledby=upload-label-resume]';
 
-export async function uploadGreenhouseResume(page: Page, file: {name:string;mimeType:string;buffer:Buffer}): Promise<ResumeUploadReceipt> {
+export async function uploadGreenhouseResume(page: Page, file: {name:string;mimeType:string;buffer:Buffer}, selectedControl?: Locator): Promise<ResumeUploadReceipt> {
   const sha256=createHash('sha256').update(file.buffer).digest('hex'), md5=createHash('md5').update(file.buffer).digest('hex');
   const group=page.locator(groupSelector);
   const originalGroup=await group.elementHandle();
@@ -25,6 +25,9 @@ export async function uploadGreenhouseResume(page: Page, file: {name:string;mime
   };
   page.on('request',observe);
   try {
+    if (selectedControl && !(await selectedControl.evaluate((element, selected) => element === selected, input))) {
+      throw new ApplicationPause('The resume control differs from the upload group. Inspect the attachment before retrying.');
+    }
     const response=page.waitForResponse(async r=>r.status()===201 && await requests.get(r.request())===true,{timeout:30000}).catch(()=>undefined);
     await input.setInputFiles(file);
     const accepted=await response;

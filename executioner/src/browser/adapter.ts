@@ -81,6 +81,10 @@ export interface UploadedArtifactReadback {
   readonly sha256: ReturnType<typeof sha256Digest>;
 }
 
+export function questionnaireUploadFileName(sha256: string): string {
+  return `c3-attachment-${sha256}.pdf`;
+}
+
 export interface PageInspection {
   readonly observation: BrowserObservation;
   readonly targets: ReadonlyMap<string, readonly ResolvedBrowserTarget[]>;
@@ -201,8 +205,9 @@ async function inspectUploadReadback(
           );
           const shown = (node: Element) => node.getClientRects().length > 0 &&
             getComputedStyle(node).visibility !== "hidden";
-          return name === expectedName && success !== null && shown(item) && shown(success) && pending === null
-            ? { kind: "completed" } : { kind: "unavailable" };
+          if (name !== expectedName || success === null || !shown(item) || !shown(success) || pending !== null ||
+              element.files.length !== 1) return { kind: "unavailable" };
+          // The completion row confirms the displayed name. Only file bytes confirm its digest.
         }
         if (element.files.length === 0) return { kind: "empty" };
         if (element.files.length !== 1) return { kind: "unavailable" };
@@ -238,7 +243,7 @@ async function inspectUploadReadback(
         }
       },
       { maximumBytes: MAX_RESUME_ARTIFACT_BYTES,
-        expectedName: uploaded === undefined ? null : `c3-attachment-${uploaded.sha256}.pdf` },
+        expectedName: uploaded === undefined ? null : questionnaireUploadFileName(uploaded.sha256) },
     );
   } catch {
     return { kind: "unavailable" };
@@ -253,7 +258,6 @@ async function inspectUploadReadback(
   if (live.kind === "empty") {
     return { kind: "upload", resumeId: null, sha256: null };
   }
-  if (live.kind === "completed" && uploaded !== undefined) return { kind: "upload", ...uploaded };
   if (
     live.kind !== "digest" ||
     uploaded === undefined ||
@@ -1899,7 +1903,7 @@ async function applyMutationUnchecked(
   if (target.control.kind !== "file" || upload === undefined) return "invalid";
   await locator.setInputFiles(
     {
-      name: `c3-attachment-${mutation.artifact.sha256}.pdf`,
+      name: questionnaireUploadFileName(mutation.artifact.sha256),
       mimeType: "application/pdf",
       buffer: Buffer.from(upload.buffer, upload.byteOffset, upload.byteLength),
     },

@@ -150,7 +150,7 @@ test("valid committed values are preserved instead of overwritten", async () => 
   assert.equal(profile.calls.length, 0);
 });
 
-test("unknown choices use the supplied selection strategy on visible non-placeholder options", async () => {
+test("draft fallbacks select visible options and preserve other required attachments", async () => {
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   });
@@ -160,6 +160,13 @@ test("unknown choices use the supplied selection strategy on visible non-placeho
     "2026-08-20",
     (length) => length - 1,
   );
+  for (const label of ["Academic transcript", "Relevé de notes", "Resume and transcript", "Resume.pdf"]) {
+    for (const state of ["empty", "populated"] as const) {
+      const input = request(field(label, "file_upload", [], state));
+      const reply = await resolver.resolve({...input, answerFallbackPolicy:"deterministic_site_valid_editable"}, new AbortController().signal);
+      assert.equal(reply.ok && reply.value.kind, "unsupported", label);
+    }
+  }
   const result = await resolver.resolve(syntheticRequest(field(
     "Unreviewed choice",
     "select",

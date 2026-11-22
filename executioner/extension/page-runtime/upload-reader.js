@@ -1,3 +1,5 @@
+import {uploadLabelKind} from './upload-label.js';
+
 export function createUploadReader({ isPortalResumeBinding, uploadHeading,
   state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
 }) {
@@ -9,6 +11,18 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
     const widgetVisible = node => visible(node) && Number(getComputedStyle(node).opacity) > 0;
     const nativeVisible = editable(e) && widgetVisible(e);
     const proven=state.nativeFileBindings?.get(e);
+    if ([e,...labels].some(node=>(node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean)
+      .some(id=>node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`).length!==1))) return null;
+    const refs = node => (node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean).flatMap(id => {
+      const matches = [...node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`)];
+      return matches.length === 1 && matches[0] !== e && widgetVisible(matches[0]) ? matches : [];
+    });
+    const text = [e.getAttribute('aria-label') ?? '', ...refs(e).map(node=>node.textContent ?? ''),
+      ...labels.flatMap(label=>[label.getAttribute('aria-label') ?? '', ...refs(label).map(node=>node.textContent ?? ''), label.textContent ?? ''])];
+    const fieldset = composedClosest(e,'fieldset');
+    const legend = fieldset?.querySelector(':scope > legend');
+    if (legend && fieldset.querySelectorAll('input:not([type=hidden]),select,textarea').length===1) text.push(legend.textContent ?? '');
+    if (text.some(label=>uploadLabelKind(label)==='other')) return null;
     if (isPortalResumeBinding(proven)) {
       const proof=verifiedDialogUpload(e);
       return proof && !e.multiple ? {label:'Resume',widget:proof.label} : null;
@@ -22,15 +36,6 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
         !proven.button.disabled && proven.button.type==='button' && norm(proven.button.textContent)==='choose file') {
       return {label:'Resume',widget:proven.button};
     }
-    if ([e,...labels].some(node=>(node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean)
-      .some(id=>node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`).length>1))) return null;
-    const refs = node => (node.getAttribute('aria-labelledby') ?? '').split(/\s+/).filter(Boolean).flatMap(id => {
-      const matches = [...node.getRootNode().querySelectorAll(`[id="${CSS.escape(id)}"]`)];
-      return matches.length === 1 && matches[0] !== e && widgetVisible(matches[0]) ? matches : [];
-    });
-    const text = [e.getAttribute('aria-label') ?? '', ...refs(e).map(node=>node.textContent ?? ''),
-      ...labels.flatMap(label=>[label.getAttribute('aria-label') ?? '', ...refs(label).map(node=>node.textContent ?? ''), label.textContent ?? ''])];
-    if (text.some(otherAttachment)) return null;
     const boundLabels = labels.filter(label=>widgetVisible(label) && !composedClosest(label,'[aria-hidden="true"],[inert]') &&
       deepQuery(label,'input[type=file]').length <= 1);
     const uploadGroup=composedClosest(e,'[role=group][aria-labelledby]');
@@ -43,7 +48,7 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading,
       const labelGroup=names[0].closest('[role=group]');
       if(namedGroups.length!==1 || regionFor(names[0])!==regionFor(e) || labelGroup && labelGroup!==uploadGroup)return null;
       const name=names[0].textContent??'';
-      if (otherAttachment(name)) return null;
+      if (uploadLabelKind(name)==='other') return null;
       if (resumeLabel(name)) {
         if (!widgetVisible(uploadGroup) || composedClosest(uploadGroup,'[aria-hidden=true],[inert]') ||
             deepQuery(uploadGroup,'input,textarea,select').some(control=>control!==e)) return null;

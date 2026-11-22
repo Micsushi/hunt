@@ -549,6 +549,7 @@ export const productBoundary = {
       "extension/page-adapters/upload-status.js",
       "extension/page-adapters/bamboo-resume.js",
       "extension/page-adapters/client-attachment.js",
+      "extension/page-runtime/upload-label.js",
       "extension/page-runtime/upload-reader.js",
       "extension/jobvite-resume.js",
       "extension/page-runtime/upload-verification.js",
@@ -617,6 +618,7 @@ export const productBoundary = {
       "extension/page-runtime/navigation-diagnostics.js",
       "extension/page-runtime/phone-reader.js",
       "extension/page-runtime/required-field.js",
+      "extension/page-runtime/upload-label.js",
       "extension/page-runtime/upload-reader.js",
       "extension/page-runtime/upload-verification.js",
       "extension/workday-page.js",
@@ -627,7 +629,9 @@ export const productBoundary = {
     "src/product/page-matching.ts": ["src/product/component-diagnostics.ts"],
     // Browser adapters consume the same DOM readers and policy as the product.
     "src/browser/adapter.ts": ["extension/question-context.js"],
+    "src/form/answers/resolver.ts": ["extension/page-runtime/upload-label.js"],
     "src/browser/playwright-live/private/workday-application-runtime.ts": [
+      "extension/page-runtime/upload-label.js",
       "src/ats/workday/page-observation.ts",
     ],
     "src/browser/playwright-live/private/workday-structural-catalog.ts": [
@@ -760,7 +764,8 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/target.ts",
     ],
-    "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts"],
+    "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts", "extension/page-runtime/upload-label.js"],
+    "extension/page-runtime/field-recognition.js": ["extension/page-runtime/upload-label.js"],
     "src/product/hosted-autocomplete.ts": ["src/product/application-contract.ts"],
     "src/product/hosted-application.ts": [
       "src/product/hosted-autocomplete.ts",

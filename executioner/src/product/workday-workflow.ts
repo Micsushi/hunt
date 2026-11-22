@@ -112,6 +112,7 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
         throw pause;
       }
 
+      if (diagnostics.failureCode === 'questionnaire_attachment_needs_review') throw new ApplicationPause('A required attachment needs your review. Check the requested document and the attached file on the employer page before continuing.');
       if ((diagnostics.failureCode ?? result.error.failure.code) === 'profile_row_unverified') throw new ApplicationPause('Profile history could not be verified against your saved details. Review the existing entries in the tab; C3 has preserved rows it does not own.');
       if ((diagnostics.failureCode ?? result.error.failure.code)==="protected_answer_denied") throw new ApplicationPause("This application requires your decision. Complete the question on the employer page, then retry.");
       throw new ApplicationPause(`Application paused: ${diagnostics.failureCode ?? result.error.failure.code}${diagnostics.failureField ? ` (${diagnostics.failureField})` : ""}. Review the tab before retrying.`);
