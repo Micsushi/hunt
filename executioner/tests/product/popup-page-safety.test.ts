@@ -79,6 +79,13 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     const redone=await send('redo',history.result.documentId);
     assert.equal(redone.ok,true,JSON.stringify(redone));
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
+    // Some sites clear the picker after accepting a file. Its C3 receipt belongs to this application URL.
+    await nativeFile.evaluate((e:HTMLInputElement)=>{e.value='';});
+    assert.equal((await send('inspect')).result.resume,'unverified');
+    const otherPosting=new URL('/fixture/jobs/124',url).href;
+    await page.evaluate(next=>window.history.pushState({},'',next),otherPosting);
+    await page.waitForURL(otherPosting);
+    assert.equal((await send('inspect',undefined,otherPosting)).result.resume,'missing');
     const oneClick='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
     const childUrl=new URL('/unrelated-contact',oneClick).href;
     const contact='<label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label>';

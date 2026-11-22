@@ -143,7 +143,8 @@ export async function fillGenericApplication(
         const state = await probes.evaluate(driver => driver.blocked() ?? driver.personalReady());
         if (state === true) break;
         if (state && state.observation.kind !== 'loading') return {...state, needsOwnerReview:true, resume:undefined};
-        if (Date.now() >= deadline) throw new ApplicationPause('The employer personal-information form and résumé control did not finish loading. Reopen the form and retry.');
+        // The employer can omit the upload. Inspect each field through the normal ownership checks.
+        if (Date.now() >= deadline) break;
         await pause(signal);
       }
     }

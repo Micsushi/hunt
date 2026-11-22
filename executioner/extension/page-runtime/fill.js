@@ -470,7 +470,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (action==='status') {
       result.navigationDiagnostics = readNavigationDiagnostics({noticeMarkers:adapters.noticeMarkers, deepQuery, composedClosest, composedParent, visible, norm});
       // Inspect has no selected PDF to compare. Only an empty required native control can establish absence here.
-      if (observed.kind === 'application' && document.forms.length === 1 && !state.resumeAttempt) {
+      if (observed.kind === 'application' && document.forms.length === 1 && state.resumeAttempt?.url !== location.href) {
         const controls = deepQuery(document,'input[type=file]').filter(e => e.form === document.forms[0] && fileBinding(e));
         const [input] = controls;
         if (controls.length === 1 && visible(input) && input.willValidate && input.validity.valueMissing &&

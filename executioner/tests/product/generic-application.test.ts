@@ -39,6 +39,34 @@ test('fresh OneClick personal forms wait for employer-owned fields and can be in
   } finally { await browser.close(); }
 });
 
+test('queued OneClick keeps independently verified personal fields when the employer has no resume input', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/12345678-1111-2222-3333-111111111111';
+    await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:
+      '<main><oc-oneclick-form><oc-personal-information><label>First name*<input required></label>' +
+      '<label>Email*<input required type=email></label></oc-personal-information>' +
+      '<oc-apply-with-resume><label>Resume<input type=file required></label></oc-apply-with-resume>' +
+      '<button type=button>Next</button></oc-oneclick-form></main>'}));
+    await page.goto(url);
+    await page.evaluate(() => {
+      for (const type of ['change','click']) document.addEventListener(type, event => {
+        const element = event.target as HTMLElement;
+        element.dataset[type] = String(Number(element.dataset[type] ?? 0)+1);
+      });
+    });
+    const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid'});
+    const result = await fillGenericApplication(page,url,profile,Buffer.from('%PDF-fixture'),AbortSignal.timeout(18000));
+    assert.equal(await page.getByLabel('First name*').inputValue(),'Test');
+    assert.equal(await page.getByLabel('Email*').inputValue(),'test@example.invalid');
+    assert.equal(await page.getByLabel('First name*').getAttribute('data-change'),'1');
+    assert.ok(result.skipped.some(row=>row.reason==='resume_control_not_identified'));
+    assert.equal(await page.getByLabel('Resume').evaluate((e:HTMLInputElement)=>e.files?.length),0);
+    assert.equal(await page.getByRole('button',{name:'Next'}).getAttribute('data-click'),null);
+  } finally { await browser.close(); }
+});
+
 test('validated website rows appear as saved URL answers without rewriting provenance', async () => {
   const input = {given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'};
   const saved = applicantProfile(input) as {profilePlan:{repeatables:unknown[]}};
