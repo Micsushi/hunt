@@ -102,8 +102,8 @@ export function protectedQuestionCategory(
 /** Includes declarations phrased as statements, without an explicit "I certify". */
 export function isApplicationAccuracyDeclaration(label: string): boolean {
   const text = normalizeCatalogText(label);
-  const applicantMaterial = /\b(?:statements?|answers?|information|details)\b|\bapplication (?:is|was)\b|\b(?:is|was) (?:my|your|this|the) application\b/u;
-  const suppliedByApplicant = /\b(?:my|your|this|the) application\b|\b(?:i|you) (?:have )?(?:provided|supplied|entered|given)\b|\b(?:provided|given|entered) (?:above|here|in this form)\b/u;
+  const applicantMaterial = /\b(?:statements?|answers?|responses?|information|details)\b|\bapplication (?:is|was)\b|\b(?:is|was) (?:my|your|this|the) application\b/u;
+  const suppliedByApplicant = /\b(?:my|your|this|the) application\b|\b(?:i|you) (?:have )?(?:provided|supplied|entered|given)\b|\b(?:provided|given|entered) (?:above|here|in this form)\b|\b(?:statements?|answers?|responses?|information|details) (?:given|provided|entered|supplied|above|herein)\b/u;
   // Questions and declarations can put the verb on either side of the subject.
   return applicantMaterial.test(text) && suppliedByApplicant.test(text) &&
     /\b(?:true|accurate|correct|complete|truthful)\b/u.test(text) &&

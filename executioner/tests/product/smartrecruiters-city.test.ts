@@ -465,6 +465,8 @@ test('screening leaves certifications and conviction disclosures for the owner',
       radioGroup('accuracy-statement','The statements in this application are true and complete.') +
       radioGroup('accuracy-single','All information on my application is accurate.') +
       radioGroup('accuracy-question','Is the information in your application correct?') +
+      radioGroup('accuracy-provided','The information provided is true and complete.') +
+      radioGroup('accuracy-confirm','I confirm that the information provided is true and complete.') +
       radioGroup('background','Are you willing to undergo a background check?') +
       '<label>Preferred orientation schedule<select required><option value="">Choose one</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option></select></label>' +
       '</sr-screening-questions-form></oc-screening-questions-form>' +
@@ -508,7 +510,7 @@ test('screening leaves certifications and conviction disclosures for the owner',
     assert.equal(await page.locator('#already-checked input').isChecked(),true);
     assert.equal(await page.locator('#already-checked').getAttribute('data-changed'),null);
     assert.equal(await page.locator('#privacy input').isChecked(),true);
-    for(const id of ['conviction','conviction-reversed','conviction-existing','casier','accuracy-statement','accuracy-single','accuracy-question']) {
+    for(const id of ['conviction','conviction-reversed','conviction-existing','casier','accuracy-statement','accuracy-single','accuracy-question','accuracy-provided','accuracy-confirm']) {
       assert.equal(await page.locator('#'+id).getAttribute('value'),id==='conviction-existing'?'0':'');
       assert.equal(await page.locator('#'+id).getAttribute('data-changed'),null);
     }
