@@ -142,7 +142,11 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry("owner-question-overnights-available", ["Are you available to work overnight shifts?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "overnights_available", ownerProvidedOnly: true }),
   aliasEntry("owner-question-vehicle-access", ["Do you have access to a vehicle?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "vehicle_access", ownerProvidedOnly: true }),
   aliasEntry("owner-question-valid-drivers-licence", ["Do you have a valid driver's licence?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "valid_drivers_licence", ownerProvidedOnly: true }),
-  aliasEntry("owner-question-background-check-willing", ["Are you willing to undergo a background check?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "background_check_willing", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-background-check-willing", [
+    "Are you willing to undergo a background check?",
+    "If advanced to an offer of employment with RCL, you consent to respecting the employment verification and background check process.",
+    "Si vous recevez une offre d'emploi de RCL, vous consentez à respecter le processus de vérification d'emploi et de références. | If advanced to an offer of employment with RCL, you consent to respecting the employment verification and background check process.",
+  ], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "background_check_willing", ownerProvidedOnly: true }),
   aliasEntry("owner-question-references-available", ["Are references available upon request?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "references_available", ownerProvidedOnly: true }),
   aliasEntry("owner-question-may-contact-employer", ["May we contact this employer?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "may_contact_employer", ownerProvidedOnly: true }),
   aliasEntry("owner-question-recruiting-texts", ["Would you like to receive recruiting text messages?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "recruiting_texts", ownerProvidedOnly: true }),

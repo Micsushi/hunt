@@ -103,11 +103,12 @@ test('bilingual screening uses Canadian eligibility, separates background consen
   const privacy = "You declare that you have read and agree to the privacy notice of Reitmans (Canada) Ltée/Ltd.";
   const employers = ["Oui, je suis actuellement employé.e chez RCL | Yes, I am currently employed at RCL", "Oui, j’ai déjà été employé.e chez RCL | Yes, I was previously employed at RCL", "Non | No"];
 
-  for (const granted of [true, false]) {
+  for (const [granted, willing] of [[true, false], [false, true], [true, undefined]] as const) {
     const base = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
       work_authorization_canada:String(granted)}) as {profile:ReturnType<typeof parseApplicationProfile>;profilePlan:ProfilePagePlan};
-    const profile = {...base,profile:{...base.profile,unsetFactIds:base.profile.unsetFactIds.filter(id => id !== 'terms_consent'),facts:[...base.profile.facts,
-      {factId:'terms_consent',value:granted,provenance:'owner_provided',lane:'live_owner_fact'}]}};
+    const profile = {...base,profile:{...base.profile,unsetFactIds:base.profile.unsetFactIds.filter(id => id !== 'terms_consent' && (willing === undefined || id !== 'background_check_willing')),facts:[...base.profile.facts,
+      {factId:'terms_consent',value:granted,provenance:'owner_provided',lane:'live_owner_fact'},
+      ...(willing === undefined ? [] : [{factId:'background_check_willing',value:willing,provenance:'owner_provided',lane:'live_owner_fact'}])]}};
     const sources = productSources(profile, Buffer.from('%PDF-fixture'));
     try {
       const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), company);
@@ -119,7 +120,7 @@ test('bilingual screening uses Canadian eligibility, separates background consen
       for (const [q,expected,lane] of [
         [eligible,granted ? 'Yes' : 'No','live_owner_fact'],
         [available,'Yes','synthetic_test_default'],
-        [background,null,undefined],
+        [background,willing === undefined ? null : willing ? 'Yes' : 'No',willing === undefined ? undefined : 'live_owner_fact'],
       ] as const) {
         const result = await answer(q, 'radio', ['Yes','No']);
         assert.deepEqual([result.answer,result.lane], [expected,lane]);
