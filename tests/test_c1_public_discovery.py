@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from threading import Event
 from unittest.mock import MagicMock, Mock
 from urllib.error import HTTPError
 
@@ -134,12 +135,19 @@ def test_scrape_saves_completed_batch_before_later_source_fails(monkeypatch):
     from hunter import discovery_browser, discovery_jobright, scraper
 
     saved = []
+    batch_saved = Event()
+
+    def add_job(job):
+        saved.append(job)
+        batch_saved.set()
+        return "inserted", 1
+
     monkeypatch.setattr(scraper, "set_runtime_state", Mock())
     monkeypatch.setattr(scraper, "get_runtime_state", lambda keys: {})
     monkeypatch.setattr(scraper, "init_db", lambda: None)
     monkeypatch.setattr(scraper, "C1Logger", Mock())
     monkeypatch.setattr(scraper, "SEARCH_TERMS", {})
-    monkeypatch.setattr(scraper, "add_job", lambda job: (saved.append(job) or "inserted", 1))
+    monkeypatch.setattr(scraper, "add_job", add_job)
     monkeypatch.setattr(scraper, "record_discovery_source_health", Mock())
     for name in (
         "discover_jobillico",
@@ -157,6 +165,7 @@ def test_scrape_saves_completed_batch_before_later_source_fails(monkeypatch):
     )
 
     def fail(**kwargs):
+        assert batch_saved.wait(timeout=5), "completed feed batch was not persisted"
         assert len(saved) == 1
         raise RuntimeError("later source failed")
 
