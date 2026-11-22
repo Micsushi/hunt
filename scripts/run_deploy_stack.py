@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 from scripts.resource_profiles import select_resource_profile
+from scripts.verify_release_ci import checkout_revision, verify_release_ci
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = ROOT / "docker-compose.pipeline.yml"
@@ -182,11 +183,15 @@ def _build_command(
     command.extend(["-f", str(COMPOSE_FILE)])
     if mode == "server":
         command.extend(["-f", str(SERVER_COMPOSE_FILE)])
+        if action == "up":
+            command.extend(["-f", str(ROOT / "docker-compose.release.yml")])
 
     if action == "up":
         command.extend(["up", "-d"])
         if build:
             command.append("--build")
+        elif mode == "server":
+            command.append("--no-build")
         command.extend(services)
         return command
 
@@ -306,6 +311,38 @@ def main() -> int:
     if args.dry_run:
         print("[deploy] dry-run complete")
         return 0
+
+    if args.mode == "server" and action == "up":
+        try:
+            revision = checkout_revision(ROOT)
+            subprocess.run(
+                ["git", "diff", "--quiet", "HEAD", "--", "docker-compose*.yml", "schema"],
+                cwd=ROOT,
+                check=True,
+            )
+            verify_release_ci(revision)
+            if args.no_build:
+                for service in services:
+                    if service in {"postgres", "ollama", "ollama-init"}:
+                        continue
+                    image = f"{args.project_name}-{service}:{revision}"
+                    label = subprocess.check_output(
+                        [
+                            "docker",
+                            "image",
+                            "inspect",
+                            "--format",
+                            '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
+                            image,
+                        ],
+                        text=True,
+                    ).strip()
+                    if label != revision:
+                        raise ValueError(f"Image {image} does not match the release revision.")
+        except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+            print(f"[deploy] Release check failed: {exc}", file=sys.stderr)
+            return 1
+        deploy_env = {**(deploy_env or os.environ), "HUNT_RELEASE_REVISION": revision}
 
     result = subprocess.run(command, cwd=ROOT, env=deploy_env)
     if result.returncode != 0:

@@ -11,9 +11,14 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
-  const checkDeadline = () => { if (expiresAt !== undefined && Date.now() >= expiresAt) throw new Error('Field changes expired. Check the page and reopen C3 before retrying.'); };
+  let checkedStep, checkedForm, checkedUpload;
+  const checkDeadline = () => {
+    if (expiresAt !== undefined && Date.now() >= expiresAt) throw new Error('Field changes expired. Check the page and reopen C3 before retrying.');
+    if (checkedStep && state.resumeAttempt?.acknowledgedPanel?.() !== checkedStep) throw new Error('The application step changed. Inspect the form again.');
+    if (checkedForm && !checkedForm.current() || checkedUpload && !checkedUpload()) throw new Error('The application form or attachment changed. Inspect the form again.');
+  };
   checkDeadline();
   if (expectedUrl !== undefined && location.href !== expectedUrl) throw new Error('The page changed. Reopen C3 on the application.');
   const observed = observeCurrentDocument();
@@ -27,6 +32,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   state.busy = true;
   const result = { status: 'partial', filled: [], skipped: [], canUndo: false, canRedo: false, matching: [],
     resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ ('missing') };
+  const screening = adapters.jobviteScreeningPanel(), firstStep = adapters.jobviteScreeningPanel(1);
+  const applicationStep = screening ?? firstStep;
+  if (action === 'status' && firstStep && screening === undefined && adapters.jobviteScreeningPanel(1,true) === firstStep) result.jobviteFirstStep = true;
+  if (screening !== undefined || firstStep !== undefined) result.frameScope = 'document';
   const addSkip = (label, reason, component, operation, fieldId) => {
     const row = {label, reason};
     if (fieldId) row.fieldId = fieldId;
@@ -41,13 +50,22 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (!isPortalResumeBinding(proof) || typeof proof.valid !== 'function') return null;
     try {return proof.valid()?proof:null;} catch {return null;}
   };
-  const regionFor = e => verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || e.getRootNode();
+  const customForm = adapters.customApplicationForm(deepQuery, composedClosest, visible);
+  if (customForm) {
+    scope = 'application';
+    result.frameScope = 'document';
+    if (customForm.owner) checkedForm = customForm;
+  }
+  const regionFor = e => checkedForm?.screening ? checkedForm.region(e) ?? e.getRootNode() : verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
   const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
     regionFor, norm, state, deepQuery, visible, editable, checkDeadline
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
-  const { semanticChoiceButton, rawLabelFor, labelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
-  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = createSearchChoiceReader(regionFor);
+  const screeningFields = adapters.createSmartRecruitersScreening(checkedForm,deepQuery,composedClosest,visible);
+  const { semanticChoiceButton, rawLabelFor, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, composedClosest, deepQuery, fabricWidget, norm });
+  const labelFor = element => screeningFields.label(element) || baseLabelFor(element);
+  const cityChoices = adapters.smartRecruitersCityChoices(createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
+  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
   const pendingChoice = widget => {
     if(!widget?.widget)return null;
@@ -80,7 +98,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return false;
     };
-  const changeEditable = (e,change) => change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
+  const changeEditable = (e,change) => change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
     ? editable(e) && e===change.phoneCountry.input && regionFor(e)===change.region && phoneState(change.phoneCountry)!==null
     : provinceMenu.savedContext(change) ? editable(e) && provinceMenu.same(e,provinceMenu.savedContext(change))
       : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region : editable(e);
@@ -92,7 +110,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         !e.name && ![...e.labels ?? []].some(label=>label.control===e)) return null;
     return JSON.stringify([e.tagName,e.type,e.name,norm(rawLabelFor(e)),e.autocomplete??'',e.placeholder??'']);
   };
-  const currentElement = change => {
+  const resolveElement = change => {
+    if(change.screeningChoice)return location.href===change.url && change.element.isConnected && regionFor(change.element)===change.region ? change.element : null;
     if(change.choiceWidget)return boundChoice(change)?.input??null;
     if (change.region && change.element.isConnected && regionFor(change.element)!==change.region) return null;
     if(change.element.isConnected && (!change.identity || identity(change.element)===change.identity))return change.element;
@@ -116,7 +135,24 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const matches=deepQuery(document, 'input,textarea,select').filter(e=>identity(e)===change.identity && (!change.region || regionFor(e)===change.region));
     return matches.length===1 ? matches[0] : null;
   };
+  const insideStep = (element, step) => {
+    if (!element || !step.contains(element) || element.form !== step.closest('form')) return false;
+    if (element.type !== 'radio') return true;
+    const group = composedClosest(element,'fieldset,[role=radiogroup]');
+    if (!element.name || !group || !step.contains(group)) return false;
+    // Native checking can uncheck any same-name, same-form radio even when
+    // its peer is hidden, disabled, or associated via a form attribute.
+    return [...element.getRootNode().querySelectorAll('input[type=radio]')].every(peer =>
+      peer.name !== element.name || peer.form !== element.form || group.contains(peer) && step.contains(peer));
+  };
+  const currentElement = change => {
+    const element = resolveElement(change);
+    const step = change.screeningStep ?? checkedStep;
+    if (screening !== undefined && (action === 'undo' || action === 'redo') && !step) return null;
+    return step && (!insideStep(element,step) || state.resumeAttempt?.acknowledgedPanel?.() !== step) ? null : element;
+  };
   const read = e => isMenuToggle(e) ? e.getAttribute('aria-label') ?? '' :
+    e.type === 'select-multiple' ? selection(e) :
     e.type === 'file' ? e.files?.[0] ?? null : e.type === 'radio' || e.type === 'checkbox' ? e.checked : e.value;
   const pendingControlChange = e => {
     const pending=state.unconfirmedControls?.find(change=>regionFor(e)===change.region && currentElement(change)===e);
@@ -142,10 +178,20 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if (next==='after') state.resumeAttempt=change.uploadReceipt;
     }
   };
-  const { write, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause } = createControlInteraction({ state, checkDeadline, boundChoice, editable, visible, choiceState });
+  const { write:nativeWrite, queryChoice, closeChoice, selectChoice, restoreChoice, choicePause, optionKey, selection } = createControlInteraction({ state, checkDeadline, boundChoice, editable, visible, choiceState });
+  const write = (element,value) => {
+    if (customForm) {
+      checkDeadline();
+      if (!checkedForm || checkedForm.region(element)!==checkedForm.owner) throw new Error('The field moved outside the selected application form.');
+    }
+    if (checkedStep && (!insideStep(element,checkedStep) || state.resumeAttempt?.acknowledgedPanel?.() !== checkedStep)) {
+      throw new Error('The control moved outside the checked application step.');
+    }
+    if (!checkedForm?.writePhone(element,value,nativeWrite)) nativeWrite(element,value);
+  };
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
-  const readChange = (e,change) => change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
-  const unchangedChange = (e,change,value) => change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
+  const readChange = (e,change) => change.screeningChoice ? screeningFields.historyValue(e,change.screeningChoice) : change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
+  const unchangedChange = (e,change,value) => change.screeningChoice || change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
   const { selectPhone } = createCompositeControlActions({
     phoneState, phoneOptions, changeEditable, checkDeadline, visible, editable, write
   });
@@ -156,6 +202,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return true;
   };
   try {
+    if (screening === null || firstStep === null || (screening && firstStep)) {
+      result.resume = 'unverified'; result.incomplete = true;
+      addSkip('Application step', 'ambiguous_application_step', 'page_state', 'identify_application'); return result;
+    }
     // Uploads can finish after a native file was journaled. Preserve the remote
     // attachment separately so it cannot prevent unrelated text from undoing.
     let preservedRemote=false;
@@ -187,6 +237,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const e=currentElement(c);
           if(!e || !changeEditable(e,c) || !unchangedChange(e,c,c[previous]))throw new Error('Fields changed since C3 filled them. Your edits were preserved.');
           c.element=e;
+          if (c.screeningChoice) {
+            // Include an interrupted attempt in the catch block's independent before/after readback.
+            written++;
+            await screeningFields.restore(e,c.screeningChoice,c[previous],c[next],checkDeadline);
+            continue;
+          }
           if (c.choiceWidget) await restoreChoice(c,c[next]);
           else if (c.fabric) await selectFabric(c,c[next]);
           else if (c.phoneCountry) await selectPhone(c,c[next]);
@@ -195,7 +251,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           written++;
         }
         await new Promise(resolve => setTimeout(resolve, 100));
-        if (changes.some(c => {const e=currentElement(c);if(e)c.element=e;if(action==='undo' && c.matchingDynamic && (!e || !visible(e)) && (c[next]==='' || c[next]===false))return false;return !e || readChange(e,c)!==c[next];})) throw new Error('The website did not keep the restored values. Check the form.');
+        if (changes.some(c => {
+          const e=currentElement(c);
+          if(e)c.element=e;
+          const restoredBlank=c[next]==='' || c[next]===false || c.element.type==='select-multiple' && c[next]==='[]';
+          if(action==='undo' && c.matchingDynamic && (!e || !visible(e)) && restoredBlank)return false;
+          return !e || readChange(e,c)!==c[next];
+        })) throw new Error('The website did not keep the restored values. Check the form.');
       } catch (error) {
         await new Promise(resolve => setTimeout(resolve, 100));
         // Transfer only verified writes; the untouched remainder stays retryable.
@@ -278,7 +340,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       };
       const sample=(stage,details={})=>diagnostic.samples.push({stage,elapsedMs:Date.now()-began,connected:e.isConnected,valueUnchanged:e.value===value,expanded:e.getAttribute('aria-expanded')==='true',...details});
       const previousFocus=document.activeElement;
-      let proof=null;
+      let proof=null, restoreScroll;
       sample('before_open');
       try {
         if(!wasOpen){checkDeadline();e.focus();e.click();}
@@ -300,9 +362,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             sample('selected_option',{...details,...renderDetails(list),optionCount:options.length,selectedCount:selected.length,labelUnique,tokenMatches});
             break;
           }
+          if (!wasOpen && !restoreScroll && !selected.length && options.length && dialComposite(e)) {
+            restoreScroll = adapters.revealRipplingPhoneSelection(e,list);
+          }
           sample('menu_observation',{...details,...renderDetails(list),optionCount:options.length,selectedCount:selected.length});
         }while(Date.now()-started<1200);
       } finally {
+        restoreScroll?.();
         if(!wasOpen && e.isConnected && regionFor(e)===region && e.value===value) {
           e.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true,composed:true}));
           await new Promise(resolve=>setTimeout(resolve,100));
@@ -315,7 +381,26 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return proof;
     };
-    const collectFields = () => deepQuery(document, 'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
+    const validResume = resume && typeof resume.base64 === 'string' && resume.base64.length <= 14_000_000 &&
+      /^[A-Za-z0-9+/]*={0,2}$/.test(resume.base64) && resume.base64.length % 4 === 0 &&
+      typeof resume.name === 'string' && /^[-a-z0-9_ .]+\.pdf$/i.test(resume.name);
+    if (action === 'fill' && screening !== undefined) {
+      if (!screening || !validResume || state.resumeAttempt?.acknowledgedPanel?.() !== screening) {
+        result.resume = 'unverified'; result.incomplete = true;
+        addSkip('Resume', 'screening_step_attachment_unconfirmed', 'uploads', 'verify_attachment'); return result;
+      }
+      checkedStep = screening;
+    }
+    const scopedControl = e => {
+      if (!applicationStep || insideStep(e,applicationStep)) return true;
+      if (e.type === 'radio' && !result.skipped.some(row=>row.reason==='radio_group_outside_application_step')) {
+        result.incomplete = true;
+        addSkip(labelFor(e), 'radio_group_outside_application_step', 'field_recognition', 'identify_option');
+      }
+      return false;
+    };
+    const screeningSelector = checkedForm?.screening ? 'fieldset[role=radiogroup],' : '';
+    const collectFields = () => deepQuery(applicationStep || document, screeningSelector+'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && scopedControl(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
       (fabricWidget(e) || provinceMenu.context(e) || semanticChoiceButton(e) || !['hidden', 'password', 'file', 'submit', 'button', 'reset'].includes(e.type))).map(element => {
       const label = provinceMenu.context(element) ? 'Province' : dialComposite(element)?'Phone country code':labelFor(element);
       return { element, identity:identity(element), controlIdentity:controlIdentity(element), boundLabels:[...element.labels??[]], region:regionFor(element), label,
@@ -324,25 +409,55 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     let fields = collectFields();
     // A newsletter or account form must not receive application data.
     const identifyApplicationRegions = fields => {
+      if (applicationStep) return [applicationStep.closest('form')];
+      if (checkedForm?.screening && checkedForm.current()) return [checkedForm.owner];
       const regions = new Set(fields.filter(f => /name|prénom|nom de famille/i.test(f.label) && f.expected !== undefined).map(f => f.region));
       return [...regions].filter(region => {
+      if (customForm && region !== customForm.owner) return false;
       const own = fields.filter(f => f.region === region);
       const candidates = [region];
       // Some employers split the resume upload and profile into sibling forms.
-      let parent = region.parentElement ?? region.host?.parentElement;
+      let parent = customForm ? null : region.parentElement ?? region.host?.parentElement;
       for (let depth = 0; depth < 3 && parent && parent !== document.body; depth++, parent = parent.parentElement) candidates.push(parent);
       return own.some(f => /e.?mail/i.test(f.label)) && ![...region.querySelectorAll('input[type=password]')].some(visible) &&
         (state.resumeAttempt?.url===location.href && state.resumeAttempt.region===region && (ownedUploadCompleted(state.resumeAttempt) || ownedAttachmentPresent(state.resumeAttempt.element)) ||
-        candidates.some(container => deepQuery(container, 'input[type=file]').length || /submit application|apply for|job application|candidature/i.test(container.innerText ?? '')));
+        candidates.some(container => deepQuery(container, 'input[type=file]').length || /submit application|apply for|job application|candidature/i.test(container.innerText ?? '')) ||
+        deepQuery(document, 'input[type=file]').some(input => verifiedDialogUpload(input)?.region === region));
     });
     };
     let applicationRegions = identifyApplicationRegions(fields);
+    const finalReport = () => {
+      // Read the employer's final action after filling. Never activate it to test readiness.
+      const [form] = applicationRegions;
+      if (applicationRegions.length === 1 && form instanceof HTMLFormElement && form.isConnected) {
+        const submitters = [...form.getRootNode().querySelectorAll('button,input')].filter(e => e.form === form && e.type === 'submit' && visible(e));
+        const [button] = submitters;
+        if (submitters.length === 1 && button.closest('form') === form &&
+            /^(?:apply|submit application|send application)$/i.test((button.innerText || button.value || '').trim()) &&
+            (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
+          // The matched workflow decides completeness from its last observation.
+          if (action==='status' || !matchingRunId) result.incomplete = true;
+          addSkip('Application', 'employer_submission_disabled');
+        }
+      }
+      return result;
+    };
     const { isRequired } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
     });
-    const { observe } = createFieldObserver({
+    const { observe:baseObserve } = createFieldObserver({
       deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
+    const observe = (element,label) => {
+      const control = screeningFields.read(element);
+      if (!control) return baseObserve(element,label);
+      state.matchingIds ??= new WeakMap();
+      if (!state.matchingIds.has(element)) state.matchingIds.set(element,crypto.randomUUID());
+      const row = {pageId:location.href,fieldId:state.matchingIds.get(element),question:control.question,
+        control:control.control,options:control.options,required:control.required,selected:control.selected,
+        valid:control.valid,backing:control.value,...(!control.coherent && {state:'ambiguous'})};
+      return {...row,signature:JSON.stringify(row)};
+    };
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {
@@ -356,7 +471,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       result.navigationDiagnostics = readNavigationDiagnostics({noticeMarkers:adapters.noticeMarkers, deepQuery, composedClosest, composedParent, visible, norm});
       state.fabricOptions??=new WeakMap();state.committedChoices??=new WeakMap();
       for(const field of fields) {
-        if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
+        if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !screeningFields.read(field.element) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
           try {const proof=await inspectCommittedChoice(field.element);if(proof)state.committedChoices.set(field.element,proof);else state.committedChoices.delete(field.element);}
           catch {state.committedChoices.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}
         }
@@ -367,19 +482,27 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       result.matching=observations();
       if(result.matching.some(row=>row.required && row.reason==='button_choice_interaction_unsupported'))result.incomplete=true;
-      return result;
+      return finalReport();
     }
-    const reportMatch = (row, plan, outcome, reason, observedAnswer) => result.matching.push({...row,
-      chosenAnswer:plan?.answer??null,provisional:plan?.provisional??true,outcome,reason,observedAnswer});
+    const reportMatch = (row, plan, outcome, reason, observedAnswer) => {
+      if (!plan && outcome==='observed') result.matching.push({...row,outcome});
+      else result.matching.push({...row,chosenAnswer:plan?.answer??null,provisional:plan?.provisional??true,outcome,reason,observedAnswer});
+    };
 
     let uploadReceipt = state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
     let parserPending = false;
-    if (resume && typeof resume.base64 === 'string' && resume.base64.length <= 14_000_000 &&
-        /^[A-Za-z0-9+/]*={0,2}$/.test(resume.base64) && resume.base64.length % 4 === 0 &&
-        typeof resume.name === 'string' && /^[-a-z0-9_ .]+\.pdf$/i.test(resume.name)) {
+    const acknowledged = receipt => !!receipt?.customUpload && checkedForm?.owner===receipt.region && receipt.selectedFileAccepted &&
+      !!receipt.fileSha256 && state.fileEvents?.get(receipt.element)===receipt.file &&
+      !parserBusy() && receipt.customUpload.acknowledged(receipt.file.name);
+    if (checkedForm?.screening) result.resume = 'unverified';
+    else if (validResume) {
       const resumeFields = deepQuery(document, 'input[type=file]').filter(e =>
         applicationRegions.includes(regionFor(e)) && fileBinding(e));
       const targets = resumeFields.filter(isRequired);
+      const customUpload = targets.length === 1 ? customForm?.upload?.(targets[0]) : null;
+      const reportAttachment = (label, reason) => addSkip(label,
+        customUpload?.filenameVisible(resume.name) ? 'resume_filename_visible_contents_unverified' : reason,
+        'uploads', 'verify_attachment');
       if (!targets.length && resumeFields.length && !uploadReceipt) result.resume='optional';
       if (uploadReceipt) {
         // Retain the attempted upload even when a site clears/replaces its input.
@@ -390,22 +513,24 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (requested.length!==attempted.length || requested.some((byte,index)=>byte!==attempted[index])) {
           result.resume='unverified';
           addSkip('Resume', 'different_resume_requires_manual_review', 'uploads', 'verify_attachment');
-          return result;
+          return finalReport();
         }
         const e=uploadReceipt.element;
+        if (!checkedStep && firstStep && uploadReceipt.acknowledgedPanel?.() === firstStep) checkedStep = firstStep;
         uploadReceipt.externalized ||= !e.isConnected || externalAttachment(e) || read(e)!==uploadReceipt.file;
         result.resume = ownedUploadCompleted(uploadReceipt) || !uploadReceipt.externalized && fileBinding(e) && regionFor(e)===uploadReceipt.region &&
           e.files?.length===1 && read(e)===uploadReceipt.file && e.validity.valid && e.getAttribute('aria-invalid')!=='true' ? 'verified' : 'unverified';
+        if (checkedStep && result.resume !== 'verified') result.incomplete = true;
         if (result.resume==='verified') addSkip('Resume', 'selected_resume_already_present');
-          else addSkip('Resume', 'resume_upload_already_attempted_review_attachment', 'uploads', 'verify_attachment');
-        parserPending = parserBusy() || uploadReceipt.externalized && !ownedUploadCompleted(uploadReceipt) && !ownedAttachmentPresent(e) && !uploadReceipt.parserCompleted && !parserComplete();
+        else reportAttachment('Resume', 'resume_upload_already_attempted_review_attachment');
+        parserPending = parserBusy() || !checkedStep && uploadReceipt.externalized && !ownedUploadCompleted(uploadReceipt) && !ownedAttachmentPresent(e) && !uploadReceipt.parserCompleted && !parserComplete();
         if (parserComplete()) uploadReceipt.parserCompleted=true;
       } else if (targets.length === 1) {
         const e = targets[0], label = fileBinding(e).label, fileRegion = regionFor(e);
         result.resume = 'unverified';
-        if (externalAttachment(e)) {
-          addSkip(label, 'existing_remote_attachment_requires_review', 'uploads', 'verify_attachment');
-          parserPending=parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
+        if (customUpload?.occupied || externalAttachment(e)) {
+          reportAttachment(label, 'existing_remote_attachment_requires_review');
+          parserPending=customUpload?.occupied || parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
         } else if ((e.files?.length ?? 0) > 1 && replaceExistingResume) {
           addSkip(label, 'ambiguous_resume_attachment', 'uploads', 'verify_attachment');
         } else if (e.files?.length && (!replaceExistingResume || isPortalResumeBinding(state.nativeFileBindings?.get(e)))) {
@@ -419,11 +544,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             const owner=uploadOwner(e),fileSha256=crypto.subtle ? [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(byte=>byte.toString(16).padStart(2,'0')).join('') : null;
             checkDeadline();
             if(!fileBinding(e) || regionFor(e)!==fileRegion || read(e)!==before || owner && (!owner.isConnected || !composedContains(owner, e))) {
-              addSkip(label, 'resume_control_changed', 'uploads', 'verify_attachment');return result;
+              addSkip(label, 'resume_control_changed', 'uploads', 'verify_attachment');return finalReport();
             }
-            uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,...adapters.clientAttachmentState(owner,fileBinding(e)),
+            uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,customUpload,...adapters.clientAttachmentState(owner,fileBinding(e)),
               externalized:false,parserCompleted:false,owner,fileSha256,hadAttachmentId:!!owner && attachmentIds(owner).some(input=>input.value),hadUploadSuccess:!!owner && (uploadSuccess(owner,file.name).length>0 || uploadRemoveControls(owner,file.name).length>0),selectedFileAccepted:false};
             state.resumeAttempt=uploadReceipt;
+            adapters.watchJobviteScreening(uploadReceipt, state.nativeFileBindings?.get(e), state);
             const observeParser=()=>{if (!hadParserComplete && parserComplete()) uploadReceipt.parserCompleted=true;};
             const observer=new MutationObserver(observeParser);
             observer.observe(document.body,{subtree:true,childList:true,characterData:true});
@@ -434,7 +560,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
                 await new Promise(resolve => setTimeout(resolve,100));
                 checkDeadline();observeParser();
                 uploadReceipt.externalized ||= !e.isConnected || externalAttachment(e) || read(e)!==file;
-                if (Date.now()-started>=600 && (!uploadReceipt.externalized && !parserBusy() || ownedUploadCompleted(uploadReceipt) || uploadReceipt.parserCompleted)) break;
+                if (Date.now()-started>=600 && (!uploadReceipt.externalized && !parserBusy() || ownedUploadCompleted(uploadReceipt) || uploadReceipt.parserCompleted || acknowledged(uploadReceipt))) break;
               } while (Date.now()-started<3000);
             } finally { observer.disconnect(); }
             if (!uploadReceipt.externalized && fileBinding(e) && regionFor(e) === fileRegion && e.files?.length === 1 && read(e) === file && e.validity.valid) {
@@ -446,9 +572,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             } else {
               // Native File undo cannot remove a server-side upload. Preserve the
               // receipt and pause for attachment review, without a fake rollback.
-              addSkip(label, uploadReceipt.externalized?'uploaded_attachment_requires_review':'attachment_not_verified_native_file_retained', 'uploads', 'verify_attachment');
+              reportAttachment(label, uploadReceipt.externalized?'uploaded_attachment_requires_review':'attachment_not_verified_native_file_retained');
             }
-            parserPending=parserBusy() || uploadReceipt.externalized && !ownedUploadCompleted(uploadReceipt) && !ownedAttachmentPresent(e) && !uploadReceipt.parserCompleted;
+            if (firstStep && uploadReceipt.acknowledgedPanel?.() === firstStep) checkedStep = firstStep;
+            if (checkedStep && result.resume !== 'verified') result.incomplete = true;
+            parserPending=parserBusy() || !checkedStep && uploadReceipt.externalized && !ownedUploadCompleted(uploadReceipt) && !ownedAttachmentPresent(e) && !uploadReceipt.parserCompleted;
           }
         }
       } else if (result.resume!=='optional') {
@@ -458,15 +586,24 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         } else addSkip('Resume', 'resume_control_not_identified');
       }
     }
+    if (uploadReceipt?.customUpload && uploadReceipt.externalized) {
+      // An employer-rendered item acknowledges receipt of the selection, not the stored PDF bytes.
+      result.resume='unverified';
+      parserPending=!acknowledged(uploadReceipt);
+      if (!parserPending) checkedUpload=()=>acknowledged(uploadReceipt);
+    }
+    if (firstStep && state.resumeAttempt?.externalized && !checkedStep) parserPending = true;
     if (parserPending) {
       addSkip('Resume', 'resume_parsing_pending_profile_not_filled', 'uploads', 'verify_attachment');
-      return result;
+      return finalReport();
     }
     fields = collectFields();
     applicationRegions = identifyApplicationRegions(fields);
     if (separateAccountForm) fields = fields.filter(field => applicationRegions.includes(field.region));
+    const phoneDigits = value => value.replace(/[\s().-]/g, '');
     const sameText = (element, label, expected) => element.value === expected ||
-      (/phone|téléphone/i.test(label) && /\d/.test(element.value) && element.value.replace(/\D/g, '') === expected.replace(/\D/g, ''));
+      (/phone|téléphone/i.test(label) && /^\+?\d+$/.test(phoneDigits(element.value)) &&
+        phoneDigits(element.value) === phoneDigits(expected));
     const existingMatchReason = element => element.validity.valid && element.getAttribute('aria-invalid')!=='true'
       ? 'saved_value_already_present' : 'value_not_accepted';
     const reportExisting = (row, plan, same, skip) => {
@@ -490,13 +627,42 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     };
     const radiosHandled = new Set();
     for (const f of fields) {
+      if (checkedStep || checkedForm) checkDeadline();
       let e = currentElement(f);
       const skip = (reason, component, operation) => addSkip(f.label, reason, component, operation);
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}
       if(!editable(e)){skip('field_no_longer_editable', 'field_recognition', 'identify_field');continue;}
       if (!fabricWidget(e) && provinceMenu.context(e)) continue; // Process the unique province menu with its country below.
-      if(!isRequired(e)){skip('optional_field');continue;}
+      if(!isRequired(e) && !screeningFields.read(e)?.required){skip('optional_field');continue;}
       if (scope !== 'page' && !applicationRegions.includes(f.region)) { skip('application_form_not_identified', 'page_state', 'identify_application'); continue; }
+      const screenControl = screeningFields.read(e);
+      if (screenControl) {
+        const row=observe(e,f.label), plan=matchingPlans?.find(candidate=>candidate.fieldId===row.fieldId);
+        if (!plan || plan.signature!==row.signature) { reportMatch(row,plan,'observed','field_changed_or_new'); continue; }
+        if (row.selected) { reportExisting(row,plan,row.selected===plan.answer,skip); continue; }
+        if (!queuedScreening || !screenControl.coherent || typeof plan.answer!=='string' || !row.options.includes(plan.answer)) {
+          const reason = !queuedScreening ? 'screening_choice_requires_queue' : plan.reason;
+          skip(reason); reportMatch(row,plan,'unconfirmed',reason,row.selected); continue;
+        }
+        let confirmed, clickedListOption=false;
+        try {
+          confirmed = await screeningFields.select(e,screenControl,plan.answer,checkDeadline,()=>{clickedListOption=true;});
+        } finally {
+          if (clickedListOption) {
+            const after = screenControl.values[screenControl.options.indexOf(plan.answer)];
+            if (after && screeningFields.historyValue(e,screenControl)===after) {
+              changes.push({element:e,region:f.region,label:row.question,url:location.href,screeningChoice:screenControl,before:'',after});
+            }
+          }
+        }
+        if (confirmed) {
+          result.filled.push(row.question);reportMatch(row,plan,'verified','product_readback_confirmed',plan.answer);
+        } else {
+          skip('screening_choice_not_confirmed','browser_interaction','verify_selection');
+          reportMatch(row,plan,'unconfirmed','screening_choice_not_confirmed',observe(e,f.label).selected);
+        }
+        continue;
+      }
       if(semanticChoiceButton(e)) {
         const row=observe(e,f.label),plan=matchingPlans?.find(plan=>plan.fieldId===row.fieldId);
         skip('button_choice_interaction_unsupported', 'browser_interaction', 'operate_choice');reportMatch(row,plan,'unconfirmed','button_choice_interaction_unsupported',row.observedAnswer);continue;
@@ -515,7 +681,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         }
         state.choiceDrafts??=new WeakMap();
         const draft=state.choiceDrafts.get(searchChoice.widget),ownedDraft=draft && boundChoice(draft.change) && choiceState(searchChoice)===draft.change.after;
-        if(searchChoice.query && !ownedDraft) {skip('existing_search_query_preserved');reportMatch(row,plan,'unconfirmed','existing_search_query_preserved',row.selected);continue;}
+        const resumeSameCity = searchChoice.kind==='rippling_location' && searchChoice.query === fact('city') && !searchChoice.query.includes(',') &&
+          (searchChoice.query === plan.query || plan.reason === 'profile_answer' && typeof plan.answer === 'string' &&
+            plan.answer.split(',').length === 3 && norm(plan.answer.split(',')[0]) === norm(searchChoice.query) && row.options.includes(plan.answer));
+        if(searchChoice.query && !ownedDraft && !resumeSameCity) {skip('existing_search_query_preserved');reportMatch(row,plan,'unconfirmed','existing_search_query_preserved',row.selected);continue;}
         const querying=typeof plan.query==='string' && plan.query.length>0 && plan.answer==null;
         if(!querying && (typeof plan.answer!=='string' || !row.options.includes(plan.answer))) {skip(plan.reason, 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;}
         const reusable=ownedDraft && (changes.includes(draft.change) || state.undo.at(-1)?.includes(draft.change));
@@ -524,7 +693,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         try {
           if(querying) {
             change.searchQuery=plan.query;const current=await queryChoice(change,plan.query);
-            if(current.labels.length && (current.labels.length!==1 || current.pills.length!==1 || !current.pills[0].remove))throw new Error('The search committed an item without a confirmed reset.');
+            if(current.labels.length && (current.labels.length!==1 || !current.clear && !current.pills[0]?.remove))throw new Error('The search committed an item without a confirmed reset.');
             const options=current.options.filter(option=>!option.disabled).map(option=>option.label);
             closeChoice(change);await choicePause();change.after=choiceState(boundChoice(change));
             if(!change.after)throw new Error('The search owner changed.');
@@ -610,7 +779,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const same=String(row.selected)===String(value) || row.control==='text' && typeof value==='string' && sameText(e,row.question,value);
           reportExisting(row, plan, same, skip);continue;
         }
-        if (row.control==='listbox' || e.multiple) {skip('custom_choice_not_reversible', 'browser_interaction', 'operate_choice');reportMatch(row,plan,'unconfirmed','custom_choice_not_reversible',row.selected);continue;}
+        if (row.control==='listbox' || (e.multiple && e.type!=='select-multiple')) {skip('custom_choice_not_reversible', 'browser_interaction', 'operate_choice');reportMatch(row,plan,'unconfirmed','custom_choice_not_reversible',row.selected);continue;}
         if (row.control==='radio') {
           const group=composedClosest(e,'fieldset,[role=radiogroup]');
           const radios=deepQuery(group,'input[type=radio]').filter(editable);
@@ -618,9 +787,17 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           if (matches.length!==1 || !radios.every(radio=>radio.name===e.name)) {skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique');continue;}
           e=matches[0];value=true;
         } else if (row.control==='select') {
-          const options=[...e.options].filter(o=>!o.disabled && o.value && o.textContent.trim()===value);
+          const options=[...e.options].filter(o=>o.value && (e.multiple
+            ? !o.matches(':disabled') && !o.closest('[hidden]') && o.label.trim()===value
+            : !o.disabled && o.textContent.trim()===value));
           if (options.length!==1) {skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique');continue;}
-          value=options[0].value;
+          if (e.multiple && e.selectedOptions.length) {
+            skip('existing_value_preserved');reportMatch(row,plan,'unconfirmed','existing_value_preserved',row.selected);continue;
+          }
+          if (e.multiple && [...e.options].filter(option=>option.value===options[0].value).length!==1) {
+            skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique',row.selected);continue;
+          }
+          value=e.multiple ? JSON.stringify([optionKey(options[0])]) : options[0].value;
         }
         if (e.type!=='checkbox' && row.control!=='radio') value=String(value);
         if (read(e)===value && row.valid) {reportMatch(row,plan,'verified','existing_value_confirmed',row.selected);continue;}
@@ -628,8 +805,27 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const change={element:e,identity:identity(e),controlIdentity:controlIdentity(e),boundLabels:[...e.labels??[]],region:f.region,before:read(e),label:row.question};
         write(e,value);const immediate=currentElement(change),written=read(immediate??e);await new Promise(resolve=>setTimeout(resolve,100));
         e=currentElement(change);
-        if (!e || !editable(e) || !unchanged(e,value) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
-          if(e && editable(e) && unchanged(e,written)) {
+        // The employer may publish phone validity after it formats the number and handles blur.
+        if (checkedForm && e?.type === 'tel' && sameText(e,row.question,value)) {
+          try {
+            for (let attempt = 0; attempt < 8 && e?.validity.valid && e.getAttribute('aria-invalid') === 'true' &&
+              sameText(e,row.question,value); attempt++) {
+              checkDeadline();
+              await new Promise(resolve => setTimeout(resolve, 50));
+              e = currentElement(change);
+            }
+            checkDeadline();
+          } catch (error) {
+            // No further writes after expiry. Keep an unchanged, owned write available for undo.
+            if (e && e === currentElement(change) && unchanged(e,written)) {
+              changes.push({...change,element:e,after:written});
+            }
+            throw error;
+          }
+        }
+        const formattedPhone = e?.type === 'tel' && row.control === 'text' && sameText(e,row.question,value);
+        if (!e || !editable(e) || !(unchanged(e,value) || formattedPhone) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
+          if(e && editable(e) && unchanged(e,e.type==='select-multiple' ? value : written)) {
             write(e,change.before);await new Promise(resolve=>setTimeout(resolve,100));e=currentElement(change);
           }
           const restored=!!e && unchanged(e,change.before);
@@ -817,8 +1013,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field');
       for (const row of result.matching.filter(row=>row.question===change.label && row.outcome==='verified')) {row.outcome='verification_failed';row.reason='value_changed_after_fill';row.provisional=true;}
     }
-    return result;
+    return finalReport();
   } finally {
+    if (checkedStep) for (const change of changes) change.screeningStep = checkedStep;
     if (action === 'fill' && changes.length) { if (matchingRunId && state.matchingRunId===matchingRunId && state.undo.length) state.undo.at(-1).push(...changes); else state.undo.push(changes); state.matchingRunId=matchingRunId; state.undo = state.undo.slice(-10); state.redo = []; }
     const failed = result.skipped.find(row => row.componentFailure);
     if (failed) result.componentFailure = failed.componentFailure;

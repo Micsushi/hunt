@@ -10,6 +10,7 @@ export type { PageAnswerPlan, PageQuestion } from './page-answer-planner.ts';
 export interface FrameReport { frameId: string; status: string; error?: string }
 export interface MatchedPageResult {
   frames?: FrameReport[];
+  incomplete?: boolean;
   filled:string[]; skipped:{label:string;reason:string;fieldId?:string;frameId?:string;componentFailure?:ComponentFailure}[]; componentFailure?:ComponentFailure; matching?:PageQuestion[];
   resume?:'verified'|'missing'|'unverified'|'optional'; canUndo:boolean; canRedo:boolean; [key:string]:unknown;
 }
@@ -36,7 +37,9 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
   let result:MatchedPageResult={filled:[],skipped:[],canUndo:false,canRedo:false};
   try {
     const planAnswer = createPageAnswerPlanner(sources, facts, backlog.company);
-    for(let round=0;round<5;round++) {
+    const maxRounds = 5;
+    for(let round=0;round<maxRounds;round++) {
+      const finalRound = round + 1 === maxRounds;
       input.signal.throwIfAborted();
       const observed=await input.call('status',undefined,runId);
       observeFrames(observed);
@@ -63,7 +66,10 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
           ...(observed.componentFailure && {componentFailure: observed.componentFailure}),
           canUndo: observed.canUndo,
           canRedo: observed.canRedo,
-          incomplete: observed.incomplete === true || result.incomplete === true &&
+          incomplete: observed.matching?.some(row => row.required && (!row.valid ||
+            (typeof row.selected === 'string' && !row.selected.trim()))) === true ||
+            result.resume === 'unverified' ||
+            observed.incomplete === true || result.incomplete === true &&
             (!result.frames?.some(frame => frame.status === 'unavailable') || !!result.componentFailure),
         };
         break;
@@ -78,7 +84,10 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
       }
       observeFrames(result);
       result.filled.forEach(label=>filled.add(label));
-      result.skipped.forEach(row=>skipped.set(JSON.stringify(row),row));
+      // A later write can enable Apply. Keep its observed state only on the final fill or status.
+      for (const row of result.skipped) {
+        if (row.reason!=='employer_submission_disabled' || finalRound) skipped.set(JSON.stringify(row),row);
+      }
       // A changed observation before any write is recoverable after a fresh plan.
       // Never clear a different field/frame or a post-write failure.
       for(const row of result.matching??[]) if(row.outcome==='verified' &&
@@ -87,7 +96,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
           skip.label===row.question && skip.reason==='field_changed_before_fill') skipped.delete(key);
       }
       for(const row of result.matching??[]) backlog.record({...row,provisional:row.provisional || row.outcome!=='verified'});
-      if(round===4)result={...result,incomplete:true};
+      if(finalRound)result={...result,incomplete:true};
     }
     if (unavailableFrames.size) {
       // A disappearing child is still unresolved until that exact frame is inspected or excluded.

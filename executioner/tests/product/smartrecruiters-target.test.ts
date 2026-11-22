@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { genericApplicationTarget } from '../../src/product/target.ts';
 import { verifySmartRecruitersApplication } from "../../src/product/smartrecruiters-target.ts";
 
 const company = "Fixture";
@@ -41,4 +42,19 @@ test("unrelated, inactive, malformed, oversized and failed API responses cannot 
     assert.equal(await verifySmartRecruitersApplication(posting, application), false);
   }
   assert.equal(fetcher.mock.callCount(), 8);
+});
+
+test("only the exact screening route shares the verified publication identity", async t => {
+  t.mock.method(globalThis, "fetch", async () => Response.json(metadata));
+  const screening = application.replace("?", "/screening?");
+  assert.equal(genericApplicationTarget(application).key,genericApplicationTarget(screening).key);
+  assert.equal(genericApplicationTarget(screening).url,screening);
+  assert.equal(await verifySmartRecruitersApplication(posting,screening),true);
+  for (const invalid of ["/screening/extra","/done","/screening-old","/SCREENING"]) {
+    const other = application.replace("?",invalid+"?");
+    assert.throws(() => genericApplicationTarget(other));
+    assert.equal(await verifySmartRecruitersApplication(posting,other),false);
+  }
+  assert.equal(await verifySmartRecruitersApplication(posting,screening.replace(uuid,"11111111-1111-4111-8111-111111111111")),false);
+  assert.throws(() => genericApplicationTarget(screening+"&dcr_ci=Other"));
 });

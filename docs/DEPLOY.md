@@ -24,6 +24,8 @@ When you are running that command manually on `server2`, keep the Ansible-owned 
 python deploy.py all --mode server --env-file .env.server2 --project-name hunt-server2
 ```
 
+Server starts check GitHub for a successful completed CI push on main for the checkout SHA. The application images build from that Git commit and carry its revision label. Server `--no-build` requires those release-tagged images locally. Status, logs, restarts, stops and dry runs do not activate a new release.
+
 ## Targets
 
 - `db`: Postgres only
@@ -110,11 +112,7 @@ Before this, the repo had `docker-compose.pipeline.yml` plus several local smoke
 
 This command is the runtime entrypoint the repo should own.
 
-Today the remote `server2` deploy still goes through `ansible_homelab`, but the intended direction is simpler:
-
-1. Ansible updates the repo and environment on `server2`
-2. Ansible runs the repo-native deploy command from this repo
-3. Smoke checks confirm the deployed services
+For a remote release, use the [server2 Windows wrapper](SERVER2_DEPLOY.md). It verifies the pinned revision and invokes the infrastructure playbook that owns the server environment.
 
 Use `.env.server.example` as the tracked template for the active target host environment. It intentionally contains no C4 runtime settings.
 

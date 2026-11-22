@@ -8,14 +8,15 @@ import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, re
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
-import { AttachmentFailure } from './extension-bridge.ts';
+import { AttachmentFailure, verifiedScreeningTransition } from './extension-bridge.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
 
 import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
 
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
 
-const safeFailureStages = new Set(["Opening application", "Opening existing account sign-in", "Signing in",
+const workdayApplicationConnection = "Connecting to the Workday application";
+const safeFailureStages = new Set(["Opening application", "Opening employer account", workdayApplicationConnection, "Opening existing account sign-in", "Signing in",
   "Waiting for account page", "Continuing opened application", "Filling application", "Verifying application",
   "Checking application page", "Moving to the next page", "Checking application review",
   "Filling profile", "Uploading resume", "Answering questions"]);
@@ -43,14 +44,14 @@ function runFailure(error: unknown, stage: string) {
 }
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
-  tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  selectedDocument?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
   componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
   resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
 }
 export interface BrowserConnection {
   connected: boolean;
-  open(url: string, tabId?: number, existingOnly?: boolean): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
+  open(url: string, tabId?: number, existingOnly?: boolean, selectedDocument?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
   release(tabId: number): Promise<void>;
   focus?(tabId: number, url?: string): Promise<void>;
   prepareAccount?(options: import('./workday-sign-in.ts').WorkdayAccountOptions): Promise<void>;
@@ -136,7 +137,7 @@ export class ApplicationQueue {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
     this.concurrency = value; this.save(); this.safePump();
   }
-  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean } = {}) {
+  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean; selectedDocument?: string } = {}) {
     if (!this.settings) throw new Error("Choose a profile and resume first.");
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
@@ -175,12 +176,14 @@ export class ApplicationQueue {
           existing.resumeName ??= input.resumeName;
           existing.resumeVersion ??= input.resumeVersion;
         }
+        if (options.selectedDocument) existing.selectedDocument = options.selectedDocument;
         added.push(existing); continue;
       }
       const id = randomUUID();
       pendingInputs.set(id, { profile: this.settings.profile, resume });
       const job: ProductJob = { id, ...target, title: input.title?.slice(0, 200) || target.posting,
-        status: options.paused ? "paused" : "queued", stage: options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
+        ...(options.selectedDocument && {selectedDocument:options.selectedDocument}),
+        status: options.paused ? "paused" : "queued", stage: options.selectedDocument ? "Selected application ready. Choose Run in Applications" : options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
         resumeName: input.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
         resumeSha256: createHash("sha256").update(Buffer.from(resume, "base64")).digest("hex"),
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -354,8 +357,10 @@ export class ApplicationQueue {
           recordComponentFailure(error, "authentication", "prepare_account");
           throw error;
         });
+        job.stage = workdayApplicationConnection;
       }
-      const session = await this.bridge.open(job.url, job.tabId, productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount).catch(error => {
+      if (job.selectedDocument && !job.tabId) throw new ApplicationPause('Reopen Prepare on the selected Jobvite application before retrying.');
+      const session = await this.bridge.open(job.url, job.tabId, !!job.selectedDocument || productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount, job.selectedDocument).catch(error => {
         recordComponentFailure(error, "browser_interaction", "open_tab");
         throw error;
       });
@@ -364,6 +369,7 @@ export class ApplicationQueue {
       this.changed(job);
       const executionUrl=productApplicationTarget(job.url).ats==='generic' ? session.applicationUrl ?? job.url : job.url;
       const result = await this.fill(session.page, { url: executionUrl, profile: input.profile, learningRoot: join(this.root, "learning", job.id, runId),
+        screeningTransition: url => verifiedScreeningTransition(session.page,url),
         resume: Buffer.from(input.resume, "base64"), resumeExpected: job.resumeExpected,
         onResumeObserved: () => { job.resumeExpected = true; this.changed(job); },
         resumeUpload: job.resumeUpload, onResumeUpload: receipt => { job.resumeUpload = receipt; this.changed(job); },
@@ -388,12 +394,13 @@ export class ApplicationQueue {
             Buffer.from(JSON.stringify({schemaVersion:1,...runFailure(error,job.stage),componentFailure:job.componentFailure})));
         } catch { /* Diagnostics do not affect the paused job or release its tab. */ }
       }
+      const reachedWorkdayApplication = job.stage === workdayApplicationConnection;
       job.status = "paused"; job.stage = controller.signal.aborted ? "Paused" : "Needs attention";
       // Never retain Playwright errors containing DOM snippets or typed values.
       job.error = controller.signal.aborted
         ? controller.signal.reason instanceof ApplicationPause ? controller.signal.reason.message : "Paused. Your draft is preserved."
         : error instanceof ApplicationPause ? error.message
-        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? 'Chrome is protecting another extension on this tab. Complete employer sign-in manually in the same tab, then retry when C3 can access it.'
+        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? (reachedWorkdayApplication ? 'Workday opened the application. ' : '') + 'Chrome is protecting another extension on this tab. If an extension popup is open, dismiss it and retry. If Chrome still blocks access, continue in the employer tab. Your draft is preserved.'
         : error instanceof AttachmentFailure && error.code==='attachment_viewport_unavailable' ? 'This tab has no usable page area. Resize or restore its browser window, then retry.'
         : error instanceof AttachmentFailure && error.code==='attachment_viewport_cleanup_pending' || error instanceof Error && error.message===viewportCleanupPending ? viewportCleanupPending
         : "C3 could not finish this page. Inspect the tab, then retry.";

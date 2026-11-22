@@ -92,6 +92,11 @@ export const questionCatalog = Object.freeze([
   entry("s1-question-resume", "Resume", "file_upload", { kind: "resume" }),
 ] as const satisfies readonly QuestionCatalogEntry[]);
 
+export const canadianWorkEligibilityLabels = [
+  "Are you currently eligible to work in Canada?",
+  "Êtes vous présentement admissible à travailler au Canada? | Are you currently eligible to work in Canada?",
+] as const;
+
 const questionAliasCatalog = Object.freeze([
   // Existing current-page wording shares the same stable facts in both workflows.
   aliasEntry("s1-question-given-name", ["first name","legal first name","prénom"], ["text", "textarea"], {"kind":"profile","factId":"given_name"}),
@@ -150,7 +155,7 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry(
     "s1-question-work-authorization",
     ["Are you legally authorized to work in this country?", "Are you legally entitled to work in Canada?",
-      "Are you authorized to work lawfully in the Canada?"],
+      "Are you authorized to work lawfully in the Canada?", ...canadianWorkEligibilityLabels],
     ["radio", "select", "listbox"],
   ),
   aliasEntry(
@@ -418,9 +423,22 @@ export function generatedLearningDefaultFor(
   return generatedLearningDefaults[id as keyof typeof generatedLearningDefaults];
 }
 
+function isOfferStageBackgroundCheck(text: string, employerNames?: readonly string[]): boolean {
+  const parts = text.split('|');
+  if (parts.length > 2) return false;
+  const english = parts[parts.length - 1]!.trim();
+  const employer = /^if advanced to an offer of employment with ([^,|\n]{1,80}),/iu.exec(english)?.[1]?.trim();
+  if (!employer || !(/^[\p{Lu}\d]{2,10}$/u.test(employer) || employerNames?.some(name => sameEmployer(name, employer)))) return false;
+  const name = normalizeCatalogText(employer);
+  if (normalizeCatalogText(english) !== `if advanced to an offer of employment with ${name} you consent to respecting the employment verification and background check process`) return false;
+  return parts.length === 1 || normalizeCatalogText(parts[0]!) ===
+    `si vous recevez une offre d emploi de ${name} vous consentez à respecter le processus de vérification d emploi et de références`;
+}
+
 export function resolveQuestion(text: string, employerNames?: readonly string[]) {
   const exact=resolveCatalogText([...questionCatalog,...questionAliasCatalog],text);
   if(exact.kind!=='unknown') return exact;
+  if (isOfferStageBackgroundCheck(text, employerNames)) return {kind:'resolved' as const, id:'owner-question-background-check-willing' as const, provenance:'reviewed_catalog' as const};
   const sourceEmployer = /^how did you hear about (.+)$/u.exec(normalizeCatalogText(text))?.[1];
   if (sourceEmployer && employerNames !== undefined &&
       !/^(?:(?:the|this|our) (?:company|organization|job|position|opening|opportunity|role|job posting|job opening)|us)$/u.test(sourceEmployer) &&

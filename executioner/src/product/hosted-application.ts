@@ -1,24 +1,33 @@
 import { applicationAttachmentControls } from '../../extension/page-adapters/document.js';
 import { observeFormDocument } from '../../extension/form-page.js';
 import { createHash } from 'node:crypto';
+import { preserveAshbyChoices, searchLeverLocation, verifyAshbyAutocomplete } from './hosted-autocomplete.ts';
 import { inspectHostedFields } from './hosted-field-observation.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'playwright';
 import { disposeResumeArtifact } from '../contracts/index.ts';
 import { createPageAnswerPlanner, matchLocationOption, type PageQuestion } from './page-answer-planner.ts';
-import { isRecruitmentTermsConsent } from '../form/questions/protected.ts';
+import { isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
 import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
 import { applicationTarget } from './target.ts';
-import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt } from './application-contract.ts';
+import { ApplicationPause, AttachmentPreviewUnavailable, type ProductInput, type ResumeUploadReceipt, type WorkableReviewAttempt } from './application-contract.ts';
 import { hasHostedResume, prepareHostedResume, verifyHostedAttachments } from './uploads/hosted.ts';
 import { createMatchingBacklog, type MatchingObservation } from './matching-backlog.ts';
 
 export { inspectHostedFields };
 
 const submitName = /^(submit application|submit|send application|envoyer la candidature)$/i;
+
+// A numeric-only display loses the currency and period, even when the amount survives.
+function displaysSavedSalary(label: string, displayed: string, saved: unknown): boolean {
+  if (!/^(?:salary expectations?|desired salary)\s*[?*]?$/i.test(label.trim()) || typeof saved !== 'string') return false;
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(displayed)) return false;
+  const amount = /^(?:CAD|USD)\s*\$?\s*(\d+|\d{1,3}(?:,\d{3})+)\s+per (?:year|hour)$/i.exec(saved.trim());
+  return amount?.[1]?.replaceAll(',', '') === displayed.replaceAll(',', '');
+}
 /** Hosted routes require a current application form, not merely an email input at an /apply URL. */
 export async function observeHostedPage(page: Page) {
   return page.evaluate(observeFormDocument, applicationAttachmentControls);
@@ -35,12 +44,12 @@ export async function hostedReviewDigest(page: Page, expectedResumeSha256?: stri
   return (await hostedReviewSnapshot(page, expectedResumeSha256)).digest;
 }
 
-export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt): Promise<{ digest: string; resumeExpected: boolean }> {
+export async function hostedReviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt, review?: WorkableReviewAttempt): Promise<{ digest: string; resumeExpected: boolean }> {
   requireHostedApplication(await observeHostedPage(page));
   const fields = await inspectHostedFields(page);
   const submit = page.getByRole('button', { name: submitName });
   if (!fields.length || await submit.count() !== 1 || !await submit.isVisible() || !await submit.isEnabled()) throw new ApplicationPause('The application is not ready for review.');
-  const upload = await verifyHostedAttachments(page, fields, resumeExpected, resumeUpload, expectedResumeSha256);
+  const upload = await verifyHostedAttachments(page, fields, resumeExpected, resumeUpload, expectedResumeSha256, review);
   for (const f of fields) {
     const filled = f.kind === 'file' ? upload.filledKeys.has(f.key) : f.kind === 'checkbox' || f.kind === 'radio' ? f.checked : !!f.value.trim();
     if (f.required && !filled || !f.valid) throw new ApplicationPause('Required or invalid fields remain. Inspect the application.');
@@ -77,9 +86,22 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
   const resumeSha256 = createHash('sha256').update(input.resume).digest('hex');
   let resumeExpected = input.resumeExpected;
   let resumeUpload=input.resumeUpload;
+  const workableReview = {selectedSize:input.resume.length,rechecked:false};
   let pendingPreview: {error: AttachmentPreviewUnavailable; documentKey: string} | undefined;
   const history: {label:string;kind:string;required:boolean;options:string[];result:string;question:ReturnType<typeof resolveQuestion>;answerKind?:string;lane?:string}[] = [];
-  const planAnswer = createPageAnswerPlanner(sources, facts, matching.company);
+  const postingEmployer = target.ats === 'ashby' ? await page.locator('script[type="application/ld+json"]').evaluateAll((scripts, id) => {
+    const names = new Set<string>();
+    for (const script of scripts) {
+      try {
+        const job = JSON.parse(script.textContent ?? '');
+        if (job?.['@type'] === 'JobPosting' && job.identifier?.value === id &&
+            job.hiringOrganization?.['@type'] === 'Organization' && typeof job.hiringOrganization.name === 'string' &&
+            job.hiringOrganization.name.trim()) names.add(job.hiringOrganization.name.trim());
+      } catch { /* Other structured data does not identify this posting. */ }
+    }
+    return names.size === 1 ? [...names][0] : undefined;
+  }, target.posting.split('/')[1]) : undefined;
+  const planAnswer = createPageAnswerPlanner(sources, facts, matching.company, postingEmployer);
   const fact = (id: string) => facts.find(f => f.factId === id)?.value;
   const known = new Map<string,string>();
   const cookieDialog=page.getByRole('dialog',{name:'Cookie Consent',exact:true});
@@ -94,6 +116,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
       if (pendingPreview && pendingPreview.documentKey !== pageObservation.documentKey) throw pendingPreview.error;
       progress('Filling application');
       const fields = (await inspectHostedFields(page)).sort((a,b)=>Number(b.kind==='file')-Number(a.kind==='file'));
+      if (target.ats === 'ashby') await preserveAshbyChoices(page, fields);
       if (!resumeExpected && await hasHostedResume(page, fields)) {
         input.onResumeObserved?.();
         resumeExpected = true;
@@ -125,10 +148,10 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           options:f.options,required:f.required,outcome:'observed',constraints:{inputType:f.inputType,
             min:f.min,max:f.max,step:f.step,minLength:f.minLength,maxLength:f.maxLength,pattern:f.pattern,readOnly:f.readOnly}};
         matching.record(matchObservation);
-        if (!isRecruitmentTermsConsent(f.label) && (/\b(?:consent|terms and conditions|terms of use|privacy policy|privacy notice)\b|^terms$|\bI confirm that I have read and understood\b/i.test(f.label) || f.options.some(option=>/\b(?:consent|authorize|agree)\b/i.test(option)))) {
+        if (protectedQuestionCategory(f.label, undefined, f.options) === 'consent' && !isRecruitmentTermsConsent(f.label)) {
           const answered = f.kind==='checkbox' ? f.checked : !!f.value.trim();
           if(answered || !f.required){known.set(identity,answered?'existing':'optional');continue;}
-          if(sources.executionPolicy.answerFallbackPolicy!=='deterministic_site_valid_editable')throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');
+          throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');
         }
         if (!f.required) { known.set(identity,'optional'); continue; }
         if (f.buttonConflict) throw new ApplicationPause('The employer shows an inconsistent choice. Inspect it before retrying.');
@@ -149,21 +172,36 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           changed = true;
           break;
         }
+        if (f.valid && f.value && (f.kind === 'combobox' || f.kind === 'location' && await loc.evaluate(e =>
+          location.hostname === 'jobs.lever.co' && e.matches('#location-input.location-input[name=location]')))) {
+          matching.record({...matchObservation, observedAnswer:f.value, provisional:true, outcome:'unconfirmed', reason:'existing_selection_preserved'});
+          known.set(identity, `existing:${f.value}`);
+          continue;
+        }
         if (f.kind === 'location' || f.kind === 'combobox' && (/location.*city|^(?:current )?location$/i.test(f.label) || await loc.evaluate(e=>e.closest('[data-field-path="_systemfield_location"]')!==null))) {
           const city = fact('city');
           if (typeof city !== 'string') throw new ApplicationPause('Add your location to the profile.');
           let searchText = city;
-          await loc.fill('');if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city);
+          const leverSearch = target.host === 'jobs.lever.co' && await loc.evaluate(e => e.matches('#location-input.location-input[name=location]'));
+          const leverReady = !leverSearch || await searchLeverLocation(loc, city);
+          if (!leverSearch) { await loc.fill(''); if(target.ats==='lever')await loc.pressSequentially(city,{delay:30});else await loc.fill(city); }
           const choiceOwner = await loc.getAttribute('aria-controls');
-          const choices = f.kind === 'location' ? page.locator('.dropdown-results .dropdown-location:visible')
+          const choices = leverSearch ? loc.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " application-field ")][1]').locator('.dropdown-results > div.dropdown-location:visible:not(:has(button,a[href],input,select,textarea))')
+            : f.kind === 'location' ? page.locator('.dropdown-results .dropdown-location:visible')
             : choiceOwner ? page.locator(`[id=${JSON.stringify(choiceOwner)}] [role=option]:visible`)
             : page.locator('[role=listbox]:visible [role=option]:visible');
-          try { await choices.first().waitFor({state:'visible',timeout:10000}); }
+          try {
+            if (!leverReady) throw new ApplicationPause('The employer did not return fresh location suggestions.');
+            await choices.first().waitFor({state:'visible',timeout:10000});
+          }
           catch {
             const qualified=[city,fact('region'),fact('country')].filter(value=>typeof value==='string'&&value.trim()).join(', ');
             if(qualified===city)throw new ApplicationPause('The employer did not return location suggestions. Choose your location on the employer page, then retry.');
             searchText = qualified;
-            await loc.fill('');await loc.pressSequentially(qualified,{delay:30});
+            if (leverSearch) {
+              if (!await searchLeverLocation(loc, qualified)) throw new ApplicationPause('The employer did not return fresh location suggestions.');
+            }
+            else { await loc.fill('');await loc.pressSequentially(qualified,{delay:30}); }
             try { await choices.first().waitFor({state:'visible',timeout:10000}); }
             catch { throw new ApplicationPause('The employer did not return location suggestions. Choose your location on the employer page, then retry.'); }
           }
@@ -224,7 +262,10 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
               if (placement === 'changed') throw new ApplicationPause('The location menu changed. Inspect the selected location before retrying.');
               if (placement === 'blocked') throw new Error('Another element intercepts pointer events on the location choice.');
               assertTarget();
-              await target.click({timeout:3000});
+              if (leverSearch) {
+                if (exact < 0 || await loc.inputValue() !== searchText || await choice.count() !== 1) throw new ApplicationPause('The location choice changed.');
+                await choice.click({timeout:10000});
+              } else await target.click({timeout:3000});
             } finally { await target.dispose(); }
           }
           catch(error) {
@@ -247,14 +288,10 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
             await (await ownedChoice()).click({timeout:3000});
           }
           await loc.blur();
+          if (target.ats === 'ashby') await verifyAshbyAutocomplete(loc, expected);
           if((await inspectHostedFields(page)).find(x=>x.key===f.key)?.value!==expected)throw new ApplicationPause('The location selection did not persist.');
           if(f.kind==='location' && !await page.locator('#selected-location').inputValue())throw new ApplicationPause('Location backing value is missing.');
           known.set(identity,expected);changed=true;continue;
-        }
-        if (f.kind === 'combobox' && f.value && f.valid &&
-            await loc.evaluate(e=>!!e.closest('.select__control')?.querySelector('[class*=single-value],.select__multi-value__label'))) {
-          matching.record({...matchObservation,observedAnswer:f.value,provisional:true,outcome:'unconfirmed',reason:'existing_selection_preserved'});
-          known.set(identity,`existing:${f.value}`); continue;
         }
         let options = f.options;
         let popup: ReturnType<Page['locator']> | undefined;
@@ -300,6 +337,13 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         }
         pendingMatch = {...matchObservation, options, chosenAnswer: expected, provisional: plan.provisional,
           outcome: 'attempted', reason: plan.reason};
+        const salary = f.kind === 'text' && expected === fact('salary_expectations') ? expected : undefined;
+        if (f.valid && displaysSavedSalary(f.label, f.value, salary)) {
+          matching.record({...pendingMatch, observedAnswer:f.value, provisional:true, outcome:'unconfirmed', reason:'salary_units_need_review'});
+          pendingMatch=undefined;
+          known.set(identity, `existing:${f.value}`);
+          continue;
+        }
         if (f.valid && ((f.kind === 'checkbox' && f.checked === expected) ||
           (f.kind !== 'checkbox' && f.kind !== 'combobox' && f.value === expected))) {
           matching.record({...pendingMatch,outcome:'verified',reason:'existing_value_confirmed'});pendingMatch=undefined;
@@ -313,17 +357,32 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         else if(f.kind==='multicheck'){const index=options.indexOf(String(expected));if(index<0)throw new ApplicationPause('Checkbox group answer is missing.');const boxes=loc.locator('input[type=checkbox]');const box=boxes.nth(index);if(await box.getAttribute('aria-hidden')==='true')await box.locator('xpath=ancestor::*[@role="checkbox"][1]').click();else await box.setChecked(true);if(!await box.evaluate((e:HTMLInputElement)=>e.closest('[role=checkbox]')?e.closest('[role=checkbox]')!.getAttribute('aria-checked')==='true':e.checked))throw new ApplicationPause('Checkbox group answer did not persist.');}
         else if(f.kind==='buttons') { await loc.getByRole('button',{name:String(expected),exact:true}).click(); if((await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label)?.value!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
         else if(f.kind==='select') { await loc.selectOption({label:String(expected)}); if(await loc.locator('option:checked').textContent()!==expected)throw new ApplicationPause('The selected answer did not persist.'); }
-        else if(f.kind==='combobox') { const choice=popup!.filter({hasText:new RegExp('^'+String(expected).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$')});if(await choice.count()!==1)throw new ApplicationPause('Dropdown choice is ambiguous.');await choice.click();await loc.blur();const after=(await inspectHostedFields(page)).find(x=>x.key===f.key);if(after?.value!==expected){await loc.click();const selected=popup!.locator('xpath=self::*[@aria-selected="true"]');if(await selected.count()!==1||(await selected.innerText()).trim()!==expected)throw new ApplicationPause('The selected dropdown answer could not be verified.');await loc.press('Escape');await loc.blur();} }
+        else if(f.kind==='combobox') { const choice=popup!.filter({hasText:new RegExp('^'+String(expected).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$')});if(await choice.count()!==1)throw new ApplicationPause('Dropdown choice is ambiguous.');await choice.click();await loc.blur();if(target.ats==='ashby')await verifyAshbyAutocomplete(loc,String(expected));const after=(await inspectHostedFields(page)).find(x=>x.key===f.key);if(after?.value!==expected){await loc.click();const selected=popup!.locator('xpath=self::*[@aria-selected="true"]');if(await selected.count()!==1||(await selected.innerText()).trim()!==expected)throw new ApplicationPause('The selected dropdown answer could not be verified.');await loc.press('Escape');await loc.blur();} }
         else if(f.kind==='checkbox') { await loc.setChecked(expected===true);if(await loc.isChecked()!==(expected===true))throw new ApplicationPause('The checkbox answer did not persist.'); }
         else if(f.kind==='date' && f.inputType==='date') {await loc.fill(String(expected));await loc.blur();if(await loc.inputValue()!==expected)throw new ApplicationPause('The selected date did not persist.');}
         else if(f.kind==='date') {const [year,month,day]=String(expected).split('-');const display=`${month}/${day}/${year}`;await loc.fill('');await loc.pressSequentially(`${month}${day}${year}`);await loc.blur();if(await loc.inputValue()!==display)throw new ApplicationPause('The selected date did not persist.');}
-        else {await loc.fill(String(expected));await loc.blur();const readback=await loc.inputValue();const same=readback===String(expected)||(/phone/i.test(f.label)&&readback.replace(/\D/g,'')===String(expected).replace(/\D/g,''));if(!same)throw new ApplicationPause('The text answer did not persist.');}
+        else {
+          await loc.fill(String(expected));
+          await loc.blur();
+          const readback = await loc.inputValue();
+          if (displaysSavedSalary(f.label, readback, salary)) {
+            const current = (await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label && field.kind===f.kind);
+            if (!current?.valid || current.value!==readback) throw new ApplicationPause('The salary amount did not persist.');
+            matching.record({...pendingMatch, observedAnswer:readback, provisional:true, outcome:'unconfirmed', reason:'salary_units_need_review'});
+            pendingMatch=undefined;
+            known.set(identity,`existing:${readback}`);
+            changed=true;
+            continue;
+          }
+          const same = readback===String(expected) || (/phone/i.test(f.label) && readback.replace(/\D/g,'')===String(expected).replace(/\D/g,''));
+          if (!same) throw new ApplicationPause('The text answer did not persist.');
+        }
         const committed=(await inspectHostedFields(page)).find(x=>x.key===f.key&&x.label===f.label);
         matching.record({...pendingMatch,outcome:'verified',reason:'product_readback_confirmed'});pendingMatch=undefined;
         known.set(identity,String(f.kind==='checkbox'?committed?.checked:committed?.value??expected)); changed = true;
       }
       if (!changed && pendingPreview) throw pendingPreview.error;
-      if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
+      if (!changed) {assertTarget();progress('Verifying application');const snapshot=await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview);const digest=snapshot.digest;await page.waitForTimeout(500);assertTarget();if((await hostedReviewSnapshot(page,resumeSha256,resumeExpected,resumeUpload,workableReview)).digest!==digest)continue;return {reviewDigest:digest,resumeExpected:snapshot.resumeExpected,completedPages:1,needsOwnerReview:matching.needsReview||history.some(answer=>answer.lane==='synthetic_test_default')||[...known.values()].some(value=>['optional','unanswered','existing'].includes(value)||value.startsWith('existing:'))};}
       await page.waitForTimeout(300);
     }
     throw new ApplicationPause('The form kept changing. Inspect the remaining fields.');

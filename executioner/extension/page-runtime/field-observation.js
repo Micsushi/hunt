@@ -31,14 +31,19 @@ export function createFieldObserver({
       e.type==='checkbox'?'checkbox':e.tagName==='SELECT'?'select':e.tagName==='TEXTAREA'?'textarea':e.type==='date'?'date':'text';
     const menuId=e.getAttribute('aria-controls');
     const menus=menuId?deepQuery(e.getRootNode(),`[id="${CSS.escape(menuId)}"]`):[];
-    const options=buttonChoice?buttonChoice.options:searchChoice?[...new Set([...searchChoice.labels,...(searchChoice.popupStatus==='ready'?searchChoice.options.filter(option=>!option.disabled).map(option=>option.label):cachedOptions)])]:fabric ? state.fabricOptions?.get(e)??[] : choice?choice.options:control==='select'?[...e.options].filter(o=>!o.disabled && o.value).map(o=>o.textContent.trim()):
+    // Some forms give their first placeholder a nonempty machine value.
+    const noSelection=o=>!e.multiple && o.index===0 && /(?:^|[_-])no[_-]selection$/i.test(o.value) &&
+      /^-+\s*no answer\s*-+$/i.test(o.label.trim());
+    const availableOption=o=>o.value && !noSelection(o) && (e.multiple ? !o.matches(':disabled') && !o.closest('[hidden]') : !o.disabled);
+    const optionLabel=o=>(e.multiple ? o.label : o.textContent).trim();
+    const options=buttonChoice?buttonChoice.options:searchChoice?[...new Set([...searchChoice.labels,...(searchChoice.popupStatus==='ready'?searchChoice.options.filter(option=>!option.disabled).map(option=>option.label):cachedOptions)])]:fabric ? state.fabricOptions?.get(e)??[] : choice?choice.options:control==='select'?[...e.options].filter(availableOption).map(optionLabel):
       group?radios.map(labelFor):control==='listbox' && menus.length===1?[...menus[0].querySelectorAll('[role=option]')].filter(o=>o.getAttribute('aria-disabled')!=='true').map(o=>o.textContent.trim()):[];
-    const selected=province ? (provinceValue(e) === 'Province –Select–' ? '' : provinceValue(e).slice(9)) : buttonChoice?buttonChoice.selected:searchChoice?searchChoice.labels.join('; '):fabric ? fabricRead?JSON.parse(fabricRead).label:'' : control==='select'?[...e.selectedOptions].filter(o=>!o.disabled && o.value).map(o=>o.textContent.trim()).join('; '):
+    const selected=province ? (provinceValue(e) === 'Province –Select–' ? '' : provinceValue(e).slice(9)) : buttonChoice?buttonChoice.selected:searchChoice?searchChoice.labels.join('; '):fabric ? fabricRead?JSON.parse(fabricRead).label:'' : control==='select'?[...e.selectedOptions].filter(availableOption).map(optionLabel).join('; '):
       group?radios.filter(o=>o.checked).map(labelFor).join('; '):control==='checkbox'?e.checked:
       control==='listbox'?choice?.selected??e.closest('.select__control')?.querySelector('[class*=single-value]')?.textContent?.trim()??'':e.value;
     const number = name => e.getAttribute(name) && Number.isFinite(Number(e.getAttribute(name))) ? Number(e.getAttribute(name)) : null;
     const phone = phoneWidget(e);
-    const widgetType = province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
+    const widgetType = searchChoice?.kind==='rippling_location' ? {widget:'rippling-location'} : e.type === 'select-multiple' ? {widget:'native-multiple'} : province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
       ? {widget:'international-phone', backing:phone ? phoneState(phone) : null} : {};
     const form = e.hasAttribute('form') ? e.form : e.form ?? composedClosest(e,'form,[role=form]');
     if (form && !state.matchingIds.has(form)) state.matchingIds.set(form,crypto.randomUUID());

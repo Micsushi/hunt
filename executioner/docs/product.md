@@ -48,7 +48,12 @@ returns the approved question-to-fact mappings and answer groups. Review the bac
 after a batch, then approve changes separately. C3.2 observes the selected document,
 asks the service to resolve those exact controls, commits supported answers, and
 reads their resulting state. Newly revealed fields receive another bounded pass.
-One Undo reverses that fill across its passes and preserves later user edits.
+**Undo fill** reverses supported edits made by **Fill current page** across its fill
+passes. It preserves later edits. **Prepare this job** uses a separate workflow.
+To revise a screening answer filled during queued preparation, change it on the
+employer page. For a SmartRecruiters list choice, use the employer's **Clear value**
+control when it is available. A Yes/No question with no clear action stays answered
+until you choose a different answer.
 The popup reports when suggested answers or uncertain matches need review.
 
 Update the local service and reload the existing extension together. The service
@@ -167,9 +172,13 @@ retains its separate selected-file and completion checks.
 
 Workday tries Create Account when employer-account history is unknown, using the
 saved credentials and checking the confirmation password before its single click.
-An explicit account-exists response switches to Sign In. Confirmed account access
+An explicit account-exists response switches to Sign In, including a verified
+notice already visible on the selected posting when a run resumes. Confirmed account access
 is remembered per employer and email; uncertain registration prevents duplicate
-creation on retry. Verification uses the saved mailbox connection when available.
+creation on retry. For an observed verification request after registration, C3
+uses the saved mailbox connection when available. If the employer requests
+sign-in again after C3 has already tried it and opened the verification link,
+C3 pauses for the owner to check the account.
 CAPTCHA, password resets and unconfirmed outcomes remain visible stops.
 
 Draft filling uses saved details first, then reviewable defaults for unsupported
@@ -203,7 +212,21 @@ draft whose field disappeared before it was observed.
 
 Workable resume confirmation reads the PDF from the upload control's own preview
 and compares its bytes with the selected PDF. A matching existing preview can be
-verified without uploading again. An unconfirmed attempt is preserved for inspection.
+verified without uploading again. If Workable is still processing a selected file,
+C3 waits for its preview. The failure details distinguish a pending upload, an
+unavailable preview and a file that differs from the selected PDF.
+
+On a recognized two-step Jobvite form, **Prepare this job** adds the selected application
+to Applications with the saved default résumé. Choose **Run** there. Once Jobvite
+acknowledges the selected file and the first step is valid, C3 clicks **Next**.
+If Jobvite requests more information in a collapsed form, C3 can open **View Full
+Application Form**, recheck the newly visible required fields and retry **Next** once.
+C3 fills the screening step and stops before submission. Use the existing queue entry
+for a job imported from C1 to preserve its selected résumé.
+
+**Fill current page** stays on the current Jobvite step. To continue manually, choose
+**Next** on the employer form and then **Fill current page** again. A displayed filename
+still needs your review when Jobvite does not expose the uploaded bytes.
 
 Workday summary Review checks repeated education and employment answers within
 their own rows. Finding the right words elsewhere on the page is not sufficient.
@@ -405,8 +428,8 @@ successfully before C3 can click the employer's Submit button.
 
 For a confirmed Workday site error, C3 makes bounded reload attempts, then reopens
 that same posting once while retaining the saved draft. Persistent site errors
-still pause. Rejected sign-in for an existing account can use the configured
-email connection for one password-reset attempt.
+still pause. Rejected sign-in pauses the job for the owner to check the saved
+credentials. If the employer requires a password reset, the owner completes it.
 
 C3 recognizes Workday's Take Assessment step and tries its normal Save and
 Continue action. If Workday requires the assessment, C3 preserves the draft and
@@ -558,7 +581,10 @@ manager frames. Reload the extension after updating it.
 The selected job, tab and document are checked before credential writes. Both fields
 are verified again before a single Sign In click. A lost response, changed form,
 security challenge or rejected sign-in pauses the draft rather than repeating account
-access. Account creation, password recovery and email verification remain manual.
+access. For a new account, C3 can create it and check the configured mailbox for
+employer verification. Password recovery requires the owner. If Workday opens
+the application and Chrome then protects another extension on that tab, C3
+reports the browser connection problem and preserves the draft.
 Application filling still stops for review before submission. Compatibility with a
 particular password manager requires a live check; fixture coverage alone is not proof.
 

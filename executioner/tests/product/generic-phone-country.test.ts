@@ -10,6 +10,101 @@ const facts = [
   { factId: 'country', value: 'Canada' },
   { factId: 'phone_number', value: '6135550100' },
 ];
+
+test('a native phone field can reformat the planned number without losing the entry', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route(url, route => route.fulfill({ contentType: 'text/html', body:
+      '<main><h1>Job application</h1><form><label for="first">First Name</label><input id="first" required><label for="email">Email</label><input id="email" type=email required>' +
+      '<label for="phone">Phone number</label><input id="phone" type=tel required><label>Resume<input type=file></label></form></main>' }));
+    for (const outcome of ['format', 'different-digit', 'invalid']) {
+      await page.goto(url);
+      await page.locator('[type=tel]').evaluate((field: HTMLInputElement, outcome) => {
+        field.addEventListener('input', () => {
+          if (!field.value) { field.setCustomValidity(''); return; }
+          field.value = outcome === 'different-digit' ? '613 555 0199' : '613 555 0100';
+          if (outcome === 'invalid') field.setCustomValidity('Rejected');
+        });
+      }, outcome);
+      const inspection = await page.evaluate(fillVisibleFields, { facts, action: 'status' as const });
+      const row = inspection.matching?.find(field => field.question === 'Phone number');
+      assert.ok(row, JSON.stringify(inspection.matching?.map(field => field.question)));
+      const result = await page.evaluate(fillVisibleFields, { facts, matchingPlans: [{
+        fieldId: row.fieldId, signature: row.signature, provisional: false, reason: 'test_fact', answer: '(613) 555-0100',
+      }] });
+      const field = page.locator('[type=tel]');
+      assert.equal(result.filled.includes('Phone number'), outcome === 'format');
+      assert.equal(await field.inputValue(), outcome === 'format' ? '613 555 0100' : '');
+      if (outcome === 'format') {
+        await page.evaluate(fillVisibleFields, { action: 'undo' as const });
+        assert.equal(await field.inputValue(), '');
+        await page.evaluate(fillVisibleFields, { action: 'redo' as const });
+        assert.equal(await field.inputValue(), '613 555 0100');
+      }
+    }
+  } finally { await browser.close(); }
+});
+test('the SmartRecruiters phone validates on blur and preserves focus in another field', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const app = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
+    await page.route(app, route => route.fulfill({ contentType: 'text/html', body:
+      '<main><oc-oneclick-form><h2>Personal information</h2><label>First name<input id="first"></label><label>Email<input type=email></label>' +
+      '<spl-phone-field></spl-phone-field><oc-resume-upload><spl-dropzone data-test=resume-upload><label>Resume<input type=file></label></spl-dropzone></oc-resume-upload></oc-oneclick-form></main>' }));
+    for (const scenario of ['ordinary', 'focused elsewhere', 'deadline expires']) {
+      const focusedElsewhere = scenario === 'focused elsewhere';
+      await page.goto(app);
+      await page.evaluate(() => {
+        const root = document.querySelector('spl-phone-field')!.attachShadow({ mode: 'open' });
+        root.innerHTML = '<input required type=tel aria-label="Phone number" aria-invalid=true>';
+        const phone = root.querySelector('input')!;
+        let original = '';
+        phone.onfocus = () => { original = phone.value; };
+        phone.onblur = () => {
+          if (phone.value !== original) {
+            const value = phone.value;
+            setTimeout(() => {
+              if (phone.value === value) phone.setAttribute('aria-invalid', String(!value));
+            }, 165);
+          }
+        };
+      });
+      if (focusedElsewhere) await page.locator('#first').focus();
+      const status = await page.evaluate(fillVisibleFields, { facts, action: 'status' as const });
+      const phone = status.matching?.find(field => field.question === 'Phone number');
+      assert.ok(phone);
+      const plan = { fieldId: phone.fieldId, signature: phone.signature, provisional: false, reason: 'test_fact', answer: '6135550100' };
+      if (scenario === 'deadline expires') {
+        const expiresAt = await page.locator('input[type=tel]').evaluate(el => {
+          const deadline = Date.now() + 60000;
+          el.addEventListener('input', () => { Date.now = () => deadline + 1; }, {once:true});
+          return deadline;
+        });
+        await assert.rejects(page.evaluate(fillVisibleFields, { facts, expiresAt, matchingPlans: [plan] }), /expired/);
+        assert.equal(await page.locator('input[type=tel]').inputValue(), plan.answer);
+        await page.evaluate(fillVisibleFields, { action: 'undo' as const });
+        assert.equal(await page.locator('input[type=tel]').inputValue(), '');
+        continue;
+      }
+      const result = await page.evaluate(fillVisibleFields, { facts, matchingPlans: [plan] });
+      assert.equal(result.filled.includes('Phone number'), !focusedElsewhere, JSON.stringify(result.skipped));
+      const field = page.locator('input[type=tel]');
+      if (focusedElsewhere) {
+        assert.equal(await page.locator('#first').evaluate(el => el === document.activeElement), true);
+        assert.equal(await field.inputValue(), '');
+      } else {
+        assert.equal(await field.getAttribute('aria-invalid'), 'false');
+        await page.evaluate(fillVisibleFields, { action: 'undo' as const });
+        assert.equal(await field.inputValue(), '');
+        await page.waitForFunction(() => document.querySelector('spl-phone-field')?.shadowRoot?.querySelector('input')?.getAttribute('aria-invalid') === 'true');
+        await page.evaluate(fillVisibleFields, { action: 'redo' as const });
+        await page.waitForFunction(() => document.querySelector('spl-phone-field')?.shadowRoot?.querySelector('input')?.getAttribute('aria-invalid') === 'false');
+      }
+    }
+  } finally { await browser.close(); }
+});
 const widget = (options = '', phone = '') => `<!doctype html>
 <form>
   <label>First Name<input name="first"></label>

@@ -1,7 +1,8 @@
 import { boundedText, browserTargetToken, fieldId, optionId, MAX_BROWSER_READBACK_CODE_POINTS } from '../contracts/index.ts';
 import { createApplicationAnswerResolver } from '../form/answers/resolver.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
-import { inspectQuestionMatch } from '../form/questions/catalog.ts';
+import { inspectQuestionMatch, resolveQuestion } from '../form/questions/catalog.ts';
+import { contractApprovedPrivacyChoices, isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import { normalizeCatalogText } from '../form/questions/normalize.ts';
 import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equivalence.ts';
 import { canonicalCanadianRegion } from '../composition/private/s2-derived-profile-country.ts';
@@ -25,7 +26,7 @@ function provinceResidenceAnswer(question: string, canadianRegion: string | unde
 }
 
 export interface PageQuestion extends MatchingObservation {
-  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
+  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple' | 'rippling-location'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
 type PeerQuestion = Pick<PageQuestion, 'question' | 'selected' | 'frameId' | 'formId'>;
 export interface PageAnswerPlan {
@@ -53,7 +54,9 @@ export function createPageAnswerPlanner(
   sources: ReturnType<typeof productSources>,
   facts: ReturnType<typeof effectiveProfileFacts>,
   company: string | null,
+  postingEmployer?: string,
 ) {
+  const employerNames = [company, postingEmployer].filter((name): name is string => !!name);
   const narrative = facts.find(fact => fact.factId === 'configured_narrative')?.value;
   const resolver = createApplicationAnswerResolver(sources.profileQuery, typeof narrative === 'string' ? narrative : undefined);
   const ownerFact = (id: string) => facts.find(f=>f.factId===id&&f.provenance==='owner_provided'&&f.lane==='live_owner_fact')?.value;
@@ -90,7 +93,13 @@ export function createPageAnswerPlanner(
     const longQuestion = isLong(row.question);
     const longOptions = row.options.some(isLong);
     const unbounded = longQuestion || longOptions;
-    if (!unbounded && row.widget === 'province-menu') {
+    const consent = protectedQuestionCategory(row.question, undefined, row.options) === "consent";
+    // Compare an already checked declaration to the owner's decision. The browser preserves a conflict.
+    if (row.control==='checkbox' && row.selected===true && row.valid && consent && isRecruitmentTermsConsent(row.question,employerNames)) {
+      const saved=ownerFact('terms_consent');
+      if (typeof saved==='boolean') return {...binding,answer:saved,provisional:false,reason:'owner_consent_readback',lane:'live_owner_fact'};
+    }
+    if (!unbounded && !consent && row.widget === 'province-menu') {
       const country = facts.find(fact => fact.factId === 'country')?.value;
       const region = facts.find(fact => fact.factId === 'region')?.value;
       const applicable = typeof country === 'string' && normalizeCatalogText(country) === 'canada' &&
@@ -98,7 +107,7 @@ export function createPageAnswerPlanner(
       return {...binding, answer: applicable ? region : null, provisional: !applicable,
         reason: applicable ? 'profile_answer' : 'province_requires_review'};
     }
-    if (!unbounded && row.widget === 'international-phone') {
+    if (!unbounded && !consent && row.widget === 'international-phone') {
       const savedPhoneCountry = facts.find(fact => fact.factId === 'phone_country_code')?.value;
       const residence = facts.find(fact => fact.factId === 'country')?.value;
       const numericDial = typeof savedPhoneCountry === 'string' && /^\+\d{1,3}$/.test(savedPhoneCountry.trim()) ? savedPhoneCountry.trim().slice(1) : undefined;
@@ -113,7 +122,10 @@ export function createPageAnswerPlanner(
       return {...binding, answer: number, phoneCountry: country, ...(numericDial && {phoneDial: numericDial}), provisional: inferred,
         reason: inferred ? 'phone_country_inferred_from_residence' : 'answer_resolved'};
     }
-    const questionFact=inspectQuestionMatch(row.question, company ? [company] : []).factId;
+    const questionFact=inspectQuestionMatch(row.question, employerNames).factId;
+    // A committed screening radio needs the expected answer for comparison. The browser preserves the selection.
+    const compareBackgroundCheck = state === 'populated' && row.valid && row.control === 'radio' &&
+      consent && questionFact === 'background_check_willing';
     let addressCountryConflict=false;
     if (questionFact==='postal_code' && row.formId) {
       const savedCountry=facts.find(fact=>fact.factId==='country')?.value;
@@ -131,13 +143,13 @@ export function createPageAnswerPlanner(
       behavior:row.control as ApplicationFieldObservation['behavior'],required:row.required,
       options:row.options.map((label,index)=>({id:optionId(String(index)),label:boundedText(isLong(label) ? `Unclassified option ${index}` : label)})),
       ...(longOptions && {rawOptions:row.options}), constraints, readOnly:constraints?.readOnly,
-      queryable:row.queryable,searchQuery:row.searchQuery,state, populatedValueValid:row.valid};
+      queryable:row.queryable,searchQuery:row.searchQuery,state:compareBackgroundCheck ? 'empty' : state, populatedValueValid:row.valid};
     const resolution=await resolver.resolve({field,mode:sources.profilePlan.mode,
       answerFallbackPolicy:sources.executionPolicy.answerFallbackPolicy,profileId:sources.profileId,profileRevision:sources.profileRevision,
       resume:{resumeId:sources.resumeIntent.artifact.resumeId,sha256:sources.resumeIntent.artifact.sha256},resumeArtifact:sources.resumeIntent.artifact,
-      employerNames:company ? [company] : []},signal);
+      employerNames:employerNames},signal);
     const resolved=resolution.ok&&resolution.value.kind==='resolved'?resolution.value:undefined;
-    if (unbounded) {
+    if (unbounded || consent) {
       const intent = resolved?.intent;
       const answer = intent?.kind === 'choice'
         ? row.options[field.options.findIndex(option => option.id === intent.optionId)] ?? null
@@ -158,8 +170,12 @@ export function createPageAnswerPlanner(
     const binaryChoices = binary && row.widget !== 'multi-checkbox' && ['radio', 'select', 'listbox'].includes(row.control)
       ? row.options.filter(option => option.toLowerCase() === binary) : [];
     const city = facts.find(fact => fact.factId === 'city')?.value;
-    const locationIndex = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox' &&
-      typeof city === 'string'
+    const locationChoice = (questionFact === 'current_location' || questionFact === 'city') && row.control === 'listbox';
+    if (locationChoice && row.queryable && !populated && (!row.searchQuery || row.widget==='rippling-location' && row.searchQuery===city) && !row.options.length &&
+        typeof city === 'string' && city.trim() && [...city].length <= MAX_BROWSER_READBACK_CODE_POINTS) {
+      return {...binding, answer:null, query:city, provisional:false, reason:'choice_options_query', lane:'profile_fact'};
+    }
+    const locationIndex = locationChoice && typeof city === 'string'
       ? matchLocationOption(row.options, city, facts.find(fact => fact.factId === 'region')?.value,
           facts.find(fact => fact.factId === 'country')?.value)
       : -1;
@@ -185,7 +201,19 @@ export function createPageAnswerPlanner(
 
   return async (row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal) => {
     try {
-      return await planAnswer(row, observations, signal);
+      const plan = await planAnswer(row, observations, signal);
+      if (plan.reason === 'protected_answer_denied') return plan;
+      if (row.widget === 'native-multiple' && row.required && !row.selected && plan.provisional && typeof plan.answer === 'string') {
+        const question = resolveQuestion(row.question, employerNames);
+        const sensitive = protectedQuestionCategory(row.question, question.kind === 'resolved' ? question.id : undefined) ||
+          /\b(?:nationalit(?:y|ies)|citizenships?|ethnic(?:ity|ities)?|medical|diagnos(?:is|es)|disabilit(?:y|ies)|disabled|religio(?:n|ns|us)|faith|pronouns?|gender|orientation|ancestry|racial)\b/u.test(normalizeCatalogText(row.question));
+        const neutral = row.options.filter(option => contractApprovedPrivacyChoices.some(
+          choice => normalizeCatalogText(option) === normalizeCatalogText(choice)));
+        if (!sensitive && !neutral.length) return plan;
+        return {...plan, answer: neutral.length === 1 ? neutral[0]! : null,
+          reason: neutral.length === 1 ? 'neutral_disclosure' : 'multiple_choice_requires_owner_answer'};
+      }
+      return plan;
     } catch (error) {
       if (!signal.aborted) recordComponentFailure(error, 'answer_matching', 'plan_answer');
       throw error;

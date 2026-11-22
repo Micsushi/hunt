@@ -1,9 +1,9 @@
 import type { Locator, Page } from 'playwright';
-import { ApplicationPause, type ResumeUploadReceipt } from '../application-contract.ts';
+import { ApplicationPause, type ResumeUploadReceipt, type WorkableReviewAttempt } from '../application-contract.ts';
 import { recordComponentFailure } from '../component-diagnostics.ts';
 import { selectClientResume, verifiedClientResume } from '../client-resume.ts';
 import { uploadGreenhouseResume, verifiedGreenhouseResume } from '../greenhouse-resume.ts';
-import { uploadWorkableResume, verifiedWorkableResume, unverifiedWorkablePreview } from '../workable-resume.ts';
+import { uploadWorkableResume, verifiedWorkableResume, unverifiedWorkablePreview, recheckWorkablePreview } from '../workable-resume.ts';
 import { applicationTarget } from '../target.ts';
 
 interface UploadField {
@@ -64,19 +64,21 @@ export async function prepareHostedResume(
 /** Re-read the current attachment on review or retry; a stale filename alone is insufficient. */
 export async function verifyHostedAttachments(
   page: Page, fields: UploadField[], expected: boolean | undefined,
-  receipt: ResumeUploadReceipt | undefined, expectedSha256?: string,
+  receipt: ResumeUploadReceipt | undefined, expectedSha256?: string, review?: WorkableReviewAttempt,
 ) {
   try {
     if (await page.getByText(/Resume(?:-[a-f0-9]{12})?\.pdf failed to upload/i).count()) {
       throw new ApplicationPause('The resume upload failed.');
     }
     const resumeExpected = expected || await hasGreenhouseAttachment(page);
-    const workableProof = await verifiedWorkableResume(page, receipt, expectedSha256);
+    let workableProof = await verifiedWorkableResume(page, receipt, expectedSha256);
     const fileFields = fields.filter(field => field.kind === 'file');
     if (!workableProof && applicationTarget(page.url()).ats === 'workable') {
       const requiredKeys = fileFields.filter(field => isResume(field) && field.required).map(field => field.key);
       if (await unverifiedWorkablePreview(page, requiredKeys, !!resumeExpected, expectedSha256 !== undefined)) {
-        throw new ApplicationPause('The employer resume preview has not been verified. Inspect the uploaded file before reviewing.');
+        await recheckWorkablePreview(page, receipt, expectedSha256, review);
+        workableProof = await verifiedWorkableResume(page, receipt, expectedSha256);
+        if (!workableProof) throw new ApplicationPause('The resume changed after its preview was checked. Inspect the draft before reviewing.');
       }
     }
     const filledKeys = new Set(fileFields.filter(field => field.files > 0).map(field => field.key));

@@ -177,7 +177,7 @@ export async function pageAction(params, attached) {
         });
         if (response.exceptionDetails || !response.result?.value) throw new Error('The page action failed. Inspect the draft before retrying.');
         results.push({frameId:frame.id,status:'complete',...response.result.value});
-        if(frame.id===root.id && response.result.value.componentFailure?.component==='page_state')break;
+        if(frame.id===root.id && (response.result.value.frameScope==='document' || response.result.value.componentFailure?.component==='page_state'))break;
       } catch (error) {
         results.push({frameId:frame.id,status:'unavailable',error:pageErrors.has(error.message) ? error.message : 'This frame could not complete the page action. Inspect the draft before retrying.'});
         if (frame.id === root.id) break;
@@ -188,7 +188,9 @@ export async function pageAction(params, attached) {
     const observation = completed.find(result=>result.frameId===root.id)?.observation;
     const componentFailure = completed.find(result => result.componentFailure)?.componentFailure;
     const resume = completed.find(result=>result.frameId === root.id)?.resume;
+    const firstStep = operation === 'inspect' && completed.some(result=>result.frameId===root.id && result.jobviteFirstStep===true);
     return {tabId,url:expectedUrl,documentId:binding,operation,...(observation?{observation}:{}),
+      ...(firstStep && root.loaderId ? {jobviteFirstStep:true,mainDocumentId:root.loaderId} : {}),
       ...(componentFailure ? {componentFailure} : {}),
       ...(['verified','missing','unverified','optional'].includes(resume) ? {resume} : {}),
       incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true),

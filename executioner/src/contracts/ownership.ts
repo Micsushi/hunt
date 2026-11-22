@@ -504,6 +504,7 @@ export const productBoundary = {
       "src/product/workday-sign-in.ts",
     ],
     page_state: [
+      "extension/page-adapters/jobvite-screening.js",
       "extension/page-adapters/document.js",
       "extension/form-page.js",
       "extension/workday-page.js",
@@ -511,6 +512,10 @@ export const productBoundary = {
     field_recognition: [
       "extension/page-adapters/jazz-address.js",
       "extension/page-adapters/required-markers.js",
+      "extension/page-adapters/rippling-location.js",
+      "extension/page-adapters/rippling-phone.js",
+      "extension/page-adapters/smartrecruiters-city.js",
+      "extension/page-adapters/smartrecruiters-screening.js",
       "extension/page-adapters/workday-choice.js",
       "extension/question-context.js",
       "extension/page-runtime/dom-reader.js",
@@ -537,6 +542,7 @@ export const productBoundary = {
       "extension/shared-choice-widget.js",
       "extension/page-runtime/control-interaction.js",
       "extension/page-runtime/fill.js",
+      "src/product/hosted-autocomplete.ts",
       "src/product/extension-bridge.ts",
     ],
     uploads: [
@@ -560,8 +566,11 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/application-wait.ts",
       "src/product/current-page-workflow.ts",
+      "src/product/smartrecruiters-workflow.ts",
+      "src/product/jobvite-workflow.ts",
       "src/product/engine.ts",
       "src/product/generic-application.ts",
+      "src/product/bamboo-application-entry.ts",
       "src/product/handoff.ts",
       "src/product/hosted-application.ts",
       "src/product/mcp.ts",
@@ -584,6 +593,7 @@ export const productBoundary = {
   },
   sourceImports: {
     "extension/page-runtime/serialize.js": [
+      "extension/page-adapters/jobvite-screening.js",
       "extension/page-adapters/upload-status.js",
       "extension/jobvite-resume.js",
       "extension/page-adapters/client-attachment.js",      "extension/form-page.js",
@@ -592,6 +602,10 @@ export const productBoundary = {
       "extension/page-adapters/fabric-control.js",
       "extension/page-adapters/jazz-address.js",
       "extension/page-adapters/required-markers.js",
+      "extension/page-adapters/rippling-location.js",
+      "extension/page-adapters/rippling-phone.js",
+      "extension/page-adapters/smartrecruiters-city.js",
+      "extension/page-adapters/smartrecruiters-screening.js",
       "extension/page-adapters/workday-choice.js",
       "extension/page-runtime/composite-control-actions.js",
       "extension/page-runtime/control-interaction.js",
@@ -705,6 +719,10 @@ export const productBoundary = {
       "src/product/application-contract.ts",
       "src/product/target.ts",
     ],
+    "src/product/jobvite-workflow.ts": ["src/product/page-matching.ts"],
+    "src/product/smartrecruiters-workflow.ts": [
+      "src/product/component-diagnostics.ts",
+    ],
     "src/product/current-page-workflow.ts": [
       "src/product/component-diagnostics.ts",
     ],
@@ -722,6 +740,7 @@ export const productBoundary = {
       "src/product/workday-sign-in.ts",
     ],
     "src/product/generic-application.ts": [
+      "src/product/bamboo-application-entry.ts",
       "extension/form-page.js",
       "extension/generic-fill.js",
       "extension/jobvite-resume.js",
@@ -737,7 +756,9 @@ export const productBoundary = {
       "src/product/target.ts",
     ],
     "src/product/hosted-field-observation.ts": ["src/product/application-contract.ts"],
+    "src/product/hosted-autocomplete.ts": ["src/product/application-contract.ts"],
     "src/product/hosted-application.ts": [
+      "src/product/hosted-autocomplete.ts",
       "extension/page-adapters/document.js",
       "extension/form-page.js",
       "src/product/hosted-field-observation.ts",
@@ -757,6 +778,7 @@ export const productBoundary = {
       "src/form/questions/normalize.ts",
     ],
     "src/product/page-answer-planner.ts": [
+      "src/form/questions/protected.ts",
       "src/product/component-diagnostics.ts",
       "src/composition/private/s2-derived-profile-country.ts",
       "src/form/answers/resolver.ts",

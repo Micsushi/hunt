@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium, type Page} from 'playwright';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {prepareCurrentPage} from '../../src/product/current-page-workflow.ts';
+import {applicantProfile} from '../../src/product/sources.ts';
 
 const selected=Buffer.from('%PDF-selected-private-fixture');
 const facts=[{factId:'given_name',value:'Fixture'},{factId:'email_address',value:'fixture@example.invalid'},
@@ -143,6 +145,102 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
     assert.deepEqual(await bytes(page,'#resume input[type=file]'),[...selected]);assert.deepEqual(await bytes(page,'#easy input[type=file]'),[]);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});assert.deepEqual(await bytes(page,'#resume input[type=file]'),[]);
     await page.evaluate(fillVisibleFields,{action:'redo' as const});assert.deepEqual(await bytes(page,'#resume input[type=file]'),[...selected]);
+    const app='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
+    await page.route(app,route=>route.fulfill({contentType:'text/html',body:'<main><oc-oneclick-form></oc-oneclick-form></main><label>First name<input id="outside"></label><label>Email<input id="outside-mail"></label>'}));
+    await page.goto(app);
+    const mount=()=>{
+      const host=document.querySelector('oc-oneclick-form')!;
+      host.innerHTML='<h2>Personal information</h2><oc-easy-apply><spl-dropzone id="parser"></spl-dropzone></oc-easy-apply><oc-resume-upload><div class="form-section" data-test="resume-upload-container"><spl-typography-title data-test="section-title">Resume <span data-test="section-required-mark">*</span></spl-typography-title><spl-form-field><spl-dropzone id="bound" data-test="resume-upload"></spl-dropzone></spl-form-field></div></oc-resume-upload><label>Profile image<input id="photo" type="file"></label><button type="button">Next</button>';
+      for(const [id,label,autofill] of [['first-name-input','First name','given-name'],['last-name-input','Last name','family-name'],['email-input','Email','email'],['confirm-email-input','Confirm your email','email']]){
+        const input=document.createElement('spl-input');input.id=id!;host.prepend(input);
+        input.attachShadow({mode:'open'}).innerHTML='<label for="'+id+'">'+label+'*</label><input required id="'+id+'" autocomplete="'+autofill+'">';
+      }
+      for(const id of ['parser','bound']) document.getElementById(id)!.attachShadow({mode:'open'}).innerHTML='<label for="file">Choose a file</label><input hidden id="file" type="file">';
+    };
+    await page.evaluate(mount);
+    const clean=await page.evaluate(fillVisibleFields,{facts:[...facts,{factId:'family_name',value:'Surname'}],resume:{name:'Resume.pdf',base64:selected.toString('base64')}});
+    assert.equal(clean.resume,'verified');
+    assert.deepEqual(await bytes(page,'#bound input'),[...selected]);
+    assert.deepEqual(await bytes(page,'#parser input'),[]);
+    assert.deepEqual(await bytes(page,'#photo'),[]);
+    assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),'Fixture');
+    assert.equal(await page.locator('spl-input#last-name-input input').inputValue(),'Surname');
+    assert.equal(await page.locator('spl-input#email-input input').inputValue(),'fixture@example.invalid');
+    assert.equal(await page.locator('spl-input#confirm-email-input input').inputValue(),'fixture@example.invalid');
+    assert.equal(await page.locator('#outside').inputValue(),'');
+    assert.equal(await page.locator('#outside-mail').inputValue(),'');
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    await page.locator('main').evaluate(main=>main.append(document.createElement('oc-oneclick-form')));
+    const ambiguous=await fill(page);
+    assert.notEqual(ambiguous.resume,'verified');
+    assert.deepEqual(await bytes(page,'#bound input'),[]);
+    assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),'');
+    await page.locator('oc-oneclick-form').last().evaluate(node=>node.remove());
+    await page.locator('#bound').evaluate(node=>node.removeAttribute('data-test'));
+    const unowned=await fill(page);
+    assert.notEqual(unowned.resume,'verified');
+    assert.deepEqual(await bytes(page,'#bound input'),[]);
+    assert.deepEqual(await bytes(page,'#parser input'),[]);
+    for (const mode of ['acknowledged','preexisting','duplicate','busy','wrong-name','wrong-button','error','late-owner','late-login']) {
+      await page.reload();await page.evaluate(mount);
+      await page.evaluate(mode=>{
+        const root=document.getElementById('bound')!.shadowRoot!, input=root.querySelector('input')!;
+        const filename=mode==='wrong-name'?'Other.pdf':'Resume.pdf';
+        const render=()=>{
+          const list=document.createElement('ul');list.className='c-spl-file-list';root.append(list);
+          for(let n=0;n<(mode==='duplicate'?2:1);n++){
+            const item=document.createElement('li');item.className='c-spl-file-list-item';
+            item.innerHTML='<div class="c-spl-file-list-item-label-container"><span class="c-spl-file-list-item-name">'+filename+'</span><spl-button></spl-button></div>';
+            item.querySelector('spl-button')!.attachShadow({mode:'open'}).innerHTML='<button aria-label="Delete file '+(mode==='wrong-button'?'Other.pdf':filename)+'">Delete</button>';
+            list.append(item);
+          }
+          if(mode==='busy')list.setAttribute('aria-busy','true');
+          if(mode==='error')list.insertAdjacentHTML('beforeend','<li role="alert">Upload failed</li>');
+        };
+        if(mode==='preexisting')render();
+        (window as any).uploads=0;
+        input.addEventListener('change',()=>{
+          (window as any).uploads++;(window as any).sent=input.files![0]!.arrayBuffer();
+          input.value='';render();
+          if(mode==='late-owner')document.querySelector('main')!.append(document.createElement('oc-oneclick-form'));
+          if(mode==='late-login')document.querySelector('main')!.insertAdjacentHTML('beforeend','<input type="password">');
+        });
+      },mode);
+      if (mode==='preexisting') {
+        // The employer restored the file row on reload. C3 has no upload receipt in this document.
+        await assert.rejects(prepareCurrentPage(page, {
+          url: app, profile: applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'}), resume:selected,
+        }, AbortSignal.timeout(5000), ()=>{}), /employer shows the matching filename\. PDF contents unverified/);
+        assert.equal(await page.evaluate('uploads'), 0);
+      }
+      if (mode.startsWith('late-')) await assert.rejects(fill(page),/application form or attachment changed/);
+      else {
+        const updated=await fill(page);
+        assert.equal(updated.resume,'unverified',mode);
+        assert.equal(updated.skipped.some(row=>row.reason==='resume_filename_visible_contents_unverified'),
+          mode==='acknowledged' || mode==='preexisting', mode);
+        if(mode==='acknowledged'){
+          assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).sent))),[...selected]);
+          const retried=await fill(page);
+          assert.equal(retried.resume,'unverified');
+          assert.ok(retried.skipped.some(row=>row.reason==='resume_filename_visible_contents_unverified'));
+        }
+      }
+      assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),mode==='acknowledged'?'Fixture':'',mode);
+      assert.equal(await page.locator('spl-input#email-input input').inputValue(),mode==='acknowledged'?'fixture@example.invalid':'',mode);
+      assert.equal(await page.evaluate('uploads'),mode==='preexisting'?0:1,mode);
+      if(mode==='acknowledged'){
+        await page.locator('spl-input#email-input input').fill('');
+        await page.locator('#bound li.c-spl-file-list-item').evaluate(item=>{
+          const replacement=item.cloneNode(false) as Element;
+          replacement.append(...item.childNodes);
+          item.replaceWith(replacement);
+        });
+        assert.equal((await fill(page)).resume,'unverified');
+        assert.equal(await page.locator('spl-input#email-input input').inputValue(),'');
+        assert.equal(await page.evaluate('uploads'),1);
+      }
+    }
   }finally{await browser.close();}
 });
 

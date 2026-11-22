@@ -4,6 +4,7 @@ import {cpSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {chromium,type BrowserContext} from 'playwright';
+import {fillVisibleFields} from '../../extension/generic-fill.js';
 import {startProductServer} from '../../src/product/server.ts';
 import {fixtureApplicantProfile} from './fixture.ts';
 
@@ -28,7 +29,7 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label><label>Resume<input required type="file" accept=".pdf"></label></form>'}));
     const page=await context.newPage();await page.goto(url);
     const tabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===url).id,url);
-    const send=(operation:string,documentId?:string)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage({action:'pageAction',...args,expiresAt:Date.now()+12000}),{operation,documentId,tabId,expectedUrl:url});
+    const send=(operation:string,documentId?:string,expectedUrl=url)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage({action:'pageAction',...args,expiresAt:Date.now()+12000}),{operation,documentId,tabId,expectedUrl});
     const inspect=await send('inspect');assert.equal(inspect.ok,true);
     const resume=Buffer.from('%PDF-1.4\nDefault fixture').toString('base64');
     const personal=fixtureApplicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'});
@@ -50,8 +51,46 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     assert.equal(await worker.evaluate(async()=> (await (globalThis as any).chrome.storage.local.get('token')).token),token);
     await page.screenshot({path:join(root,'unchanged-queued-draft.png')});
     await service.queue.action(queued.id,'remove');
+    // The queued filler evaluates in the employer document. Its journal is outside the extension's isolated world.
+    const mainWorldFill=await page.evaluate(fillVisibleFields,{facts:[{factId:'given_name',value:'Queued fixture'}]});
+    assert.equal(mainWorldFill.canUndo,true);
+    assert.equal(await page.locator('input').first().inputValue(),'Queued fixture');
+    const isolated=await send('inspect');
+    assert.equal(isolated.result.canUndo,false);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.equal(await page.locator('input').first().inputValue(),'');
     const allowed=await send('fill',inspect.result.documentId);assert.equal(allowed.ok,true,JSON.stringify(allowed));
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
     assert.equal(await page.locator('input[type=file]').evaluate((el:any)=>el.files.length),1);
+    assert.equal(allowed.result.canUndo,true);
+    const history=await send('inspect');
+    assert.equal(history.result.canUndo,true,'the popup and public page actions share standalone page history');
+    const undone=await send('undo',history.result.documentId);
+    assert.equal(undone.ok,true,JSON.stringify(undone));
+    assert.equal(undone.result.canRedo,true);
+    assert.equal(await page.locator('input').first().inputValue(),'');
+    const redone=await send('redo',history.result.documentId);
+    assert.equal(redone.ok,true,JSON.stringify(redone));
+    assert.equal(await page.locator('input').first().inputValue(),'Fixture');
+    const oneClick='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
+    const childUrl=new URL('/unrelated-contact',oneClick).href;
+    const contact='<label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label>';
+    const owner='<oc-oneclick-form>'+contact+'<oc-resume-upload><spl-dropzone data-test="resume-upload"><label>Resume<input type="file"></label></spl-dropzone></oc-resume-upload></oc-oneclick-form>';
+    let owners=1;
+    await context.route(childUrl,route=>route.fulfill({contentType:'text/html',body:'<form>'+contact+'<button>Subscribe</button></form>'}));
+    await context.route(oneClick,route=>route.fulfill({contentType:'text/html',body:'<main>'+owner.repeat(owners)+'</main><iframe src="'+childUrl+'"></iframe>'}));
+    for (owners of [1,0,2]) {
+      await page.goto(oneClick);
+      const initial=await send('inspect',undefined,oneClick);
+      assert.equal(initial.ok,true);
+      const filled=await send('fill',initial.result.documentId,oneClick);
+      assert.equal(filled.ok,true,JSON.stringify(filled));
+      const child=page.frameLocator('iframe');
+      assert.equal(await child.locator('input').first().inputValue(),'','unrelated frame must remain blank');
+      assert.equal(await child.locator('input').last().inputValue(),'');
+      assert.equal(initial.result.frames.length,1);
+      assert.equal(filled.result.frames.length,1);
+      if (owners>0) assert.equal(await page.locator('main input').first().inputValue(),owners===1?'Fixture':'');
+    }
   }finally{await context?.close();await service.close();}
 });

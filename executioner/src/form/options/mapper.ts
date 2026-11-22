@@ -4,6 +4,7 @@ import type {
   ProfileAnswerResult,
 } from "../../contracts/index.ts";
 import { normalizeCatalogText } from "../questions/normalize.ts";
+import { isRecruitmentTermsConsent } from "../questions/protected.ts";
 import { resolveOption } from "./catalog.ts";
 import { equivalentAnswer } from '../../deterministic/answer-equivalence.ts';
 
@@ -20,6 +21,23 @@ export type OptionMappingResult =
     }
   | { readonly kind: "option_no_match" }
   | { readonly kind: "option_ambiguous" };
+
+export function consentOption(value: boolean, options: FieldObservation["options"], rawOptions?: readonly string[]) {
+  if (rawOptions && rawOptions.length !== options.length) return undefined;
+  const choices = options.map((option, index) => ({option, label:rawOptions?.[index] ?? option.label})).filter(({label}) => {
+    const text = normalizeCatalogText(label);
+    return text && !/^(?:select|choose|please select|select one|choose one|none selected|no (?:items|matches|results)(?: found)?)$/u.test(text);
+  });
+  const matches = choices.filter(({label}) => {
+    const text = normalizeCatalogText(label);
+    if (!value) return /^(?:no|n|false|decline|i (?:decline|do not agree))$/u.test(text);
+    if (text === "acknowledge confirm") return choices.length === 1;
+    return /^(?:yes|y|true|(?:i )?(?:agree|accept|acknowledge))$/u.test(text) ||
+      isRecruitmentTermsConsent(label);
+  });
+  const choice = matches.length === 1 ? matches[0] : undefined;
+  return choice && choice.label === choice.option.label ? choice.option : undefined;
+}
 
 function optionKey(value: string): string {
   const resolved = resolveOption(value);

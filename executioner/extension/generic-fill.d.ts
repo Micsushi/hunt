@@ -3,6 +3,7 @@ import type { PageAnswerPlan, PageQuestion } from '../src/product/page-matching.
 export interface PartialFillResult {
   componentFailure?: ComponentFailure;
   status: 'partial';
+  incomplete?: boolean;
   matching?: PageQuestion[];
   filled: string[];
   skipped: { label: string; reason: string; componentFailure?: ComponentFailure; fieldId?: string; frameId?: string }[];
@@ -13,6 +14,7 @@ export interface PartialFillResult {
 export function fillVisibleFields(input?: {
   matchingPlans?: PageAnswerPlan[];
   matchingRunId?: string;
+  queuedScreening?: boolean;
   facts?: readonly { factId: string; value: unknown }[];
   action?: 'fill' | 'undo' | 'redo' | 'status';
   scope?: 'application' | 'page';

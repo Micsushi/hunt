@@ -2,59 +2,24 @@
 
 Purpose: give one reliable Windows path to deploy Hunt changes to `server2`.
 
-## What was missing before
+## Deploying a release
 
-Before this doc, Hunt mentioned `server2` and the separate Ansible repo, but it did not give a repo-local Windows command. That made deploys easy to forget or improvise.
-
-## Standard command
-
-From the Hunt repo in PowerShell:
+From the Hunt checkout, preview the combined C0, C1 and C2 application release, then run it.
 
 ```powershell
-.\scripts\deploy_server2.ps1 -Stages 6
-```
-
-That runs the `job_agent` playbook in the sibling `ansible_homelab` repo and deploys Hunt Stage 6 to `server2`.
-
-Useful variants:
-
-```powershell
-.\scripts\deploy_server2.ps1 -Stages 6 -Check
+.\scripts\deploy_server2.ps1 -Stages 6,7 -PrintOnly
 .\scripts\deploy_server2.ps1 -Stages 6,7
-.\scripts\deploy_server2.ps1 -Stages 6 -PrintOnly
 ```
 
-## Stage map
+The wrapper selects the checkout commit by default. Pass `-ReleaseRef` with a full commit SHA to select another release. Before invoking Ansible it checks GitHub for a successful, completed push run of Hunt's CI workflow on main for that exact commit. A missing, pending or failed result stops the release. `-PrintOnly` prints the pinned command. `-Check` invokes Ansible check mode.
 
-- `6`: C0 + C1 + Postgres base Hunt runtime
-- `7`: C2 Fletcher
+Stages 6 and 7 together select the application-only playbook path. The playbook verifies the release's image and schema qualification receipts before replacing the five app services. A single stage selects full mode for its component bundle (6 for C0/C1, 7 for C2). Full mode can recreate dependencies and apply schema changes. C3 runs on the user's computer. See [C3 Applications](../executioner/docs/product.md).
 
-The Hunt wrapper rejects every other stage. C3 runs separately on the user's
-computer as a local service and browser extension, described in
-[C3 Applications](../executioner/docs/product.md). It has no server deploy stage;
-the remote server cannot reach a user's local C3 service. C4 remains on hold.
-
-## Prerequisites
-
-- `ansible_homelab` exists next to this repo at `..\ansible_homelab`, or you pass `-AnsibleRepo`
-- Docker Desktop is running on Windows: the Ansible helper launches a containerized control node
-- `ansible_homelab\inventory.local` exists and points at `server2`
-- `ansible_homelab\group_vars\job_agent\vars_local.yml` exists with the required Hunt secrets
-- Your Windows `~\.ssh` key can reach `server2`
-
-## What the wrapper does
-
-`scripts/deploy_server2.ps1` does not deploy Hunt directly. It resolves the sibling `ansible_homelab` repo, then forwards to:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ..\ansible_homelab\deploy.ps1 -Target job_agent ...
-```
-
-That keeps the real deployment logic in one place while giving Hunt a stable operator command.
+Install the infrastructure repository at `..\server_ansible_setup` or pass its path with `-AnsibleRepo`. Configure its server2 inventory, Hunt host variables, SSH access and deployment receipts. The wrapper calls its `ansible.ps1` with `playbooks/apps/hunt.yml`, the exact release SHA and a host limit of `server2`. Docker Desktop runs the Ansible control node.
 
 ## Public access and auth
 
-For `server2`, internet exposure is still managed by `ansible_homelab`, not by `python deploy.py` alone.
+For `server2`, internet exposure is still managed by `server_ansible_setup`, not by `python deploy.py` alone.
 
 - Hunt owns the runtime command and container shape.
 - Ansible owns the server environment around that runtime:
@@ -78,9 +43,9 @@ Important limit:
 1. Run local verification first: `python ci.py shared` plus the component-specific target you changed.
 2. Verify the repo-native runtime command you expect the host to run: for example `python deploy.py c1 --mode server --env-file .env.server2 --dry-run`.
    If you run it manually on `server2`, include `--project-name hunt-server2` so Docker Compose manages the same project Ansible owns.
-3. Preview the remote deploy wrapper: `.\scripts\deploy_server2.ps1 -Stages 6 -PrintOnly`
-4. Optional Ansible check mode: `.\scripts\deploy_server2.ps1 -Stages 6 -Check`
-5. Run the real deploy.
+3. Preview the application release with `.\scripts\deploy_server2.ps1 -Stages 6,7 -PrintOnly`.
+4. Use `.\scripts\deploy_server2.ps1 -Stages 6,7 -Check` for an Ansible dry run. The hosted CI check runs when activating the release.
+5. Run the combined app deploy, or select a single stage when you intend full mode.
 6. Run the relevant `server2` smoke checks before calling the deploy complete.
 
 ## How to test the full server2 path
@@ -145,6 +110,6 @@ python smoke.py server2
 
 Expected result:
 
-- Ansible updates the repo, renders the server env file, and runs the Hunt repo-native deploy command remotely
+- Ansible checks out the pinned release and runs the selected deployment mode
 - Cloudflare Tunnel still points at the same Hunt container identities
 - public access works because the surrounding `server2` ingress and auth layer is still in place

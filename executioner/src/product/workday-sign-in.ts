@@ -140,26 +140,28 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
         await delay(1500, undefined, {signal});
         await command({operation:'return_to_job'});
         preferCreate = false;
-        attempted = false;
         await delay(1000, undefined, {signal});
         continue;
       }
       check(state);
+      if (verificationAttempted && attempted && (state.state==='sign_in' || state.state==='navigation' && state.action==='show_sign_in')) {
+        throw new ApplicationPause('C3 opened the verification link, but the employer still requests sign-in. Check the account in this tab before retrying.');
+      }
       if (state.state === 'account_exists') {
-        if (!creationAttempted) throw new ApplicationPause('The account already exists. Inspect the account page before retrying.');
-        record('account_exists'); preferCreate = false; creationSince = 0;
-        check(await command({operation:'navigate',documentId:state.documentId,expectedUrl:state.url,action:'show_sign_in',preferCreate:false}));
-        continue;
+        const observed=state.observation;
+        if (!creationAttempted && (!state.documentId || observed?.version!=='workday-page-v1' || observed.kind!=='account_exists' ||
+            observed.conflicts?.length!==0 || !observed.signals?.includes('create_account_form') || !observed.signals.includes('account_exists_response'))) {
+          throw new ApplicationPause('C3 could not confirm the employer account-exists notice. Inspect the account page before retrying.');
+        }
+        preferCreate = false; creationSince = 0;
       }
       if (state.state === 'application') {
         if (attempted || creationAttempted) { record('sign_in_transition_observed'); record('application_opened'); }
         authenticated = true; return;
       }
       const document = { documentId: state.documentId, expectedUrl: state.url };
-      if (state.state === 'create_account' && !preferCreate && !creationAttempted) {
-        check(await command({operation:'navigate',...document,action:'show_sign_in',preferCreate:false}));
-        continue;
-      }
+      const openSignIn = state.state === 'account_exists' || (state.state === 'create_account' && !preferCreate && !creationAttempted);
+      const action = openSignIn ? 'show_sign_in' : state.state === 'navigation' ? state.action : undefined;
       const fieldKey=`${state.documentId}:${state.state}`;
       if (fieldKey!==fieldDocument) {fieldDeadline=0;fieldDocument=fieldKey;}
       const creating = state.state === 'create_account';
@@ -217,8 +219,10 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           if (creating) preferCreate = false;
           record('sign_in_diagnostic', 'submit_script_click_succeeded');
         }
-      } else if (state.state === 'navigation' && (!attempted || state.action === 'continue_application')) {
-        const key = `${state.documentId}:${state.url}:${state.action}`;
+      } else if (action && (!attempted || action === 'continue_application')) {
+        // Workday can reuse one document for entry and the return from registration.
+        const returningToSignIn = action === 'show_sign_in' && creationAttempted;
+        const key = JSON.stringify([state.documentId, state.url, action, returningToSignIn]);
         const clickedAt = navigation.get(key);
         if (clickedAt !== undefined) {
           if (Date.now() - clickedAt >= 30_000) throw new ApplicationPause('The employer did not advance after opening sign-in. Inspect the tab before retrying.');
@@ -226,11 +230,17 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           continue;
         }
         navigation.set(key, Date.now());
-        check(await command({ operation: 'navigate', ...document, action: state.action, preferCreate }));
+        // A notice left by an earlier session identifies the sign-in route, not which email was used.
+        if (state.state === 'account_exists' && creationAttempted) record('account_exists');
+        check(await command({ operation: 'navigate', ...document, action, preferCreate }));
       }
       await delay(500, undefined, { signal });
     }
-    throw new ApplicationPause(latestObservation ? `Account access is unconfirmed. The last observed employer state was ${latestObservation.kind.replaceAll('_',' ')}. Inspect the tab before retrying; C3 will not repeat the credential click automatically.` : 'Account access is unconfirmed. The employer page did not settle; inspect the tab before retrying.');
+    const pageState = latestObservation ? `The last observed employer state was ${latestObservation.kind.replaceAll('_',' ')}.` : 'The employer page did not settle.';
+    const accountAction = attempted || creationAttempted
+      ? 'A sign-in or registration was attempted. Inspect the tab before retrying.'
+      : 'C3 did not attempt sign-in or registration during this run. Inspect the tab before retrying.';
+    throw new ApplicationPause(`Account access is unconfirmed. ${pageState} ${accountAction}`);
   } catch (error) {
     if ((attempted || creationAttempted) && !authenticated && !rejected) record(creationAttempted && !attempted ? 'creation_uncertain' : 'sign_in_uncertain');
     throw error;

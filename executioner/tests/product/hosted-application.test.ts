@@ -13,6 +13,8 @@ import {inspectHostedFields} from '../../src/product/hosted-application.ts';
 import {hostedReviewSnapshot} from '../../src/product/hosted-application.ts';
 import {uploadGreenhouseResume,verifiedGreenhouseResume} from '../../src/product/greenhouse-resume.ts';
 import {ApplicationQueue} from '../../src/product/queue.ts';
+import {componentFailure} from '../../src/product/component-diagnostics.ts';
+import type {ResumeUploadReceipt} from '../../src/product/application-contract.ts';
 
 const id='11111111-1111-4111-8111-111111111111';
 test('Ashby location retries once when a delayed country focus closes its uncommitted menu',async()=>{
@@ -66,9 +68,56 @@ test('Ashby autocomplete opens its unique toggle without treating focus as an op
     await page.goto(url);const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',application_source:'Referral'});
     await fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
     assert.equal(await page.locator('#choice').inputValue(),'Referral');assert.equal(await page.evaluate('opens'),1);
+    await page.reload();
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('#choice')!;
+      const old = input.closest('.ashby-application-form-field-entry')!;
+      const group = document.createElement('fieldset');
+      group.append(...old.childNodes);
+      old.replaceWith(group);
+      input.required = false;
+      const label = group.querySelector('label')!;
+      label.htmlFor = 'unmounted-component';
+      label.className = 'ashby-application-form-question-title _required_fixture_91';
+    });
+    const sourceField = async () => (await inspectHostedFields(page)).find(field=>field.kind==='combobox');
+    assert.equal((await sourceField())?.label, 'How did you hear about us?');
+    assert.equal((await sourceField())?.required, true);
+    await assert.rejects(hostedReviewSnapshot(page), /Required or invalid fields/);
+    await fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
+    assert.equal(await page.locator('#choice').inputValue(),'Referral');
+    const fieldset = page.locator('fieldset');
+    await fieldset.evaluate(e=>e.append(document.createElement('input')));
+    await assert.rejects(inspectHostedFields(page), /ambiguous controls/);
+    await fieldset.locator(':scope > input').evaluate(e=>e.remove());
+    await fieldset.locator('label').evaluate(e=>e.classList.remove('_required_fixture_91'));
+    assert.equal((await sourceField())?.required,false);
+    await fieldset.locator('label').evaluate(e=>e.classList.add('_required_fixture_91'));
+    await fieldset.evaluate(e=>{
+      e.setAttribute('class','ashby-application-form-field-entry');
+      e.setAttribute('data-field-entry-id','owned');
+      e.setAttribute('data-field-path','owned');
+      const wrapper=document.createElement('div');
+      const label=e.querySelector('label')!;
+      label.replaceWith(wrapper);
+      wrapper.append(label);
+    });
+    assert.equal((await sourceField())?.required,true);
     await page.locator('#choice').fill('');await page.locator('#toggle').evaluate(e=>e.after(e.cloneNode(true)));
     await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{}),/opener is ambiguous/);
     assert.equal(await page.locator('#choice').inputValue(),'');
+    await page.reload();
+    await page.locator('label[for=choice]').evaluate(e=>{e.textContent='How did you hear about Example Employer?';});
+    await page.locator('#choices').evaluate(e=>{e.innerHTML='<div role=option>Company Website</div><div role=option>Job Board</div><div role=option>LinkedIn</div>';});
+    await page.evaluate(id=>{
+      const data=document.createElement('script');
+      data.type='application/ld+json';
+      data.textContent=JSON.stringify({'@type':'JobPosting',identifier:{value:id},hiringOrganization:{'@type':'Organization',name:'Example Employer'}});
+      document.head.append(data);
+    },id);
+    const defaults=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'});
+    await fillApplication(page,{url,profile:defaults,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
+    assert.equal(await page.locator('#choice').inputValue(),'Job Board');
   }finally{await browser.close();}
 });
 
@@ -169,12 +218,27 @@ test('restored Workable optional attachments are preserved and required uploads 
     await p.exposeFunction('recordUpload',()=>{uploadChanges++;});
     await p.locator('[name=attachment]').evaluate(e=>e.addEventListener('change',()=>(window as any).recordUpload()));
 
-    const initial=await fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{});
+    let receipt: ResumeUploadReceipt | undefined;
+    const initial=await fillApplication(p,{url,profile,resume,onResumeUpload:value=>{receipt=value;}},AbortSignal.timeout(15000),()=>{});
     assert.equal(initial.resumeExpected,true);
     assert.equal(await p.locator('[name=attachment]').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),resume.toString());
     assert.equal(await p.locator('[name=attachment]').evaluate((e:HTMLInputElement)=>e.files![0]!.name),`Resume-${createHash('sha256').update(resume).digest('hex').slice(0,12)}.pdf`);
     assert.equal(await p.locator('[data-action=view]').getAttribute('href'),'/first-upload.pdf');
     assert.equal(previewReads,1);
+    assert.equal(uploadChanges,1);
+    const review = {selectedSize:resume.length,rechecked:false};
+    const snapshot = () => hostedReviewSnapshot(p,createHash('sha256').update(resume).digest('hex'),true,receipt,review);
+    const rerender = () => p.locator('div[data-role=dropzone]').evaluate(group=>group.append(document.createElement('span')));
+    await p.locator('div[data-role=dropzone]').evaluate(group=>{
+      group.setAttribute('aria-busy','true');group.removeAttribute('aria-busy');
+    });
+    assert.equal((await snapshot()).resumeExpected,true);
+    assert.equal(previewReads,2);
+    await rerender();
+    await assert.rejects(snapshot(),error=>{
+      assert.equal(componentFailure(error)?.operation,'review_workable_already_rechecked_watcher_invalidated');return true;
+    });
+    assert.equal(previewReads,2);
     assert.equal(uploadChanges,1);
     await p.locator('[type=email]').fill('');
     await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-another-selection')},AbortSignal.timeout(15000),()=>{}),/preview does not confirm/i);
@@ -202,11 +266,34 @@ test('restored Workable optional attachments are preserved and required uploads 
     assert.equal(anonymous.mock.callCount(),0);
     redirect=false; replaceLink=true;
     await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/resume changed during verification/);
-    await p.locator('[data-action=view]').evaluate((a:HTMLAnchorElement)=>a.href='https://fixture-cdn.invalid/selected.pdf');
-    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview could not be verified/);
+    await p.locator('[data-action=view]').evaluate((a:HTMLAnchorElement)=>a.href='https://fixture-cdn.invalid/private-fixture.pdf?signature=test-value');
+    await assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}), error=>{
+      assert.deepEqual(componentFailure(error),{component:'uploads',operation:'verify_existing_external_preview_http_403'});
+      assert.equal((error as Error).message,'The resume preview could not be verified. Inspect the uploaded file before retrying.');
+      return true;
+    });
     assert.equal(anonymous.mock.callCount(),1);
     assert.equal(uploadChanges,1);
     assert.equal(await p.evaluate('submits'),0);
+
+    await p.reload();
+    const pending = p.locator('[name=attachment]');
+    await pending.evaluate((e:HTMLInputElement)=>{
+      e.required=true;
+      e.parentElement!.querySelector('[data-action=view]')!.remove();
+    });
+    const priorPdf = Buffer.from('%PDF-pending-draft');
+    await pending.setInputFiles({name:'Resume.pdf',mimeType:'application/pdf',buffer:priorPdf});
+    await pending.evaluate(e=>e.addEventListener('change',()=>(window as any).recordUpload()));
+    await p.route('**/pending.pdf',route=>route.fulfill({contentType:'application/pdf',body:priorPdf}));
+    const mismatch = assert.rejects(fillApplication(p,{url,profile,resume},AbortSignal.timeout(15000),()=>{}),/preview does not confirm/i);
+    await p.waitForFunction(()=>Boolean((window as any).__huntWorkableResumeAttempt));
+    await pending.evaluate(e=>{
+      const view=document.createElement('a');view.dataset.action='view';view.href='/pending.pdf';view.textContent='View';e.after(view);
+    });
+    await mismatch;
+    assert.equal(uploadChanges,1);
+    assert.equal(await pending.evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),priorPdf.toString());
   } finally {await b.close();}
 });
 
@@ -251,9 +338,8 @@ test('Ashby nested optional consent stays separate from required Phone and legal
     await fillApplication(p,input,AbortSignal.timeout(15000),()=>{});
     assert.equal(await p.locator('[name=consent1][value=no]').isChecked(),true);
     await p.locator('[name=consent0]').evaluateAll(es=>es.forEach(e=>(e as HTMLInputElement).required=true));
-    const requiredConsent=await fillApplication(p,input,AbortSignal.timeout(15000),()=>{});
-    assert.equal(requiredConsent.needsOwnerReview,true);
-    assert.equal(await p.locator('[name=consent0]:checked').count(),1);
+    await assert.rejects(fillApplication(p,input,AbortSignal.timeout(15000),()=>{}), /requires a consent decision/);
+    assert.equal(await p.locator('[name=consent0]:checked').count(),0);
     assert.equal(await p.locator('[name=consent1][value=no]').isChecked(),true);
     assert.equal(await p.evaluate('submits'),0);
   } finally { await b.close(); }
@@ -292,9 +378,8 @@ test('hosted fill answers owned radio groups and never submits; edits invalidate
     await p.locator('[name=email]').fill('');await assert.rejects(reviewDigest(p),/Required/);
     await p.locator('legend').evaluate(e=>{e.textContent='Background checks may be required. '.repeat(20)+'By submitting my application, I confirm that I have read and understood this information.';});
     await p.locator('input[type=radio]').evaluateAll(es=>es.forEach(e=>(e as HTMLInputElement).checked=false));
-    const provisionalConsent=await fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{});
-    assert.equal(provisionalConsent.needsOwnerReview,true);
-    assert.equal(await p.locator('input[type=radio]:checked').count(),1);
+    await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{}),/requires a consent decision/);
+    assert.equal(await p.locator('input[type=radio]:checked').count(),0);
     await p.locator('fieldset').evaluate(e=>{e.innerHTML='<input role="combobox" aria-label="Applicant Privacy Notice" aria-required="true" onclick="window.consentClicks=(window.consentClicks||0)+1">';});
     await assert.rejects(fillApplication(p,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(15000),()=>{}),/dropdown did not expose its choices/i);
     assert.ok(await p.evaluate('window.consentClicks>0'));
@@ -445,6 +530,25 @@ test('hosted fill uses saved numeric salary, start date and exact radio after re
     assert.equal(await page.locator('#start').inputValue(), '2027-01-04');
     assert.equal(await page.getByRole('radio', { name: 'LinkedIn' }).isChecked(), true);
     assert.equal(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => await e.files?.[0]?.text()), bytes.toString());
+    await page.locator('#range').evaluate(textarea=>{
+      const label=textarea.parentElement!;
+      label.firstChild!.textContent='Salary expectations';
+      const amount=document.createElement('input');
+      amount.id='pay';
+      amount.required=true;
+      amount.oninput=()=>{ amount.value=amount.value.replace(/[^\d,]/g,''); };
+      textarea.replaceWith(amount);
+    });
+    const savedSingle=applicantProfile({ given_name:'Saved', family_name:'Applicant', email_address:'saved@example.invalid',
+      desired_salary:'90000', salary_expectations:'CAD $90,000 per year', earliest_start_date:'2027-01-04', application_source:'LinkedIn' });
+    const rerun=()=>fillApplication(page,{url,profile:savedSingle,resume:bytes},AbortSignal.timeout(15000),()=>{});
+    assert.equal((await rerun()).needsOwnerReview,true);
+    assert.equal(await page.locator('#pay').inputValue(),'90,000');
+    await page.locator('#pay').evaluate(el=>el.addEventListener('input',()=>el.setAttribute('data-rewritten','true')));
+    assert.equal((await rerun()).needsOwnerReview,true);
+    assert.equal(await page.locator('#pay').getAttribute('data-rewritten'),null);
+    await page.locator('#pay').evaluate((el:HTMLInputElement)=>{ el.value='';el.oninput=()=>{el.value='9,000';}; });
+    await assert.rejects(rerun(),/text answer did not persist/);
     assert.equal(await page.evaluate('window.submitted'), undefined);
   } finally {
     await browser.close();

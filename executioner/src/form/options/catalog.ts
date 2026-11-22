@@ -14,7 +14,7 @@ function entry<I extends string>(id: I, labels: readonly string[]) {
 
 export const optionCatalog = Object.freeze([
   entry("yes", ["Yes", "Y", "True"]),
-  entry("no", ["No", "N", "False"]),
+  entry("no", ["No", "N", "False", "Non | No"]),
 ] as const satisfies readonly ReviewedCatalogEntry<string>[]);
 
 assertCatalogHasNoCollisions(optionCatalog);

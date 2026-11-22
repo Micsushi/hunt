@@ -5,9 +5,9 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {chromium,type BrowserContext} from 'playwright';
 import {startProductServer} from '../../src/product/server.ts';
-import type {ExtensionBridge} from '../../src/product/extension-bridge.ts';
+import {type ExtensionBridge, verifiedScreeningTransition} from '../../src/product/extension-bridge.ts';
 
-test('real extension attaches an already-open Rippling application and still rejects a changed document', {timeout:60000},async()=>{
+test('real extension binds Rippling documents and only permits the verified SmartRecruiters screening transition', {timeout:90000},async t=>{
   const root=mkdtempSync(join(tmpdir(),'c3-existing-target-'));
   const service=await startProductServer({root:join(root,'service'),port:0});
   const extension=join(root,'extension');cpSync(resolve('extension'),extension,{recursive:true});
@@ -36,5 +36,61 @@ test('real extension attaches an already-open Rippling application and still rej
     assert.equal(await page.locator('input').inputValue(),'');
     await bridge.release(tabId);await session.browser.close();
     await bridge.focus(tabId,posting);
+
+    const uuid='11111111-1111-4111-8111-111111111111';
+    const source='https://jobs.smartrecruiters.com/Fixture/123456-title';
+    const base='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/'+uuid;
+    const query='?dcr_ci=Fixture', personal=base+query, screening=base+'/screening'+query;
+    await context.route('https://jobs.smartrecruiters.com/**',route=>route.fulfill({contentType:'text/html',body:'<main>Fixture application</main>'}));
+    t.mock.method(globalThis,'fetch',async (url:unknown)=>{
+      assert.equal(String(url),'https://api.smartrecruiters.com/v1/companies/Fixture/postings/123456');
+      return Response.json({id:'123456',company:{identifier:'Fixture'},uuid,active:true});
+    });
+    await page.goto(personal);
+    const unverified=await bridge.open(personal,tabId,true);
+    assert.throws(()=>verifiedScreeningTransition(unverified.page,personal),/verified SmartRecruiters posting/);
+    await bridge.release(tabId);await unverified.browser.close();
+    const previous=await bridge.open(source,tabId,true);
+    const stale=verifiedScreeningTransition(previous.page,personal);
+    await bridge.release(tabId);await previous.browser.close();
+    const delayed=await bridge.open(source,tabId,true);
+    await assert.rejects(stale(),/tab changed/);
+    await verifiedScreeningTransition(delayed.page,personal)();
+    assert.equal((await bridge.call('info',{tabId})).url,personal);
+    await page.evaluate(path=>history.pushState({},'',path),screening);
+    assert.equal((await bridge.call('info',{tabId})).url,screening);
+    await bridge.release(tabId);await delayed.browser.close();
+    for (const destination of [screening,screening.replace('/Fixture/','/Other/'),screening.replace(uuid,'2'+uuid.slice(1)),base+'/other'+query,screening+'&extra=yes','reload']) {
+      await page.goto(personal);
+      const bound=await bridge.open(source,tabId,true);
+      try {
+        const grant=verifiedScreeningTransition(bound.page,personal);
+        if (destination==='reload') await page.goto(screening);
+        else await page.evaluate(path=>history.pushState({},'',path),destination);
+        if (destination===screening) {
+          await assert.rejects(bridge.call('info',{tabId}),/document changed/);
+          await worker.evaluate(({tabId,personal})=>{
+            // The tab API briefly still reports the personal page after CDP observes the screening route.
+            const tabs=(globalThis as any).chrome.tabs, original=tabs.get.bind(tabs);
+            tabs.get=async (id:number)=>{
+              const snapshot=await original(id);
+              if (id!==tabId) return snapshot;
+              tabs.get=original;
+              return {...snapshot,url:personal};
+            };
+          },{tabId,personal});
+          await grant();
+          assert.equal((await bridge.call('info',{tabId})).url,screening);
+          assert.equal(await bound.page.locator('main').textContent(),'Fixture application');
+          await assert.rejects(grant(),/no longer available/);
+          await assert.rejects(bridge.call('cdp',{tabId,method:'Page.reload'}),/must stay on the current page/);
+          await page.evaluate(path=>history.pushState({},'',path),personal);
+          await assert.rejects(bridge.call('info',{tabId}),/document changed/);
+        } else {
+          await assert.rejects(grant(),/left the verified application route|document changed/);
+          await assert.rejects(bridge.call('info',{tabId}),/document changed/);
+        }
+      } finally {await bridge.release(tabId);await bound.browser.close();}
+    }
   }finally{await context?.close();await service.close();}
 });

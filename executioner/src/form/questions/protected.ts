@@ -5,25 +5,32 @@ import { normalizeCatalogText } from "./normalize.ts";
 
 export type ProtectedQuestionCategory = "authorization" | "legal" | "consent";
 
-export function isRecruitmentTermsConsent(label: string): boolean {
-  const text = normalizeCatalogText(label);
-  // The owner's recruitment/privacy decision does not cover the opposite statement
-  // or another declaration bundled beside a privacy notice. Conditional notice text
-  // ("If you do not consent...") is not itself a negated applicant declaration.
-  if (/\b(?:certify|certification|accurate|accuracy|truthful|signature|sign here|background check|marketing|promotional|advertising|newsletter)\b/u.test(text) ||
-      /\b(?:i|we) (?:(?:do not|don t|will not|won t|cannot|can t|never) (?:agree|accept|consent|acknowledge)|decline|refuse|reject|disagree)\b/u.test(text) ||
-      /^(?:(?:do not|don t|not) (?:agree|accept|consent|acknowledge)|decline|refuse|reject|disagree)\b/u.test(text) ||
-      /\bdo you not (?:agree|accept|consent|acknowledge)\b/u.test(text)) return false;
-  // Reject an additional requested action, not ordinary processing/retention
-  // described by a recruitment notice (including use of service providers).
-  if (/\b(?:i|we) (?:am|are|have|meet|can)\b.{0,100}\b(?:authori[sz]ed|eligible|qualifications|years of age|criminal|employed|worked)\b/u.test(text) ||
-      /\b(?:arbitration|class action waiver|waiv(?:e|ing) (?:my |your |our )?(?:legal )?rights)\b/u.test(text) ||
-      /\b(?:agree|consent|authori[sz]e|request|opt in|subscribe|sign up|join)\b.{0,180}\b(?:sms|texts|texting|text messages?|(?:by|via) text|talent (?:community|pool|network)|future (?:job |career )?(?:roles|opportunities|openings|positions))\b/u.test(text) ||
-      /\b(?:agree|consent|authori[sz]e)\b.{0,100}\b(?:sell|sale|commercial sharing)\b.{0,100}\b(?:information|data|third parties|partners)\b/u.test(text) ||
-      /\b(?:agree|consent|authori[sz]e)\b.{0,80}\b(?:share|sharing|disclose|disclosure|transfer)\b.{0,100}\bthird parties\b.{0,80}\b(?:own|independent|unrelated|commercial)\b/u.test(text) ||
-      /\b(?:agree|consent|authori[sz]e)\b.{0,80}\b(?:retain|store|keep)\b.{0,80}\bindefinitely\b/u.test(text)) return false;
-  return /\b(?:privacy|terms (?:and conditions|conditions|of use|of service)|consent to (?:the )?(?:use|processing|collection) of (?:my |your )?personal data)\b/u.test(text) ||
-    /^(?:(?:i |yes i )?(?:have )?(?:read|accept|agree to|consent to)(?: and consent to)? (?:the )?)?terms$/u.test(text);
+// Parse the whole declaration. A privacy keyword inside a second, unrelated
+// attestation cannot authorize that attestation.
+export function isRecruitmentTermsConsent(label: string, requiredEmployerNames: readonly string[] = []): boolean {
+  // A named privacy notice applies only to the employer on the required field.
+  const named = /^you declare that you have read and agree to the privacy notice of (.+)$/u.exec(normalizeCatalogText(label));
+  if (named) {
+    const companyKey = (name: string) => normalizeCatalogText(name).replace(/\bltée\b/gu, 'lte').replace(/\s+/gu, '');
+    return requiredEmployerNames.some(name => companyKey(name) === companyKey(named[1]!));
+  }
+  const notices = label.split(/[.!?;\n]+/u).map(normalizeCatalogText).filter(Boolean);
+  let requestsConsent = false;
+  for (const notice of notices) {
+    // Some employers explain that declining prevents the application proceeding.
+    // Accept only that consequence, never an arbitrary trailing declaration.
+    if (/^if you do not (?:agree|consent)(?: to (?:the |this |our )?(?:privacy (?:notice|policy)|terms(?: and conditions)?))? (?:please do not (?:apply|proceed|continue|submit (?:your|this) application)|(?:we (?:cannot|will not)|we (?:won t|can t)|we (?:will )?not be able to) (?:consider|process|accept) your application|you (?:cannot|will not be able to) (?:apply|continue|proceed)|your application (?:cannot|will not) (?:proceed|be (?:considered|processed|accepted)))$/u.test(notice)) continue;
+    // A notice may describe the employer's own limited use of applicant data.
+    if (/^(?:(?:we|our service providers|we and our service providers) (?:may |will )?(?:process|use|collect|retain|store) your (?:application|personal) (?:data|information)|your (?:application|personal) (?:data|information) (?:may|will) be (?:processed|used|collected|retained|stored)) (?:for recruitment purposes|to (?:assess|review|process) your application|for (?:up to )?(?:one|two|[1-9][0-9]?) (?:months?|years?)(?: for recruitment purposes)?)$/u.test(notice)) continue;
+    const objects = notice
+      .replace(/^(?:please )?(?:confirm|acknowledge) (?:that )?/u, "")
+      .replace(/^(?:(?:yes )?(?:you|i|we) )?(?:have )?(?:read (?:and understood )?and )?(?:accept|agree to|consent to|acknowledge|read(?: and understood)?) /u, "")
+      .replace(/\bterms and conditions\b/gu, "terms conditions");
+    if (!objects.split(" and ").every(object =>
+      /^(?:(?:the|our|your|this) )?(?:[\p{L}\p{N}]+ (?:s |(?:corp|inc|llc|ltd|corporation|limited)(?: s)? ))?(?:(?:recruitment|applicant|candidate|application|account|data) )?(?:privacy (?:notice|policy|statement)|terms(?: conditions| of (?:use|service))?|(?:processing|collection|use) of (?:my |your )?personal data(?: for recruitment purposes)?)$/u.test(object))) return false;
+    requestsConsent = true;
+  }
+  return requestsConsent;
 }
 
 export const contractApprovedPrivacyChoices = Object.freeze([
@@ -65,9 +72,11 @@ const legalQuestionIds = new Set<CanonicalQuestionId>([
 export function protectedQuestionCategory(
   label: string,
   question: CanonicalQuestionId | undefined,
+  options: readonly string[] = [],
 ): ProtectedQuestionCategory | null {
   const normalized = normalizeCatalogText(label);
-  if (/\b(?:consent|acknowledge|signature|privacy (?:notice|policy)|terms (?:(?:and )?conditions|of (?:use|service)))\b|\b(?:(?:i|we) (?:hereby )?agree|agree to)\b|^agree$|^terms$|\b(?:accept|read) (?:the )?terms\b|\bi have (?:received )?read and (?:understood|understand)\b/u.test(normalized)) {
+  if (options.some(option => /\b(?:i (?:hereby )?(?:agree|consent|acknowledge|confirm|attest|certify)|acknowledge confirm)\b/u.test(normalizeCatalogText(option)))) return "consent";
+  if (/\b(?:i|we) (?:hereby )?(?:confirm|certify|declare|attest|pledge)\b|\b(?:please )?(?:confirm|certify|attest) that\b|\b(?:consent|acknowledge|signature|privacy (?:notice|policy|statement)|terms (?:(?:and )?conditions|of (?:use|service)))\b|\b(?:(?:i|we) (?:hereby )?agree|agree to)\b|^agree$|^terms$|\b(?:accept|read) (?:the )?terms\b|\bi have (?:received )?read and (?:understood|understand)\b/u.test(normalized)) {
     return "consent";
   }
   if (question !== undefined && authorizationQuestionIds.has(question)) {

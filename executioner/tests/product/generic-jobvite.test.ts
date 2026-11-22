@@ -6,6 +6,7 @@ import {join,resolve} from 'node:path';
 import {chromium,type Page} from 'playwright';
 import {proveJobviteResumeInput} from '../../extension/jobvite-resume.js';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {fillApplication} from '../../src/product/engine.ts';
 import {fillGenericApplication} from '../../src/product/generic-application.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 
@@ -35,6 +36,10 @@ test('Jobvite portal transition binds Resume despite duplicate dialog IDs, with 
   const browser=await chromium.launch({headless:true});
   try {for(const form of [true,false]){
     const page=await browser.newPage();await fixture(page,false,form);
+    if (form) {
+      // The live first step has only Next, and its file chooser sits outside the form.
+      await page.getByRole('button',{name:'Submit application'}).evaluate(button => { button.textContent='Next'; });
+    }
     assert.equal(await proof(page),true);assert.deepEqual(await counts(page),[0,0]);
     const result=await fill(page);assert.equal(result.resume,'verified');assert.ok(result.filled.includes('Resume'));
     assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.locator('#file-input-0').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),'%PDF-selected-jobvite-fixture');
@@ -99,6 +104,79 @@ test('queued Jobvite path uses the proof but preserves an existing manual resume
     if(manual)assert.ok(result.skipped.some(item=>item.reason==='existing_attachment_preserved'));
     assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.evaluate('submits'),0);await page.close();
   }}finally {await browser.close();}
+});
+
+test('queued Jobvite advances once from the acknowledged first step and stops before submission', async () => {
+  const browser = await chromium.launch({headless:true});
+  const profile = applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'});
+  const input = {url, profile, resume:Buffer.from(resume.base64,'base64')};
+  try {
+    for (const mode of ['advance','slow','invalid','submit','stall','conflict','rejected','expanded-conflict','twice','ambiguous-disclosure','foreign-disclosure']) {
+      const page = await browser.newPage();
+      await fixture(page,true);
+      await page.evaluate(mode => {
+        const form = document.querySelector('form')!;
+        const article = document.createElement('article');
+        article.setAttribute('ng-controller','JVApply');
+        form.replaceWith(article); article.append(form);
+        form.name='scopeData.applyForm';form.setAttribute('ng-submit','submitApplication()');
+        form.onsubmit = e => {e.preventDefault(); (window as any).submits++;};
+        const first = document.createElement('section');
+        first.setAttribute('ng-form','scopeData.step1'); first.setAttribute('ng-if','showStep(1)');
+        first.append(...form.childNodes); form.append(first);
+        first.querySelector('button[onclick]')!.remove();
+        const trigger=first.querySelector('#resume-trigger')!,owner=trigger.parentElement!;
+        owner.id='attachResume';owner.setAttribute('ng-controller','JVApplyWith');
+        trigger.setAttribute('on-success','sendResume(type, res)');
+        const file=document.querySelector<HTMLInputElement>('#file-input-0')!;
+        file.addEventListener('change',()=>owner.insertAdjacentHTML('beforeend',
+          '<ul><li ng-if="resumeName"><span jv-focus-on="resumeName" ng-click="editOrPreviewResume()">Resume.pdf</span> <a href="" ng-click="removeResume()">Remove</a></li></ul>'));
+        if (mode==='invalid') first.insertAdjacentHTML('beforeend','<input required value="" aria-invalid=true>');
+        if (mode==='conflict') first.querySelector<HTMLInputElement>('[name=first]')!.value='Other';
+        const next=document.createElement('button');
+        next.type=mode==='submit'?'submit':'button';next.textContent='Next';next.setAttribute('ng-click','nextStep()');
+        form.append(next);(window as any).advances=0;(window as any).expands=0;
+        next.onclick=event=>{
+          if (!event.isTrusted) throw new Error('Expected trusted browser input');
+          (window as any).advances++;
+          if (['rejected','expanded-conflict','twice','ambiguous-disclosure','foreign-disclosure'].includes(mode) &&
+              ((window as any).advances===1 || mode==='twice')) {
+            for(const label of first.querySelectorAll('label'))label.hidden=true;
+            const box=document.createElement('div');box.className='jv-apply-form-actions';
+            box.innerHTML='<p class="jv-apply-error"><a href="" ng-click="showAllFields = true">View Full Application Form</a></p>';
+            if(mode==='ambiguous-disclosure')box.firstElementChild!.append(box.querySelector('a')!.cloneNode(true));
+            if(mode==='foreign-disclosure')document.body.append(box);else form.append(box);
+            for(const link of box.querySelectorAll('a'))link.onclick=e=>{
+              e.preventDefault();(window as any).expands++;box.remove();
+              for(const label of first.querySelectorAll('label'))label.hidden=false;
+              if(mode==='expanded-conflict') first.querySelector<HTMLInputElement>('[name=first]')!.value='Other';
+            };
+            return;
+          }
+          if(mode==='stall')return;
+          const showScreening=()=>{
+            first.remove();next.remove();
+            form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
+          };
+          if(mode==='slow') setTimeout(showScreening,4100); else showScreening();
+        };
+      },mode);
+      const inspection=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
+      assert.equal((inspection as {jobviteFirstStep?:boolean}).jobviteFirstStep===true,mode!=='submit');
+      const attempt=()=>fillApplication(page,input,AbortSignal.timeout(25_000),()=>{});
+      const stop = ['advance','slow','rejected'].includes(mode) ? /Jobvite acknowledged the selected resume\. The employer PDF contents remain unverified\. Review the screening step\. C3 stopped before submission\./ :
+        mode==='expanded-conflict' ? /saved profile differs.*C3 clicked Next and opened the full Jobvite form\. Review the first step/ :
+        ['stall','ambiguous-disclosure','foreign-disclosure'].includes(mode) ? /clicked Next once/ :
+        mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /clicked Next, opened the full Jobvite form, checked the required fields and clicked Next again\. Jobvite still requests more information\. Review the first step\. The attached PDF contents remain unverified\./ : /has not advanced/;
+      await assert.rejects(attempt(),stop);
+      if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
+      if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
+      if (mode==='twice') await assert.rejects(attempt(),/has not advanced|stayed on the first step/);
+      const count=['rejected','twice'].includes(mode)?2:['advance','slow','stall','expanded-conflict','ambiguous-disclosure','foreign-disclosure'].includes(mode)?1:0;
+      assert.deepEqual(await page.evaluate('([advances,expands,submits,uploads])'),[count,['rejected','twice','expanded-conflict'].includes(mode)?1:0,0,1]);
+      await page.close();
+    }
+  } finally { await browser.close(); }
 });
 
 test('actual extension page action runs Jobvite proof and shared history in the same isolated world',{timeout:45000},async()=>{

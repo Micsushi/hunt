@@ -53,7 +53,7 @@ import {
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
 import { normalizeCatalogText } from "../../../../form/questions/normalize.ts";
-import { mapVisibleOption } from "../../../../form/options/mapper.ts";
+import { consentOption } from "../../../../form/options/mapper.ts";
 import { employmentQuestion, referralQuestion } from "../../../../form/questions/matching.ts";
 import type { ActiveListboxEvidence } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
@@ -278,6 +278,7 @@ export function createQuestionnairePageHandler(
         const category = protectedQuestionCategory(
           fullQuestion,
           question.kind === "resolved" ? question.id : undefined,
+          field.rawOptions ?? field.options.map(option => option.label),
         );
         const definition = question.kind === "resolved" &&
             field.behavior !== "unsupported"
@@ -306,9 +307,9 @@ export function createQuestionnairePageHandler(
           const decision = isRecruitmentTermsConsent(fullQuestion)
             ? await (dependencies.profileQuery as ApplicationProfileQuery).query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal)
             : undefined;
-          if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && typeof decision.value.value === 'boolean') {
+          if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && decision.value.lane === 'live_owner_fact' && typeof decision.value.value === 'boolean') {
             consentDecision = decision.value.value;
-          } else if (!answerLaneAdmitted(mode, 'synthetic_test_default', request.answerFallbackPolicy)) {
+          } else {
             recordUnset();
             return blocked("protected_answer_denied", field.fieldId, category);
           }
@@ -381,12 +382,12 @@ export function createQuestionnairePageHandler(
           recordUnset();
           return blocked("protected_answer_denied", field.fieldId, category);
         }
-        if (category === "consent" && (!syntheticLearningDefault || consentDecision !== undefined)) {
+        if (category === "consent") {
           const intent = answer.value.intent;
-          const choice = consentDecision === undefined ? undefined : mapVisibleOption(consentDecision, field.options);
+          const choice = consentDecision === undefined ? undefined : consentOption(consentDecision, field.options, field.rawOptions);
           const matches = !syntheticLearningDefault && consentDecision !== undefined && (
             intent.kind === 'toggle' && intent.checked === consentDecision ||
-            intent.kind === 'choice' && choice?.kind === 'matched' && intent.optionId === choice.optionId && intent.expectedOption === choice.expectedOption ||
+            intent.kind === 'choice' && choice !== undefined && intent.optionId === choice.id && intent.expectedOption === choice.label ||
             intent.kind === 'text' && normalizeCatalogText(intent.value) === (consentDecision ? 'yes' : 'no')
           );
           if (!matches) {

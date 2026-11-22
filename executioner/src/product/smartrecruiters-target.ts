@@ -1,6 +1,15 @@
 const jobsHost = "jobs.smartrecruiters.com";
 const postingApi = "https://api.smartrecruiters.com";
-const uuid = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
+/** Only the personal and screening pages identify the same verified OneClick publication. */
+export function smartRecruitersPublication(url:URL) {
+  if (url.origin !== "https://jobs.smartrecruiters.com" || url.username || url.password || url.port) return;
+  const path = url.pathname.replace(/\/$/, "");
+  const screening = path.endsWith("/screening");
+  const base = screening ? path.slice(0, -"/screening".length) : path;
+  const match = /^\/oneclick-ui\/company\/([\w-]+)\/publication\/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.exec(base);
+  if (!match || url.searchParams.getAll("dcr_ci").some(value => value !== match[1])) return;
+  return {base,company:match[1]!,uuid:match[2]!,screening};
+}
 
 function jobUrl(input: string): URL | undefined {
   try {
@@ -20,12 +29,11 @@ export async function verifySmartRecruitersApplication(
   const application = jobUrl(applicationUrl);
   if (!posting || !application) return false;
   const source = /^\/([\w-]+)\/(\d+)(?:-[\w-]+)?\/?$/.exec(posting.pathname);
-  const destination = /^\/oneclick-ui\/company\/([\w-]+)\/publication\/([a-f0-9-]+)\/?$/i.exec(application.pathname);
+  const destination = smartRecruitersPublication(application);
   if (!source || !destination) return false;
   const [, company, id] = source;
-  const [, applicationCompany, applicationUuid] = destination;
-  if (company !== applicationCompany || !uuid.test(applicationUuid!) ||
-      application.searchParams.getAll("dcr_ci").some(value => value !== company)) return false;
+  const {company:applicationCompany,uuid:applicationUuid} = destination;
+  if (company !== applicationCompany) return false;
 
   const timeout = AbortSignal.timeout(5000);
   try {

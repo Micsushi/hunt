@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { fillApplication } from '../../src/product/engine.ts';
 import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
+import type { parseApplicationProfile } from '../../src/profile/application-profile.ts';
+import { matchingContext } from '../../src/product/target.ts';
 import { createPageAnswerPlanner } from '../../src/product/page-answer-planner.ts';
 import { disposeResumeArtifact } from '../../src/contracts/resume-artifact.ts';
 import type { ProfilePagePlan } from '../../src/ats/workday/application/profile/types.ts';
@@ -88,4 +90,58 @@ test('hosted campaign questions fill from saved profile authority and flag requi
       assert.equal(await page.evaluate('window.submitted'),undefined);
     }
   } finally { await browser.close(); }
+});
+
+test('bilingual screening uses Canadian eligibility, separates background consent and preserves the prior-employer choice', async () => {
+  const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/ReitmansCanadaLteLtd/publication/11111111-1111-4111-8111-111111111111/screening';
+  const company = matchingContext(url).company;
+  assert.equal(company, 'ReitmansCanadaLteLtd');
+  const eligible = "Êtes vous présentement admissible à travailler au Canada? | Are you currently eligible to work in Canada?";
+  const available = "Êtes-vous actuellement disponible pour travailler à l’emplacement du poste ? | Are you currently available work at the job location?";
+  const background = "Si vous recevez une offre d'emploi de RCL, vous consentez à respecter le processus de vérification d'emploi et de références. | If advanced to an offer of employment with RCL, you consent to respecting the employment verification and background check process.";
+  const prior = "Avez-vous déjà été employé.e par RCL - Reitmans (Canada) Ltée ou l’une de ses marques (Reitmans, PENN. Penningtons, RW&CO) ? | Have you ever been employed by RCL - Reitmans (Canada) Ltd or any of its brands (Reitmans, PENN. Penningtons, RW&CO)?";
+  const privacy = "You declare that you have read and agree to the privacy notice of Reitmans (Canada) Ltée/Ltd.";
+  const employers = ["Oui, je suis actuellement employé.e chez RCL | Yes, I am currently employed at RCL", "Oui, j’ai déjà été employé.e chez RCL | Yes, I was previously employed at RCL", "Non | No"];
+
+  for (const [granted, willing] of [[true, false], [false, true], [true, undefined]] as const) {
+    const base = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
+      work_authorization_canada:String(granted)}) as {profile:ReturnType<typeof parseApplicationProfile>;profilePlan:ProfilePagePlan};
+    const profile = {...base,profile:{...base.profile,unsetFactIds:base.profile.unsetFactIds.filter(id => id !== 'terms_consent' && (willing === undefined || id !== 'background_check_willing')),facts:[...base.profile.facts,
+      {factId:'terms_consent',value:granted,provenance:'owner_provided',lane:'live_owner_fact'},
+      ...(willing === undefined ? [] : [{factId:'background_check_willing',value:willing,provenance:'owner_provided',lane:'live_owner_fact'}])]}};
+    const sources = productSources(profile, Buffer.from('%PDF-fixture'));
+    try {
+      const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), company);
+      const answer = async (question: string, control: 'radio'|'listbox'|'checkbox', options: string[], required = true) => {
+        const row = {pageId:'screening',fieldId:'q',signature:'fixture',question,options,
+          selected:control==='checkbox'?false:'',required,control,valid:false};
+        return plan(row, [row], AbortSignal.timeout(3000));
+      };
+      for (const [q,expected,lane] of [
+        [eligible,granted ? 'Yes' : 'No','live_owner_fact'],
+        [available,'Yes','synthetic_test_default'],
+        [background,willing === undefined ? null : willing ? 'Yes' : 'No',willing === undefined ? undefined : 'live_owner_fact'],
+      ] as const) {
+        const result = await answer(q, 'radio', ['Yes','No']);
+        assert.deepEqual([result.answer,result.lane], [expected,lane]);
+      }
+      const expectedBackground = willing === undefined ? null : willing ? 'Yes' : 'No';
+      assert.equal((await answer(background.replaceAll('RCL','ABC'),'radio',['Yes','No'])).answer,expectedBackground);
+      assert.equal((await answer(background.replace('de RCL','de XYZ'),'radio',['Yes','No'])).answer,null);
+      assert.equal((await answer(background+' You also authorize a credit report.','radio',['Yes','No'])).answer,null);
+      const filled = {pageId:'screening',fieldId:'q',signature:'fixture',question:background,options:['Yes','No'],
+        selected:'Yes',required:true,control:'radio' as const,valid:true};
+      assert.equal((await plan(filled,[filled],AbortSignal.timeout(3000))).answer,willing === undefined ? null : willing ? 'Yes' : 'No');
+      const history = await answer(prior,'listbox',employers);
+      assert.deepEqual([history.answer,history.provisional],['Non | No',true]);
+      const notice = await answer(privacy,'checkbox',[]);
+      assert.deepEqual([notice.answer,notice.provisional],[granted,false]);
+      for (const [q,required] of [[privacy,false],[privacy.replace('Reitmans','Another Employer'),true],
+        [privacy + ' You also authorize a background check.',true]] as const) {
+        assert.equal((await answer(q,'checkbox',[],required)).answer,null);
+      }
+      const otherCountry = await answer(eligible.replace('Canada?', 'France?'),'radio',['Yes','No']);
+      assert.ok(otherCountry.provisional);
+    } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
+  }
 });
