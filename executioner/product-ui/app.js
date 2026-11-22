@@ -366,6 +366,17 @@ function renderJobs() {
     const actions=document.createElement('div');actions.className='actions';
     const act=action=>api(`jobs/${job.id}/action`,{action});
     if(job.tabId)actions.append(button('Open application',()=>act('open'),job.id));
+    else if(job.currentPageOnly && job.status==='paused' && job.selectedDocument && job.selectedApplicationUrl) {
+      actions.append(button('Open saved application',async()=>{
+        const tab=window.open('about:blank','_blank');
+        if(!tab)throw new Error('Allow a new tab for this workspace or open the posting using its title.');
+        tab.opener=null;
+        try {
+          const verified=await act('open');
+          tab.location.replace(verified.url);
+        } catch(error) {tab.close();throw error;}
+      },job.id));
+    }
     if(['running','queued'].includes(job.status))actions.append(button('Pause',()=>act('pause'),job.id));
     if(!job.currentPageOnly && ['paused','review'].includes(job.status))actions.append(button('Retry',()=>act('retry'),job.id,job.actionPending));
     if(!job.currentPageOnly && job.status==='paused'&&job.profileUpdateAvailable)actions.append(button('Use saved profile',async()=>{

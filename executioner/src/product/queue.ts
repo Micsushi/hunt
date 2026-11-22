@@ -11,6 +11,7 @@ import { disposeResumeArtifact } from "../contracts/index.ts";
 import { AttachmentFailure } from './extension-bridge.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
 
+import { smartRecruitersPublication, verifySmartRecruitersApplication } from './smartrecruiters-target.ts';
 import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
 
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
@@ -245,6 +246,14 @@ export class ApplicationQueue {
     const job = this.jobs.find(j => j.id === id);
     if (!job) throw new Error("Job not found.");
     if (action === "open") {
+      if (!job.tabId && job.status === 'paused' && job.selectedDocument && job.selectedApplicationUrl && productApplicationTarget(job.url).ats === 'generic') {
+        const selected = URL.parse(job.selectedApplicationUrl);
+        const publication = selected && smartRecruitersPublication(selected);
+        if (selected && publication && job.selectedApplicationUrl === selected.origin + selected.pathname + selected.search &&
+            (!selected.search || selected.search === '?dcr_ci=' + publication.company) &&
+            await verifySmartRecruitersApplication(job.url, selected.href)) return {url:selected.href};
+        throw new Error('The saved application link could not be verified. Open the posting using its title.');
+      }
       if (!job.tabId || !this.bridge.focus) throw new Error("The original tab is unavailable. Retry this job to open its saved draft.");
       await this.bridge.focus(job.tabId, job.url); return;
     }
