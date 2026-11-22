@@ -426,6 +426,22 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     });
     };
     let applicationRegions = identifyApplicationRegions(fields);
+    const finalReport = () => {
+      // Read the employer's final action after filling. Never activate it to test readiness.
+      const [form] = applicationRegions;
+      if (applicationRegions.length === 1 && form instanceof HTMLFormElement && form.isConnected) {
+        const submitters = [...form.getRootNode().querySelectorAll('button,input')].filter(e => e.form === form && e.type === 'submit' && visible(e));
+        const [button] = submitters;
+        if (submitters.length === 1 && button.closest('form') === form &&
+            /^(?:apply|submit application|send application)$/i.test((button.innerText || button.value || '').trim()) &&
+            (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
+          // The matched workflow decides completeness from its last observation.
+          if (action==='status' || !matchingRunId) result.incomplete = true;
+          addSkip('Application', 'employer_submission_disabled');
+        }
+      }
+      return result;
+    };
     const { isRequired } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
     });
@@ -464,21 +480,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         try {state.fabricOptions.set(field.element,await fabricMenu(fabric));}
         catch {state.fabricOptions.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}
       }
-      // Read the employer's final action after filling. Never activate it to test readiness.
-      const [form] = applicationRegions;
-      if (applicationRegions.length === 1 && form instanceof HTMLFormElement) {
-        const submitters = [...form.elements].filter(e => e.type === 'submit' && visible(e));
-        const [button] = submitters;
-        if (submitters.length === 1 && form.contains(button) &&
-            /^(?:apply|submit application|send application)$/i.test((button.innerText || button.value || '').trim()) &&
-            (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
-          result.incomplete = true;
-          addSkip('Application', 'employer_submission_disabled');
-        }
-      }
       result.matching=observations();
       if(result.matching.some(row=>row.required && row.reason==='button_choice_interaction_unsupported'))result.incomplete=true;
-      return result;
+      return finalReport();
     }
     const reportMatch = (row, plan, outcome, reason, observedAnswer) => {
       if (!plan && outcome==='observed') result.matching.push({...row,outcome});
@@ -509,7 +513,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (requested.length!==attempted.length || requested.some((byte,index)=>byte!==attempted[index])) {
           result.resume='unverified';
           addSkip('Resume', 'different_resume_requires_manual_review', 'uploads', 'verify_attachment');
-          return result;
+          return finalReport();
         }
         const e=uploadReceipt.element;
         if (!checkedStep && firstStep && uploadReceipt.acknowledgedPanel?.() === firstStep) checkedStep = firstStep;
@@ -540,7 +544,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             const owner=uploadOwner(e),fileSha256=crypto.subtle ? [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(byte=>byte.toString(16).padStart(2,'0')).join('') : null;
             checkDeadline();
             if(!fileBinding(e) || regionFor(e)!==fileRegion || read(e)!==before || owner && (!owner.isConnected || !composedContains(owner, e))) {
-              addSkip(label, 'resume_control_changed', 'uploads', 'verify_attachment');return result;
+              addSkip(label, 'resume_control_changed', 'uploads', 'verify_attachment');return finalReport();
             }
             uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,customUpload,...adapters.clientAttachmentState(owner,fileBinding(e)),
               externalized:false,parserCompleted:false,owner,fileSha256,hadAttachmentId:!!owner && attachmentIds(owner).some(input=>input.value),hadUploadSuccess:!!owner && (uploadSuccess(owner,file.name).length>0 || uploadRemoveControls(owner,file.name).length>0),selectedFileAccepted:false};
@@ -591,7 +595,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (firstStep && state.resumeAttempt?.externalized && !checkedStep) parserPending = true;
     if (parserPending) {
       addSkip('Resume', 'resume_parsing_pending_profile_not_filled', 'uploads', 'verify_attachment');
-      return result;
+      return finalReport();
     }
     fields = collectFields();
     applicationRegions = identifyApplicationRegions(fields);
@@ -1009,7 +1013,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field');
       for (const row of result.matching.filter(row=>row.question===change.label && row.outcome==='verified')) {row.outcome='verification_failed';row.reason='value_changed_after_fill';row.provisional=true;}
     }
-    return result;
+    return finalReport();
   } finally {
     if (checkedStep) for (const change of changes) change.screeningStep = checkedStep;
     if (action === 'fill' && changes.length) { if (matchingRunId && state.matchingRunId===matchingRunId && state.undo.length) state.undo.at(-1).push(...changes); else state.undo.push(changes); state.matchingRunId=matchingRunId; state.undo = state.undo.slice(-10); state.redo = []; }

@@ -10,6 +10,7 @@ export type { PageAnswerPlan, PageQuestion } from './page-answer-planner.ts';
 export interface FrameReport { frameId: string; status: string; error?: string }
 export interface MatchedPageResult {
   frames?: FrameReport[];
+  incomplete?: boolean;
   filled:string[]; skipped:{label:string;reason:string;fieldId?:string;frameId?:string;componentFailure?:ComponentFailure}[]; componentFailure?:ComponentFailure; matching?:PageQuestion[];
   resume?:'verified'|'missing'|'unverified'|'optional'; canUndo:boolean; canRedo:boolean; [key:string]:unknown;
 }
@@ -81,7 +82,10 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
       }
       observeFrames(result);
       result.filled.forEach(label=>filled.add(label));
-      result.skipped.forEach(row=>skipped.set(JSON.stringify(row),row));
+      // A later write can enable Apply. Keep its observed state only on the final fill or status.
+      for (const row of result.skipped) {
+        if (row.reason!=='employer_submission_disabled' || round===4) skipped.set(JSON.stringify(row),row);
+      }
       // A changed observation before any write is recoverable after a fresh plan.
       // Never clear a different field/frame or a post-write failure.
       for(const row of result.matching??[]) if(row.outcome==='verified' &&
