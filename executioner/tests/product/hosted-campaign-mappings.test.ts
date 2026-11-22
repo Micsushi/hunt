@@ -125,6 +125,10 @@ test('bilingual screening uses Canadian eligibility, separates background consen
         const result = await answer(q, 'radio', ['Yes','No']);
         assert.deepEqual([result.answer,result.lane], [expected,lane]);
       }
+      const expectedBackground = willing === undefined ? null : willing ? 'Yes' : 'No';
+      assert.equal((await answer(background.replaceAll('RCL','ABC'),'radio',['Yes','No'])).answer,expectedBackground);
+      assert.equal((await answer(background.replace('de RCL','de XYZ'),'radio',['Yes','No'])).answer,null);
+      assert.equal((await answer(background+' You also authorize a credit report.','radio',['Yes','No'])).answer,null);
       const filled = {pageId:'screening',fieldId:'q',signature:'fixture',question:background,options:['Yes','No'],
         selected:'Yes',required:true,control:'radio' as const,valid:true};
       assert.equal((await plan(filled,[filled],AbortSignal.timeout(3000))).answer,willing === undefined ? null : willing ? 'Yes' : 'No');

@@ -142,11 +142,7 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry("owner-question-overnights-available", ["Are you available to work overnight shifts?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "overnights_available", ownerProvidedOnly: true }),
   aliasEntry("owner-question-vehicle-access", ["Do you have access to a vehicle?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "vehicle_access", ownerProvidedOnly: true }),
   aliasEntry("owner-question-valid-drivers-licence", ["Do you have a valid driver's licence?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "valid_drivers_licence", ownerProvidedOnly: true }),
-  aliasEntry("owner-question-background-check-willing", [
-    "Are you willing to undergo a background check?",
-    "If advanced to an offer of employment with RCL, you consent to respecting the employment verification and background check process.",
-    "Si vous recevez une offre d'emploi de RCL, vous consentez à respecter le processus de vérification d'emploi et de références. | If advanced to an offer of employment with RCL, you consent to respecting the employment verification and background check process.",
-  ], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "background_check_willing", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-background-check-willing", ["Are you willing to undergo a background check?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "background_check_willing", ownerProvidedOnly: true }),
   aliasEntry("owner-question-references-available", ["Are references available upon request?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "references_available", ownerProvidedOnly: true }),
   aliasEntry("owner-question-may-contact-employer", ["May we contact this employer?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "may_contact_employer", ownerProvidedOnly: true }),
   aliasEntry("owner-question-recruiting-texts", ["Would you like to receive recruiting text messages?"], ["radio", "select", "listbox", "checkbox"], { kind: "profile", factId: "recruiting_texts", ownerProvidedOnly: true }),
@@ -427,9 +423,22 @@ export function generatedLearningDefaultFor(
   return generatedLearningDefaults[id as keyof typeof generatedLearningDefaults];
 }
 
+function isOfferStageBackgroundCheck(text: string, employerNames?: readonly string[]): boolean {
+  const parts = text.split('|');
+  if (parts.length > 2) return false;
+  const english = parts[parts.length - 1]!.trim();
+  const employer = /^if advanced to an offer of employment with ([^,|\n]{1,80}),/iu.exec(english)?.[1]?.trim();
+  if (!employer || !(/^[\p{Lu}\d]{2,10}$/u.test(employer) || employerNames?.some(name => sameEmployer(name, employer)))) return false;
+  const name = normalizeCatalogText(employer);
+  if (normalizeCatalogText(english) !== `if advanced to an offer of employment with ${name} you consent to respecting the employment verification and background check process`) return false;
+  return parts.length === 1 || normalizeCatalogText(parts[0]!) ===
+    `si vous recevez une offre d emploi de ${name} vous consentez à respecter le processus de vérification d emploi et de références`;
+}
+
 export function resolveQuestion(text: string, employerNames?: readonly string[]) {
   const exact=resolveCatalogText([...questionCatalog,...questionAliasCatalog],text);
   if(exact.kind!=='unknown') return exact;
+  if (isOfferStageBackgroundCheck(text, employerNames)) return {kind:'resolved' as const, id:'owner-question-background-check-willing' as const, provenance:'reviewed_catalog' as const};
   const sourceEmployer = /^how did you hear about (.+)$/u.exec(normalizeCatalogText(text))?.[1];
   if (sourceEmployer && employerNames !== undefined &&
       !/^(?:(?:the|this|our) (?:company|organization|job|position|opening|opportunity|role|job posting|job opening)|us)$/u.test(sourceEmployer) &&
