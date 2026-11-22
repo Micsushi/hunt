@@ -163,6 +163,7 @@ export interface PendingProfileQuestionsEvidenceV1 {
 }
 
 export interface QuestionAnswerLearningCapture {
+  recordSalaryAmount?(input: { pageId: string; field: FieldObservation; amount: string }): void;
   recordPendingProfile?(input: PendingProfileQuestionV1): void;
   recordAttempt(input: {
     readonly pageId?: string;

@@ -39,6 +39,7 @@ import {
   contractApprovedPrivacyChoices,
   isApplicationAccuracyDeclaration,
   isCriminalConvictionDisclosure,
+  isEmployeeRelationshipDetail,
   isRecruitmentTermsConsent,
   isAiEvaluationConsent,
   isAiConsentControl,
@@ -475,6 +476,12 @@ export function createApplicationAnswerResolver(
         return unsupported(field);
       }
 
+      if (!syntheticMode && isEmployeeRelationshipDetail(questionText)) {
+        if (field.state === "populated" && hasSafeCommittedValue(field, request.committedReadback)) {
+          return success({kind: "readback_only", fieldId: field.fieldId});
+        }
+        return failure("protected_answer_denied");
+      }
       // The saved profile has no conviction-history fact. Existing answers still need owner review.
       if (isCriminalConvictionDisclosure(questionText) || isApplicationAccuracyDeclaration(questionText)) {
         return failure("protected_answer_denied");

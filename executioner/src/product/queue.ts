@@ -1,3 +1,4 @@
+import { salaryUnitsNotice } from "./application-contract.ts";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -462,6 +463,7 @@ export class ApplicationQueue {
       controller.signal.throwIfAborted();
       job.status = "review";
       job.stage = result.needsOwnerReview ? "Owner review needed: suggested or unverified answers. Check every answer in the draft." : "Ready to review";
+      if (result.salaryUnitsNeedReview) job.stage += " " + salaryUnitsNotice;
       job.stage = reviewStage(job.stage, result.resumeFilenameOnly);
       job.resumeExpected = job.resumeExpected === true || result.resumeExpected;
       job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error; delete job.componentFailure;

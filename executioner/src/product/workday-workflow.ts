@@ -11,7 +11,7 @@ import { runApplicationPageWalk, type ApplicationWalkDependencies, type Applicat
 import { productSources, productQuestionLearning } from "./sources.ts";
 import { join } from "node:path";
 import { applicationTarget } from "./target.ts";
-import { ApplicationPause, type ProductInput } from './application-contract.ts';
+import { ApplicationPause, salaryUnitsNotice, type ProductInput } from './application-contract.ts';
 import { enterApplication } from './application-authentication.ts';
 import { verifyPreparedReview } from './application-review.ts';
 import { componentFailure, recordComponentFailure } from './component-diagnostics.ts';
@@ -20,7 +20,7 @@ import { walkFailureComponent, operationComponent } from './walk-failure-compone
 const id = () => randomBytes(16).toString("hex");
 
 export async function fillApplicationAttempt(page: Page, input: ProductInput, signal: AbortSignal,
-  progress: (stage: string) => void, assertTarget: () => void): Promise<{ reviewDigest: string; completedPages: number; needsOwnerReview?: boolean }> {
+  progress: (stage: string) => void, assertTarget: () => void): Promise<{ reviewDigest: string; completedPages: number; needsOwnerReview?: boolean; salaryUnitsNeedReview?: boolean }> {
   const target = applicationTarget(input.url);
   progress("Signing in");
   try {
@@ -112,6 +112,8 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
         throw pause;
       }
 
+      if (diagnostics.failureCode === 'employee_relationship_needs_review') throw new ApplicationPause("Complete the question about your relationship to an employee on the employer page, then retry.");
+      if (diagnostics.failureCode === 'salary_readback_needs_review') throw new ApplicationPause("Check the salary on the employer page. C3 could not confirm that the retained value matches your saved compensation.");
       if (diagnostics.failureCode === 'questionnaire_attachment_needs_review') throw new ApplicationPause('A required attachment needs your review. Check the requested document and the attached file on the employer page before continuing.');
       if ((diagnostics.failureCode ?? result.error.failure.code) === 'profile_row_unverified') throw new ApplicationPause('Profile history could not be verified against your saved details. Review the existing entries in the tab; C3 has preserved rows it does not own.');
       if ((diagnostics.failureCode ?? result.error.failure.code)==="protected_answer_denied") throw new ApplicationPause("This application requires your decision. Complete the question on the employer page, then retry.");
@@ -119,7 +121,7 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
     }
     diagnostics.failureBoundary = { component: 'review', operation: 'verify_prepared_review' };
     const review = await verifyPreparedReview(page, signal, assertTarget, operation, continuingSavedDraft, diagnostics.reviewIssues, diagnostics.recordDiagnostic);
-    return { ...review, completedPages: result.value.pageChecks.length, needsOwnerReview: review.needsOwnerReview || learning.needsOwnerReview };
+    return { ...review, salaryUnitsNeedReview: learning.salaryUnitsNeedReview, completedPages: result.value.pageChecks.length, needsOwnerReview: review.needsOwnerReview || learning.needsOwnerReview };
   } catch (error) {
     diagnostics.failureBoundary = componentFailure(error) ?? diagnostics.failureBoundary ?? { component: 'workflow', operation: diagnostics.activeOperation ?? 'walk' };
     recordComponentFailure(error, diagnostics.failureBoundary.component, diagnostics.failureBoundary.operation);
@@ -132,6 +134,11 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
       const wrapped = new ApplicationPause(`Application paused: ${diagnostics.failureCode}${diagnostics.failureField ? ` (${diagnostics.failureField})` : ""}. Review the tab before retrying.`);
       recordComponentFailure(wrapped, diagnostics.failureBoundary.component, diagnostics.failureBoundary.operation);
       throw wrapped;
+    }
+    if (learning.salaryUnitsNeedReview) {
+      const paused = new ApplicationPause(`${error instanceof ApplicationPause ? error.message : "Inspect the current employer page before retrying."} ${salaryUnitsNotice}`);
+      recordComponentFailure(paused, diagnostics.failureBoundary.component, diagnostics.failureBoundary.operation);
+      throw paused;
     }
     throw error;
   } finally {

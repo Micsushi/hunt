@@ -13,7 +13,7 @@ export { restoreSavedReview, reviewDigest, reviewSnapshot } from './application-
 export { submitReviewedApplication } from './application-submission.ts';
 
 export async function fillApplication(page: Page, input: ProductInput, signal: AbortSignal,
-  progress: (stage: string) => void): Promise<{ reviewDigest: string; completedPages: number; needsOwnerReview?: boolean; resumeExpected?: boolean; resumeFilenameOnly?: boolean }> {
+  progress: (stage: string) => void): Promise<{ reviewDigest: string; completedPages: number; needsOwnerReview?: boolean; salaryUnitsNeedReview?: boolean; resumeExpected?: boolean; resumeFilenameOnly?: boolean }> {
   if ((input.profile as {profilePlan?:{mode?:unknown}} | null)?.profilePlan?.mode === 'synthetic_test_non_submittable') {
     throw new ApplicationPause('This is a synthetic test profile. Choose your saved personal profile before running a real application.');
   }

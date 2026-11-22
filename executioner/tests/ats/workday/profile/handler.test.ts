@@ -65,7 +65,7 @@ const control = (
   readback,
 });
 
-test("optional multi-selects preserve both blank and resume-populated values", async () => {
+test("profile reconciliation preserves optional values and reads choices revealed on resume", async () => {
   const page = new MemoryProfilePage({
     pageType: "profile",
     controls: [
@@ -88,6 +88,20 @@ test("optional multi-selects preserve both blank and resume-populated values", a
   assert.deepEqual(result.verifiedFields, []);
   assert.equal(page.commits.length, 0);
   assert.equal(page.snapshot.controls[1]!.readback, '["Python"]');
+
+  const phone = { ...control("phone.device_type", "search_select", "Mobile"), allowedOptions: ["Mobile"] };
+  const resumed = new MemoryProfilePage({pageType:"profile", controls:[phone], rows:[]});
+  let firstRead = true;
+  resumed.inspect = async () => {
+    if (!firstRead) return resumed.snapshot;
+    firstRead = false;
+    return {...resumed.snapshot, controls:[]};
+  };
+  const continuation = await completeWorkdayProfilePage({mode:"live", pageType:"profile", fields:[], repeatables:[]},
+    resumed, AbortSignal.any([]), "deterministic_site_valid_editable");
+  assert.equal(continuation.kind, "verified");
+  assert.deepEqual(resumed.commits.map(commit => commit.value), ["Mobile"]);
+  assert.equal(resumed.snapshot.controls[0]?.readback, "Mobile");
 });
 
 test("binds heterogeneous rows but stops for unmatched foreign history", async () => {

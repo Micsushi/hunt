@@ -97,7 +97,9 @@ function request(fields: readonly FieldObservation[]) {
 }
 
 function dependencies(options: {
-  readonly profile?: ProfileQuery;
+  readonly profile?: QuestionnairePageHandlerDependencies["profileQuery"];
+  readonly readSalaryText?: QuestionnairePageHandlerDependencies["readSalaryText"];
+  readonly recordSalaryAmount?: QuestionnairePageHandlerDependencies["recordSalaryAmount"];
     readonly resolver?: ApplicationAnswerResolver;
   readonly driver?: FieldDriver;
   readonly verifier?: FieldVerifier;
@@ -110,8 +112,8 @@ function dependencies(options: {
 } = {}) {
   const calls = { resolved: 0, driven: 0, verified: 0 };
   let operation = 0;
-  const profile: ProfileQuery = options.profile ?? {
-    async query(input) {
+  const defaultProfile: ProfileQuery = {
+    async query(input: Parameters<ProfileQuery["query"]>[0]) {
       const values = {
         work_authorization: false,
         country: "United States",
@@ -159,7 +161,9 @@ function dependencies(options: {
   return {
     calls,
     handler: createQuestionnairePageHandler({
-      profileQuery: profile,
+      profileQuery: options.profile ?? defaultProfile,
+      readSalaryText: options.readSalaryText,
+      recordSalaryAmount: options.recordSalaryAmount,
       answerResolver: options.resolver,
       driver,
       verifier,
@@ -186,6 +190,39 @@ function dependencies(options: {
 }
 
 test("an injected owner answer can resolve an observed unknown question", async () => {
+  for (const [state, current, formatted, numeric, prompt, expected] of [
+    ["empty", "65000", "CAD $65,000 per year", 65000, "What are your salary expectations ?*", "amount"],
+    ["populated", "65000", "CAD $65,000 per year", 65000, "What are your salary expectations ?*", "amount"],
+    ["empty", "65001", "CAD $65,000 per year", 65000, "Salary expectations", "blocked"],
+    ["populated", "65000", "CAD $65,000 per year", 70000, "Salary expectations", "blocked"],
+    ["populated", "65000", "CAD $60,000 to $65,000 per year", 65000, "Salary expectations", "blocked"],
+    ["populated", "65000", "CAD $65,000 per year", 65000, "What salary range are you targeting?", "blocked"],
+    ["populated", "65000", "CAD $65,000 per year", 65000, "Desired salary in USD per hour", "blocked"],
+  ] as const) {
+    const amounts: string[] = [];
+    const savedProfile: import("../../../../src/form/answers/application-types.ts").ApplicationProfileQuery = {
+      async query({factId}) {return {ok:true,value:{kind:"answered",provenance:"owner_provided",
+        lane:"live_owner_fact",value:factId === "desired_salary" ? numeric : formatted}};},
+    };
+    const {handler, calls} = dependencies({profile: savedProfile,
+      readSalaryText:async () => current,recordSalaryAmount:({amount}) => amounts.push(amount),
+      verifier:{async verify({intent}) { return {ok:true,value:{kind:"rejected",fieldId:intent.fieldId,reason:"mismatch"}}; }},
+    });
+    const result = await handler.complete(request([{...field("salary",prompt,"text"),state}]),new AbortController().signal);
+    assert.equal(result.ok && result.value.kind, expected === "amount" ? "verified" : "blocked", prompt);
+    assert.equal(calls.driven,state === "empty" ? 1 : 0);
+    assert.deepEqual(amounts,expected === "amount" ? ["65000"] : []);
+    if (result.ok && result.value.kind === "blocked") assert.equal(result.value.code, "salary_readback_needs_review");
+    if (result.ok && result.value.kind === "verified") assert.equal(result.value.answers.length,1);
+  }
+  const relationship = field("employee-relationship",
+    "If you were not referred by an employee, but know someone who works here, please specify your relationship to that employee. If you do not know anyone here, please input Not Applicable.", "textarea");
+  for (const answerFallbackPolicy of ["owner_facts_only","deterministic_site_valid_editable"] as const) {
+    const {handler,calls} = dependencies();
+    const stop = await handler.complete({...request([relationship]),answerFallbackPolicy},new AbortController().signal);
+    assert.equal(stop.ok && stop.value.kind === "blocked" && stop.value.code, "employee_relationship_needs_review");
+    assert.equal(calls.driven,0);
+  }
   const consent = field("s2-field-custom", "Custom recruiter question", "text");
   const resolver: ApplicationAnswerResolver = {
     async resolve(input) {

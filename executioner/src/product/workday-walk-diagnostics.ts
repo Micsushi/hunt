@@ -85,6 +85,9 @@ export class WorkdayWalkDiagnostics {
       mkdirSync(this.learningRoot,{recursive:true});
       writeFileSync(join(this.learningRoot,'page-observations.json'),JSON.stringify(this.observations));
     }
+    if (event === 'questionnaire_reconciliation_blocked' && detail && 'code' in detail && (detail.code === 'salary_readback_needs_review' || detail.code === 'employee_relationship_needs_review')) {
+      this.failureCode = detail.code;
+    }
     if (event === 'questionnaire_reconciliation_blocked' && detail && 'uiBehavior' in detail &&
         detail.uiBehavior === 'file_upload' && 'code' in detail && (detail.code === 'unsupported' || detail.code === 'verification_unavailable')) {
       this.failureCode = 'questionnaire_attachment_needs_review';

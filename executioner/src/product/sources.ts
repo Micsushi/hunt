@@ -212,7 +212,7 @@ export function productQuestionLearning(root: string | undefined, sources: Stage
     executionPolicy: sources.executionPolicy, sensitiveValues: sources.sensitiveValues });
   let observed = false, pending = false, failed = false;
   const recordBacklog=(value:MatchingObservation)=>{try {backlog.record(value);} catch {failed=true;}};
-  const observation=(value:Parameters<QuestionAnswerLearningCapture['recordObserved']>[0]):MatchingObservation=>({
+  const observation=(value:Pick<Parameters<QuestionAnswerLearningCapture['recordObserved']>[0], 'field' | 'pageId'>):MatchingObservation=>({
     pageId:value.pageId??'questionnaire',fieldId:value.field.fieldId,question:value.field.rawQuestion ?? value.field.label,
     control:value.field.behavior,options:value.field.rawOptions ?? value.field.options.map(option=>option.label),required:value.field.required,
     constraints:'constraints' in value.field?value.field.constraints:undefined,outcome:'observed'});
@@ -229,7 +229,13 @@ export function productQuestionLearning(root: string | undefined, sources: Stage
     recordBacklog(observation(value));
     try { capture?.recordObserved(value); } catch { failed = true; }
   };
+  let salaryUnitsNeedReview = false;
   const sink: QuestionAnswerLearningCapture = {
+    recordSalaryAmount(value) {
+      salaryUnitsNeedReview = true;
+      recordBacklog({...observation(value),
+        chosenAnswer:value.amount,observedAnswer:value.amount,provisional:true,outcome:"unconfirmed",reason:"salary_units_need_review"});
+    },
     recordObserved,
     recordUnset: recordObserved,
     recordAttempt(value) {
@@ -258,7 +264,7 @@ export function productQuestionLearning(root: string | undefined, sources: Stage
     // until the engine's finally block, including later pages and recovery paths.
     write: () => null,
   };
-  return { sink, get needsOwnerReview() { return backlog.needsReview || [...reviewNeeded.values()].some(Boolean); }, finish() {
+  return { sink, get salaryUnitsNeedReview() { return salaryUnitsNeedReview; }, get needsOwnerReview() { return backlog.needsReview || [...reviewNeeded.values()].some(Boolean); }, finish() {
     if (root === undefined || capture === undefined || !observed && !pending && !failed) return;
     try {
       mkdirSync(root, { recursive: true, mode: 0o700 });

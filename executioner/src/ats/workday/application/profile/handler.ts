@@ -140,6 +140,22 @@ export async function completeWorkdayProfilePage(
       profileInspectionDiagnostic: observed.profileInspectionDiagnostic,
     });
   }
+  const first = await reconcileObservedProfile(plan, page, signal, answerFallbackPolicy, observed.snapshot);
+  if (first.kind !== "blocked" || first.code !== "profile_answer_missing" || !first.fieldId ||
+      answerFallbackPolicy !== "deterministic_site_valid_editable" ||
+      observed.snapshot.controls.some(control => control.fieldId === first.fieldId)) return first;
+  // Resumed forms can reveal a required scalar after the first plan was built.
+  // Reconcile once from its current value using the same answer and verification policy.
+  const refreshed = await inspect(page, signal);
+  if (!refreshed.snapshot || refreshed.metadataReconciliationFailure ||
+      !refreshed.snapshot.controls.some(control => control.fieldId === first.fieldId && control.required)) return first;
+  return reconcileObservedProfile(plan, page, signal, answerFallbackPolicy, refreshed.snapshot);
+}
+
+async function reconcileObservedProfile(
+  plan: ProfilePagePlan, page: WorkdayProfilePagePort, signal: AbortSignal,
+  answerFallbackPolicy: AnswerFallbackPolicy, initialSnapshot: ProfilePageSnapshot,
+): Promise<ProfilePageCompletionResult> {
   const syntheticFallbacks = new Map<string, ProfileFieldPlan>();
   const syntheticRows = new Map<string, string>();
   const fallbackEnabled = answerFallbackPolicy === "deterministic_site_valid_editable";
@@ -147,12 +163,12 @@ export async function completeWorkdayProfilePage(
     ? Object.freeze({ ...plan, mode: "synthetic_test_non_submittable" as const })
     : plan;
   const preparedPlan = fallbackEnabled
-    ? withSupportedSyntheticUnknowns(executionPlan, observed.snapshot, syntheticFallbacks, syntheticRows)
+    ? withSupportedSyntheticUnknowns(executionPlan, initialSnapshot, syntheticFallbacks, syntheticRows)
     : executionPlan;
   registerGeneratedFields(plan, preparedPlan, page);
-  const preflight = validatePlan(preparedPlan) ?? preflightSnapshot(preparedPlan, observed.snapshot);
+  const preflight = validatePlan(preparedPlan) ?? preflightSnapshot(preparedPlan, initialSnapshot);
   if (preflight !== undefined) return preflight;
-  let snapshot = observed.snapshot;
+  let snapshot = initialSnapshot;
   let effectivePlan = routeSiteAnswers(preparedPlan, snapshot);
   const routedPreflight = validatePlan(effectivePlan) ??
     preflightSnapshot(effectivePlan, snapshot);

@@ -101,6 +101,15 @@ const legalQuestionIds = new Set<CanonicalQuestionId>([
   "workday-question-employment-agreement",
 ]);
 
+/** A referral decision says nothing about who the applicant knows at the employer. */
+export function isEmployeeRelationshipDetail(label: string): boolean {
+  const text = normalizeCatalogText(label);
+  const employee = /\b(?:employees?|associates?|staff|someone who works)\b/u.test(text);
+  if (!employee) return false;
+  return /\b(?:your|the) relationship (?:to|with)\b/u.test(text) ||
+    /\b(?:name|email|contact details)\b/u.test(text) && /\b(?:referred|referrer|referral|recommended)\b/u.test(text);
+}
+
 export function protectedQuestionCategory(
   label: string,
   question: CanonicalQuestionId | undefined,

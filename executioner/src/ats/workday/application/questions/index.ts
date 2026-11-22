@@ -50,6 +50,7 @@ import {
 } from "../../../../form/answers/testing-policy.ts";
 import {
   questionForField,
+  inspectQuestionMatch,
   resolveQuestion,
 } from "../../../../form/questions/catalog.ts";
 import { normalizeCatalogText } from "../../../../form/questions/normalize.ts";
@@ -59,6 +60,7 @@ import type { ActiveListboxEvidence } from "./active-listbox.ts";
 import type { ConfiguredNarrativeProvider } from "./narrative.ts";
 import {
   isRecruitmentTermsConsent,
+  isEmployeeRelationshipDetail,
   protectedAnswerProvenanceAllowed,
   isAiEvaluationConsent,
   isAiConsentControl,
@@ -132,6 +134,8 @@ export type QuestionnaireStopCode =
   | "option_no_match"
   | "profile_answer_missing"
   | "protected_answer_denied"
+  | "employee_relationship_needs_review"
+  | "salary_readback_needs_review"
   | "question_ambiguous"
   | "question_unknown"
   | "unsupported"
@@ -189,6 +193,8 @@ export interface QuestionnairePageHandlerDependencies {
     layer: ClassificationLayer,
   ): SanitizedStructuralObservationV1 | undefined;
   readonly fieldPresent?: (field: FieldObservation, signal: AbortSignal) => Promise<boolean>;
+  readonly readSalaryText?: (field: FieldObservation, signal: AbortSignal) => Promise<string | undefined>;
+  readonly recordSalaryAmount?: (input: { field: FieldObservation; amount: string }) => void;
   readonly previouslyVerified?: (input: {
     readonly pageId: BrowserPageId;
     readonly field: FieldObservation;
@@ -321,6 +327,44 @@ export function createQuestionnairePageHandler(
             return blocked("protected_answer_denied", field.fieldId, category);
           }
         }
+        const salaryText = mode === "live" && question.kind === "resolved" &&
+          question.id === "workday-question-desired-salary" && field.behavior === "text";
+        const reconcileSalary = async (expectedText?: string) => {
+          const current = await dependencies.readSalaryText?.(field, signal);
+          if (!current) return "different";
+          const query = (factId: "desired_salary" | "salary_expectations") =>
+            (dependencies.profileQuery as ApplicationProfileQuery).query({
+              profileId: request.profileId, profileRevision: request.profileRevision, factId,
+            }, signal);
+          const saved = await query("salary_expectations");
+          if (!saved.ok || saved.value.kind !== "answered" || saved.value.provenance !== "owner_provided" ||
+              saved.value.lane !== "live_owner_fact" || typeof saved.value.value !== "string" ||
+              (expectedText !== undefined && saved.value.value !== expectedText)) return "different";
+          if (current === saved.value.value) return "full";
+          // Only a catalogued, unit-neutral single amount can survive loss of currency and period.
+          const label = normalizeCatalogText(fullQuestion);
+          if (/\brange\b/u.test(label) || inspectQuestionMatch(fullQuestion).method !== "exact") return "different";
+          const amount = /^(?:CAD|USD)\s*\$?\s*(\d+|\d{1,3}(?:,\d{3})+)\s+per (?:year|hour)$/iu.exec(saved.value.value.trim())?.[1]?.replaceAll(",", "");
+          if (!amount || current !== amount) return "different";
+          const numeric = await query("desired_salary");
+          if (!numeric.ok || numeric.value.kind !== "answered" || numeric.value.provenance !== "owner_provided" ||
+              numeric.value.lane !== "live_owner_fact" || !Number.isSafeInteger(numeric.value.value) ||
+              String(numeric.value.value) !== amount) return "different";
+          dependencies.recordSalaryAmount?.({field, amount});
+          await dependencies.recordVerified?.({pageId: request.pageId, field, intent: {
+            kind: "text", behavior: "text", fieldId: field.fieldId, target: field.target,
+            value: amount, provenance: "owner_provided",
+          }});
+          answers.push({pageId: request.pageId, fieldId: field.fieldId, questionId: resolvedQuestionId,
+            provenance: "owner_provided", lane: "live_owner_fact", protectedCategory: category,
+            templateRevision: null, verification: "independent"});
+          return "amount";
+        };
+        if (salaryText && field.state === "populated" && dependencies.readSalaryText) {
+          const retained = await reconcileSalary();
+          if (retained === "different") return blocked("salary_readback_needs_review", field.fieldId, category);
+          if (retained === "amount") continue;
+        }
         const answer = await resolver.resolve({
           mode,
           answerFallbackPolicy: request.answerFallbackPolicy,
@@ -332,6 +376,9 @@ export function createQuestionnairePageHandler(
         }, signal);
         if (!answer.ok) {
           recordUnset();
+          if (answer.error.code === "protected_answer_denied" && isEmployeeRelationshipDetail(fullQuestion)) {
+            return blocked("employee_relationship_needs_review", field.fieldId, category);
+          }
           if (
             answer.error.code === "question_unknown" ||
             answer.error.code === "question_ambiguous" ||
@@ -486,6 +533,7 @@ export function createQuestionnairePageHandler(
         const generatedDefault = question.kind !== "resolved" ||
           answer.value.intent.provenance === "reviewed_catalog" ||
           answer.value.intent.provenance === "visible_option";
+        let amountOnly = false;
         for (let textAttempt = 0; textAttempt < 2; textAttempt += 1) {
           if (textAttempt > 0) operationId = dependencies.nextOperationId();
           dependencies.recordAttempt?.({
@@ -535,6 +583,14 @@ export function createQuestionnairePageHandler(
             intent: answer.value.intent,
             receipt,
           }, signal);
+          if (salaryText && dependencies.readSalaryText && answer.value.intent.kind === "text" &&
+              answer.value.intent.provenance === "owner_provided" && answer.value.lane === "live_owner_fact" &&
+              verified.ok && verified.value.kind === "rejected" && verified.value.reason === "mismatch") {
+            const retained = await reconcileSalary(answer.value.intent.value);
+            if (retained !== "amount") return blocked("salary_readback_needs_review", field.fieldId, category);
+            amountOnly = true;
+            break;
+          }
           if (!verified.ok) {
             if (!driven.ok) {
               dependencies.recordFailure?.({
@@ -587,6 +643,7 @@ export function createQuestionnairePageHandler(
           break;
         }
 
+        if (amountOnly) continue;
         dependencies.recordAnswer?.({
           operationId,
           questionId: resolvedQuestionId,

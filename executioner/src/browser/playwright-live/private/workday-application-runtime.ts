@@ -1541,6 +1541,17 @@ export class OwnedWorkdayApplicationRuntime {
           await bindQuestionnaireTargets(page, input.pageId);
           return questionnaireTargetPresent(page, field.target);
         },
+        readSalaryText: async (field, currentSignal) => {
+          this.#assertAuthorized(currentSignal);
+          const control = page.locator(`[data-hunt-target-token="${field.target}"]`);
+          if (await control.count() !== 1 || !await control.isVisible()) return undefined;
+          return control.evaluate(node => node instanceof HTMLInputElement && node.type === "text" &&
+            node.validity.valid && !node.closest('[aria-invalid="true"]') &&
+            (node.minLength < 0 || node.value.length >= node.minLength) &&
+            (node.maxLength < 0 || node.value.length <= node.maxLength) ? node.value : undefined);
+        },
+        recordSalaryAmount: ({field, amount}) =>
+          questionLearning?.recordSalaryAmount?.({pageId: input.pageId, field, amount}),
         previouslyVerified: async ({ pageId, field, intent }) => {
           const prior = this.#verifiedQuestionnaireIntents.get(
             questionnaireIntentKey(pageId, field.fieldId),

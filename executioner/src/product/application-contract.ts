@@ -27,5 +27,6 @@ export interface ProductInput {
   resumeUpload?: ResumeUploadReceipt;
   onResumeUpload?: (receipt: ResumeUploadReceipt | undefined) => void;
 }
+export const salaryUnitsNotice = "The employer kept only the salary amount. Check the currency and pay period.";
 export class ApplicationPause extends Error {}
 export class AttachmentPreviewUnavailable extends ApplicationPause {}
