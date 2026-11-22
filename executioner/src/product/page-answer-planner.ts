@@ -144,9 +144,15 @@ export function createPageAnswerPlanner(
       }
       // Canadian postal codes may omit the internal space. A city or partial code does not establish the postal selection.
       const postalKey = (value:string) => value.trim().toUpperCase().replace(/^([A-Z]\d[A-Z]) (\d[A-Z]\d)$/, '$1$2');
+      if (populated) {
+        if (row.valid && typeof row.selected === 'string' && postalKey(row.selected) === postalKey(postal)) {
+          return {...binding, answer:row.selected, provisional:false, reason:'profile_answer', lane:'profile_fact'};
+        }
+        return {...binding, answer:null, provisional:true, reason:'postal_code_requires_review'};
+      }
       const matching = row.options.filter(option => postalKey(option) === postalKey(postal));
       if (matching.length === 1) return {...binding, answer:matching[0]!, provisional:false, reason:'profile_answer', lane:'profile_fact'};
-      if (row.queryable && !populated && !row.searchQuery && !matching.length) {
+      if (row.queryable && !row.searchQuery && !matching.length) {
         return {...binding, answer:null, query:postal, provisional:false, reason:'choice_options_query', lane:'profile_fact'};
       }
       return {...binding, answer:null, provisional:true, reason:'postal_code_requires_review'};

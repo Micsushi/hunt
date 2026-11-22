@@ -15,15 +15,17 @@ test('a postal dropdown selects only a unique match for the saved code', async (
   const sources = productSources(profile, Buffer.from('%PDF-fixture'));
   try {
     const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), 'Fixture');
-    const propose = (options: string[]) => {
+    const propose = (options: string[], selected = '') => {
       const row = {pageId:'page',fieldId:'postal',signature:'postal',question:'Postal code / zip code*',
-        required:true,control:'listbox',selected:'',valid:false,queryable:true,options};
+        required:true,control:'listbox',selected,valid:Boolean(selected),queryable:true,options};
       return plan(row, [row], AbortSignal.timeout(5000));
     };
     assert.equal((await propose([])).query, 'K1A 0B1');
     assert.equal((await propose(['K1A0B2','K1A0B1'])).answer, 'K1A0B1');
     assert.equal((await propose(['K1A0B1','K1A 0B1'])).answer, null);
     assert.equal((await propose(['K1A0B2'])).answer, null);
+    assert.equal((await propose(['K1A0B1'], 'K1A 0B2')).answer, null);
+    assert.equal((await propose([], 'K1A0B1')).answer, 'K1A0B1');
   } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
 });
 
