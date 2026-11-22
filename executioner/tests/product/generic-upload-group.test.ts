@@ -80,7 +80,7 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
       await backing.evaluate((node:HTMLInputElement,value)=>{node.value=value;},id);
       const report=await status();
       assert.equal(report.incomplete,true,caption);
-      assert.ok(report.skipped.some(row=>row.label==='Cover Letter' && row.reason==='required_attachment_unconfirmed'),caption);
+      assert.ok(report.skipped.some(row=>row.label==='Cover Letter' && row.reason==='required_attachment_missing'),caption);
     }
     await page.locator('#cover').evaluate((node:HTMLElement)=>{node.hidden=true;});
     assert.deepEqual(unresolved(await status()),[],'a hidden widget with a custom button is inactive');
@@ -118,6 +118,8 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     assert.deepEqual(await bytes(page,'resume'),[]);
     const extra=page.locator('#extra');
     await extra.evaluate((e:HTMLInputElement)=>{e.required=false;});
+    assert.deepEqual(unresolved(await status()),['Cover Letter'],'the Bamboo heading still marks this document required');
+    await page.locator('#cover > p').evaluate(node=>{node.textContent='Cover Letter';});
     assert.deepEqual(unresolved(await status()),[]);
     await extra.evaluate((e:HTMLInputElement)=>{e.required=true;});
     await page.locator('#cover button').evaluate((e:HTMLButtonElement)=>{e.disabled=true;});
@@ -144,6 +146,19 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     assert.deepEqual(unresolved(await status()),['Cover Letter'],'a hidden success template cannot complete the upload');
     await page.locator('#cover').evaluate(e=>e.outerHTML='<label for="direct-file">Cover Letter</label><input id="direct-file" required type="file">');
     assert.deepEqual(unresolved(await status()),['Cover Letter'],'the form can directly own a labelled picker');
+    await page.locator('#direct-file').evaluate(e=>e.remove());
+    const application=page.locator('form').first();
+    await application.evaluate(form=>form.insertAdjacentHTML('beforeend',`
+      <div id="js-file"><div class="file-title">Cover Letter<span>*</span></div><a href="#" onclick="return false">Choose File</a><input type="file" hidden></div>
+      <div id="drop"><h3>Academic Transcript</h3><div>Drop here</div><input aria-required="true" type="file" hidden></div>
+      <div><p>Portfolio</p><button type="button">Choose File*</button><input type="file" hidden></div>
+      <div><div><span>Certificate</span><span>Choose File*</span></div><input type="file" hidden></div>
+      <div hidden><p>Photo*</p><div>Drop here</div><input type="file" hidden></div>`));
+    assert.deepEqual(unresolved(await status()),['Cover Letter','Academic Transcript'],'owned visible file fields are required independently of the upload mechanism');
+    await page.locator('#js-file .file-title').evaluate(node=>{node.textContent='Cover Letter';});
+    assert.deepEqual(unresolved(await status()),['Academic Transcript'],'an adjacent required field cannot make this cover letter mandatory');
+    await page.locator('#drop input').evaluate(e=>e.removeAttribute('aria-required'));
+    assert.deepEqual(unresolved(await status()),[]);
     assert.equal(await page.evaluate('submits'),0);
 
   }finally{await browser.close();}

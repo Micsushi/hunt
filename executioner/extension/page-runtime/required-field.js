@@ -41,22 +41,49 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
   };
   // Observe extra documents without opening a chooser or touching their files.
   const unresolvedAttachment = input => {
-    if (!input.willValidate || (!input.required && input.getAttribute('aria-required')!=='true') ||
+    if (!input.willValidate ||
         composedClosest(input, '[inert],[aria-disabled=true]') || composedClosest(composedParent(input),'[hidden],[aria-hidden=true]')) return;
     const shown = node => node.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
       !composedClosest(node,'[hidden],[inert],[aria-hidden=true]');
     const ownLabel=rawLabelFor(input);
     let label=otherAttachment(ownLabel) ? ownLabel : '';
     let owner=input;
+    let required=input.required || input.getAttribute('aria-required')==='true';
     const region=regionFor(input);
     for (let group=composedParent(input); group && group!==region && !group.matches('form,body,html'); group=composedParent(group)) {
       if (deepQuery(group,'input:not([type=hidden],[type=button]),textarea,select').some(node=>node!==input)) break;
       owner=group;
+      if (!shown(group)) continue;
+      required ||= group.getAttribute('aria-required')==='true' || group.getAttribute('data-required')==='true';
       const heading=(group.innerText ?? '').trim().split('\n')[0];
       if (!label && otherAttachment(heading)) label=heading;
     }
-    if (!label) return;
-    label=label.replace(/[✱*]/g,'').trim();
+    const boundLabels=[...input.labels ?? []].filter(node=>node.control===input && shown(node));
+    const titles=[...boundLabels,...deepQuery(owner,'p,label,legend,h1,h2,h3,h4,h5,h6,[role=heading],.application-label,.application-question-title,div,span')];
+    for (const title of titles) {
+      const labelledControl=title.closest('label')?.control;
+      if (!shown(title) || title.closest('button,a,[role=button]') || labelledControl && labelledControl!==input ||
+          deepQuery(title,'button,a,[role=button],input[type=button]').length) continue;
+      // Plain layout elements can be titles, but cannot borrow the text of a neighboring widget.
+      if (title.matches('div,span') && [...title.children].some(child=>{
+        const part=child.innerText?.trim();
+        return !child.matches('span,abbr,sup,small,strong,em') || part && !otherAttachment(part) && !/^(?:[✱*]|\(?required\)?)$/i.test(part);
+      })) continue;
+      const text=title.innerText.trim();
+      if (!otherAttachment(text)) continue;
+      label ||= text;
+      required ||= /[✱*]\s*$|\(required\)\s*$/i.test(text) ||
+        deepQuery(title,'abbr[title=required i],[aria-label=required i]').some(shown);
+    }
+    if (!label || !required) return;
+    label=label.replace(/[✱*]/g,'').replace(/\s*\(required\)\s*$/i,'').trim();
+    const nativeShown=shown(input);
+    if (!nativeShown) {
+      if (!boundLabels.length && (owner===input || !shown(owner) || !owner.innerText.trim())) return;
+      // A disabled chooser makes its visible shell inactive. Custom widgets need no known trigger.
+      const actions=deepQuery(owner,'button,input[type=button],[role=button],a[href],[tabindex]').filter(node=>node!==input && shown(node));
+      if (actions.length && actions.every(node=>node.matches(':disabled') || composedClosest(node,'[aria-disabled=true]'))) return;
+    }
     // While an upload is pending, even a retained file or ID can belong to the previous selection.
     const compact=text=>text.toLowerCase().replace(/[^\p{L}\d]/gu,'');
     const attachmentIds=['fileid','uploadid','attachmentid'];
@@ -69,16 +96,8 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     const retainedId=node=>names.has(compact(node.name)) && !/^(?:|0+|-1|null|undefined|none|false)$/i.test(node.value.trim());
     if (input.files?.length || deepQuery(owner,'input[type=hidden][name]').some(retainedId) ||
         owner.matches(completed) && shown(owner) || deepQuery(owner,completed).some(shown)) return;
-    if (shown(input)) return {label,reason:'required_attachment_missing'};
-    const active=node=>shown(node) && !node.matches(':disabled') && !composedClosest(node,'[aria-disabled=true]');
-    const triggers=deepQuery(owner,'button[type=button],input[type=button],[role=button]').filter(node=>
-      active(node) && (!node.hasAttribute('form') || node.form===input.form));
-    const known=triggers.filter(node=>/^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test((node.innerText || node.value || '').trim()));
     const emptyNotice=deepQuery(owner,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
-    if (known.length===1 && emptyNotice) return {label,reason:'required_attachment_missing'};
-    if (triggers.length || [...input.labels ?? []].some(node=>node.control===input && active(node))) {
-      return {label,reason:'required_attachment_unconfirmed'};
-    }
+    return {label,reason:nativeShown || emptyNotice ? 'required_attachment_missing' : 'required_attachment_unconfirmed'};
   };
   return { isRequired, unresolvedAttachment };
 }
