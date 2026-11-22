@@ -866,7 +866,6 @@ export function createApplicationAnswerResolver(
         answer.value.lane,
       );
       if (intent.kind === "resolved") return success(intent);
-      if (question.source.factId === 'country' && intent.kind === 'option_ambiguous') return success(intent);
       if (intent.kind === 'option_ambiguous' && question.source.ownerProvidedOnly === true && !fallbackAllowed) return failure('protected_answer_denied');
       if (!fallbackAllowed && (intent.kind === "option_ambiguous" ||
           (intent.kind === "option_no_match" && question.source.ownerProvidedOnly !== true))) {
@@ -881,6 +880,8 @@ export function createApplicationAnswerResolver(
           ? failure("protected_answer_denied")
           : generatedSuccess(field, generated);
       }
+      if (question.source.factId === 'country' && answer.value.provenance === 'owner_provided' &&
+          (intent.kind === 'option_ambiguous' || intent.kind === 'option_no_match')) return success(intent);
       return fallbackAllowed
         ? generatedSuccess(field, generatedLearningIntent(
             field,

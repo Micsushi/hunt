@@ -152,16 +152,26 @@ test("valid committed values are preserved instead of overwritten", async () => 
 
 test("draft choices respect a named country and preserve other required attachments", async () => {
   const country = resolverWith({kind: 'answered', value: 'Canada', provenance: 'owner_provided', lane: 'live_owner_fact'});
-  const countryOptions = (labels: string[]) => field('Country', 'listbox',
-    labels.map((label, index) => ({id: optionId(String(index)), label: boundedText(label)})));
+  const countryOptions = (labels: string[], question = 'Country') => ({
+    ...field(question, 'listbox', labels.map((label, index) => ({id: optionId(String(index)), label: boundedText(label)}))),
+    fieldId: fieldId('country-selector'),
+  });
   const resolveCountry = (labels: string[]) => country.resolver.resolve(
     {...request(countryOptions(labels)), answerFallbackPolicy: 'deterministic_site_valid_editable'}, new AbortController().signal);
   const matched = await resolveCountry(['United States +1', 'Canada +1', 'United Kingdom +44']);
   assert.ok(matched.ok && matched.value.kind === 'resolved' && matched.value.intent.kind === 'choice');
   assert.equal(matched.value.lane, 'live_owner_fact');
   assert.equal(matched.value.intent.expectedOption, 'Canada +1');
+  const named = countryOptions(['United States', 'Canada']).options;
+  assert.equal(mapVisibleOption('Canada (+1)', named, 'country').kind, 'matched');
+  assert.equal(mapVisibleOption('+1', named, 'country').kind, 'option_no_match');
   const duplicate = await resolveCountry(['United States +1', 'Canada +1', 'Canada (+1)']);
   assert.ok(duplicate.ok && duplicate.value.kind === 'option_ambiguous');
+  for (const labels of [['+1', '+44'], ['USA (+1)', 'CAN (+1)'], ['United States +1']]) {
+    const missing = await country.resolver.resolve(
+      {...request(countryOptions(labels, 'Pays')), answerFallbackPolicy: 'deterministic_site_valid_editable'}, new AbortController().signal);
+    assert.ok(missing.ok && missing.value.kind === 'option_no_match');
+  }
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   });
@@ -171,6 +181,9 @@ test("draft choices respect a named country and preserve other required attachme
     "2026-08-20",
     (length) => length - 1,
   );
+  const missingFact = await resolver.resolve(
+    {...request(countryOptions(['United States +1'])), answerFallbackPolicy:'deterministic_site_valid_editable'}, new AbortController().signal);
+  assert.ok(missingFact.ok && missingFact.value.kind === 'resolved' && missingFact.value.lane === 'synthetic_test_default');
   for (const label of ["Academic transcript", "Relevé de notes", "Resume and transcript", "Resume.pdf"]) {
     for (const state of ["empty", "populated"] as const) {
       const input = request(field(label, "file_upload", [], state));

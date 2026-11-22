@@ -9,7 +9,7 @@ const groups: Readonly<Record<string,readonly (readonly string[])[]>> = {
   application_source: [['linkedin','linkedin corporate page','linkedin job posting'],['recruiter','recruiter outreach']],
 };
 const factAliases: Readonly<Record<string,string>> = {
-  's1-question-country':'country','address.country':'country',
+  's1-question-country':'country',
   'owner-question-phone-country-code':'phone_country_code','owner-question-current-location':'current_location',
   'education.degree':'education_degree','education.field_of_study':'education_field_of_study',
   'phone.device_type':'phone_device_type','source.how_did_you_hear':'application_source',
@@ -30,8 +30,10 @@ export function phoneCountryName(value:string) { return dialCountry(value)?.coun
 export function equivalentAnswer(actual:string, expected:string, context:string): boolean {
   const fact=factAliases[context]??context;
   if (fact === 'country') {
-    const optionCountry = phoneCountryName(actual);
-    if (optionCountry === normalizeCatalogText(expected)) return true;
+    const a = dialCountry(actual), b = dialCountry(expected);
+    if (a && b) return a.country === b.country && a.dial === b.dial;
+    if (a) return a.country === normalizeCatalogText(expected);
+    if (b) return b.country === normalizeCatalogText(actual);
   }
   if(fact==='phone_country_code') {
     const a=dialCountry(actual),b=dialCountry(expected);
