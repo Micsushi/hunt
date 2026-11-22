@@ -24,7 +24,7 @@ const safeFailureStages = new Set(["Opening application", "Opening employer acco
 const safeFailureFiles = new Set(["engine.ts", "queue.ts", "hosted-application.ts", "generic-application.ts",
   "extension-bridge.ts", "playwright-account-page.ts", "playwright-posting-navigation.ts",
   "application-authentication.ts", "application-review.ts", "current-page-workflow.ts",
-  "workday-workflow.ts", "workday-walk-diagnostics.ts", "page-answer-planner.ts",
+  "workday-workflow.ts", "workday-application-runtime.ts", "workday-walk-diagnostics.ts", "page-answer-planner.ts",
   "page-matching.ts", "workable-resume.ts", "greenhouse-resume.ts"]);
 
 function runFailure(error: unknown, stage: string) {
