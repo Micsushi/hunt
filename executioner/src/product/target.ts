@@ -2,6 +2,9 @@ import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 
 export type AtsFamily = "workday" | "greenhouse" | "lever" | "ashby" | "workable";
 
+// Persisted rows can retain either public Amazon hostname after an upgrade.
+export const canonicalPostingKey = (key: string) => key.replace(/^www\.amazon\.jobs(?=\/jobs\/\d+$)/u, 'amazon.jobs');
+
 /** Explicit unfamiliar application targets. These never use the hosted Review or Submit path. */
 export function genericApplicationTarget(input: string): {
   url: string; key: string; host: string; posting: string; ats: "generic";
@@ -37,7 +40,7 @@ export function genericApplicationTarget(input: string): {
   }
   if (!posting) throw new Error("Use a supported posting or an explicitly recognized public application form.");
   url.hash = "";
-  return { url: url.href, key: `${host}${posting}`, host, posting, ats: "generic" };
+  return { url: url.href, key: canonicalPostingKey(`${host}${posting}`), host, posting, ats: "generic" };
 }
 
 export function productApplicationTarget(input: string) {

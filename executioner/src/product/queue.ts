@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
-import { applicationTarget, productApplicationTarget } from "./target.ts";
+import { applicationTarget, canonicalPostingKey, productApplicationTarget } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
@@ -169,7 +169,7 @@ export class ApplicationQueue {
     const pendingInputs = new Map<string, {profile: unknown; resume: string}>();
     const next = this.jobs.map(job => ({ ...job }));
     for (const { input, target, resume, submissionAllowed } of prepared) {
-      const existing = next.find(j => j.key === target.key && j.status !== "removed");
+      const existing = next.find(j => canonicalPostingKey(j.key) === target.key && j.status !== "removed");
       if (existing) {
         if (options.paused && (existing.status !== "paused" || this.running.has(existing.id) || this.reviewActions.has(existing.id))) throw new Error("This application is already active. Pause it before importing a resume.");
         if (input.tabId !== undefined && input.tabId !== existing.tabId) {
@@ -323,7 +323,7 @@ export class ApplicationQueue {
       job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.componentFailure; delete job.reviewDigest; this.changed(job); this.safePump(); return;
     }
     if (action === "remove" || action === "restore") {
-      if (action === "restore" && this.jobs.some(other => other.id !== id && other.key === job.key && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
+      if (action === "restore" && this.jobs.some(other => other.id !== id && canonicalPostingKey(other.key) === canonicalPostingKey(job.key) && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
       if (action === "remove" && !["paused", "queued", "review"].includes(job.status) || action === "restore" && job.status !== "removed" || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for the job to pause and its review to finish before removing it.");
       job.status = action === "remove" ? "removed" : "paused"; job.stage = action === "remove" ? "Removed" : "Restored. Retry when ready"; this.changed(job); return;
     }

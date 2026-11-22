@@ -162,12 +162,6 @@ export async function startProductServer(options: { root?: string; port?: number
           throw new Error('This selected application changed. Inspect its current page again.');
         }
         if (queue.snapshot().jobs.some(job=>job.tabId===body.tabId && (job.actionPending || ['queued','running','submitting'].includes(job.status)))) throw new Error('C3 is already operating this page. Wait for it to finish.');
-        const accountProfile = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
-        const accountPage = await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
-          accountProfile?.profilePlan?.mode === 'synthetic_test_non_submittable' ? undefined : queue.credentials,
-          accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
-        const priorWorkdayPage = accountPage?.priorWorkdayPage;
-        if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
         const owner = await currentPageOwner(queue.jobs, body.tabId, url);
         const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
@@ -188,13 +182,18 @@ export async function startProductServer(options: { root?: string; port?: number
           const other = [...pageBindings].find(([id, binding]) => id !== body.tabId && binding.jobId === selected.id);
           if (other) {
             const tabs = await bridge.call('pageTabs');
-            const previousOrigin = new URL(other[1].url).origin;
-            if (!Array.isArray(tabs) || tabs.some(tab => tab.tabId === other[0] && URL.parse(tab.url)?.origin === previousOrigin)) {
+            if (!Array.isArray(tabs) || tabs.some(tab => tab.tabId === other[0])) {
               throw new Error('This job is already open in another selected tab. Continue there or close that tab first.');
             }
             pageBindings.delete(other[0]);
           }
         }
+        const accountProfile = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
+        const accountPage = selected ? undefined : await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
+          accountProfile?.profilePlan?.mode === 'synthetic_test_non_submittable' ? undefined : queue.credentials,
+          accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
+        const priorWorkdayPage = accountPage?.priorWorkdayPage;
+        if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
         const settings = selected ? queue.currentPageInput(selected) : queue.getSettings();
         const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');

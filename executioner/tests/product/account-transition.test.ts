@@ -70,11 +70,11 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
   const profile = fixtureApplicantProfile({given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid"});
   const fill = () => fillApplication(page, {url, profile, resume:pdf}, AbortSignal.timeout(15000), () => {});
   await page.route(url, route => {
-    const item = `<div data-automation-id="file-upload-item"><a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a><span data-automation-id="file-upload-successful">Uploaded</span></div>`;
+    const item = `<div data-automation-id="file-upload-item" data-upload-state="success"><a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a></div>`;
     const fixture = applicationFixture.replace("profile();", `questions();
       root.querySelector('section').innerHTML = '<div role="group" aria-label="Other application documents"><label>Other details<input></label>' +
         '<div data-automation-id="formField-attachment"><label id="file-title" for="picker">${label}</label>' +
-        '<div data-automation-id="attachment-FileUpload"><input aria-labelledby="file-title missing-secondary-hint" id="picker" aria-required="true" type="file">' +
+        '<div data-automation-id="attachment-FileUpload"><span id="empty-hint"></span><input aria-labelledby="file-title missing-secondary-hint empty-hint" id="picker" aria-required="true" type="file">' +
         '${restored ? item : ""}</div></div></div><button>Save and Continue</button>';
       window.writes = 0;
       const picker=document.getElementById('picker');
@@ -96,6 +96,16 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
 
     label = "Resume";
     restored = false;
+    for (const primary of ["missing-primary", "empty-hint", "other-title"]) {
+      await page.reload();
+      await page.evaluate(primary => {
+        const picker = document.querySelector<HTMLInputElement>('#picker')!;
+        picker.insertAdjacentHTML('beforebegin', '<span id="other-title" aria-label="Academic transcript"></span>');
+        picker.setAttribute('aria-labelledby', primary + ' file-title');
+      }, primary);
+      await assert.rejects(fill(), /required attachment needs your review/);
+      assert.equal(await page.evaluate("writes"), 0);
+    }
     await page.reload();
     await fill();
     assert.equal(await page.evaluate("writes"),1);
@@ -109,6 +119,16 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
     await page.reload();
     await assert.rejects(fill(),/required attachment needs your review/);
     assert.equal(await page.evaluate("writes"),0);
+    await page.evaluate(({filename, bytes}) => {
+      const retained = new DataTransfer();
+      retained.items.add(new File([new Uint8Array(bytes)], filename, {type:"application/pdf"}));
+      document.querySelector<HTMLInputElement>('#picker')!.files = retained.files;
+    }, {filename, bytes:[...pdf]});
+    const before = downloads;
+    await assert.rejects(fill(),/required attachment needs your review/);
+    assert.ok(downloads > before);
+    assert.equal(await page.evaluate("writes"),0);
+    assert.equal(await page.locator('[data-automation-id=applyFlowReviewPage]').count(),0);
     assert.equal(await page.evaluate("submits"),0);
   } finally { await page.close(); }
 }

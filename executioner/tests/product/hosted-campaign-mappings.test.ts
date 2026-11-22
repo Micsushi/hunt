@@ -125,6 +125,12 @@ test('bilingual screening uses Canadian eligibility, separates background consen
         const result = await answer(q, 'radio', ['Yes','No']);
         assert.deepEqual([result.answer,result.lane], [expected,lane]);
       }
+      const screeningQuestion = 'I consent to automated screening of my application.';
+      const existingDecline = {pageId:'screening',fieldId:'ai',signature:'fixture',question:screeningQuestion,options:['Yes','No'],
+        selected:'No',required:true,control:'radio' as const,valid:true};
+      assert.equal((await plan(existingDecline,[existingDecline],AbortSignal.timeout(3000))).answer,null);
+      assert.equal((await answer(screeningQuestion,'radio',['Yes','No'],false)).answer,null);
+      assert.equal((await answer(screeningQuestion,'radio',['Yes','No'])).answer,'Yes');
       const expectedBackground = willing === undefined ? null : willing ? 'Yes' : 'No';
       assert.equal((await answer(background.replaceAll('RCL','ABC'),'radio',['Yes','No'])).answer,expectedBackground);
       assert.equal((await answer(background.replace('de RCL','de XYZ'),'radio',['Yes','No'])).answer,null);

@@ -62,6 +62,7 @@ test('duplicate names, multiple inputs and foreign group labels cannot authorize
   const browser=await chromium.launch({headless:true});
   try {
     const conflictingOwners = [
+      '<div role="group" aria-labelledby="document"><h3 id="document">Cover Letter</h3><input type="text"><input required type="file" aria-label="Resume"></div>',
       '<fieldset aria-labelledby="missing-title"><input id="resume" type="file" required aria-label="Resume"></fieldset>',
       '<div class="application-field"><div class="application-label">Relevé de notes</div><input type="file" required aria-label="Resume"></div>',
       '<fieldset aria-labelledby="title hint"><legend id="title">Resume</legend><span hidden id="hint">Academic transcript</span><input type="file" required></fieldset>',

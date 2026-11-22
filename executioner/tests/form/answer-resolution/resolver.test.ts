@@ -301,6 +301,9 @@ test("only scoped recruitment terms use saved consent across controls and fallba
   }
   const checkbox = await ai.resolve(request(field("I consent to AI screening of my application.","checkbox")),signal);
   assert.ok(checkbox.ok && checkbox.value.kind==="resolved" && checkbox.value.intent.kind==="toggle" && checkbox.value.intent.checked);
+  const negativeCheckbox = field("AI evaluation consent","checkbox",[{id:optionId("decline"),label:boundedText("I decline")}]);
+  const withheld = await ai.resolve(request(negativeCheckbox),signal);
+  assert.ok(!withheld.ok && withheld.error.code==="protected_answer_denied");
   const select = await ownerConsent(true).resolve(request(observedSelect), signal);
   assert.ok(select.ok && select.value.kind === "resolved" && select.value.intent.kind === "choice");
   assert.equal(select.value.lane, "live_owner_fact");

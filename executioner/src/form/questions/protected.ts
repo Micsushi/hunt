@@ -60,7 +60,8 @@ export function isAiEvaluationConsent(label: string): boolean {
 }
 
 export function isAiConsentControl(behavior: string, options: readonly string[]): boolean {
-  return ['checkbox','radio','select','listbox'].includes(behavior) && options.every(option =>
+  if (behavior === 'checkbox') return options.every(option => /^(?:yes|(?:i )?(?:accept|agree))$/u.test(normalizeCatalogText(option)));
+  return ['radio','select','listbox'].includes(behavior) && options.every(option =>
     /^(?:|please select|select(?: one)?|choose(?: one)?|yes|no|(?:i )?(?:agree|accept|decline|disagree))$/u.test(normalizeCatalogText(option)));
 }
 

@@ -130,6 +130,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     app.queue.configure(applicantProfile({given_name:'Changed',family_name:'Tester',email_address:'changed@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
     assert.equal((await operate('fill')).status,400,'a prior default or another tab cannot fill before inspecting its saved handoff');
     assert.equal((await operate('inspect')).status,200);
+    assert.equal((await operate('inspect',12,selectedUrl.replace('/fixture/','/Fixture/'))).status,400,'uncertain posting aliases cannot acquire the default PDF');
     assert.equal((await operate('inspect',10)).status,400,'the same posting is already bound to another tab');
     for(const op of ['fill','undo','redo'])assert.equal((await operate(op)).status,200,op);
     assert.deepEqual(observedPdfs,[resume.toString('base64')]);
@@ -144,6 +145,25 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal((await operate('fill')).status,400);
     assert.deepEqual(observedPdfs,[resume.toString('base64')]);
     assert.equal(app.queue.jobs.length,3);
+    const amazon='https://amazon.jobs/en/jobs/7654/fixture';
+    const alternate=amazon.replace('amazon.jobs','www.amazon.jobs');
+    const [imported]=await (await post('/handoff/import-paused',bundleFor(alternate,130))).json();
+    const stored=app.queue.jobs.find(job=>job.id===imported.id)!;
+    // Exercise deduplication when a saved job still has its original host-prefixed key.
+    stored.key='www.amazon.jobs/jobs/7654';
+    assert.equal((await (await post('/handoff/import-paused',bundleFor(amazon,130))).json())[0].id,imported.id);
+    assert.equal((await operate('fill',11,amazon)).status,400);
+    let selectedBytes:string|undefined;
+    bridge.call=async(method,params={})=>{
+      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1']};
+      assert.equal(params.pageHandoff,imported.id);
+      if(params.operation==='fill')selectedBytes=(params.resume as {base64:string}).base64;
+      return {url:params.expectedUrl,tabId:params.tabId,documentId:latestDocument,filled:[],matching:[],skipped:[],canUndo:false,canRedo:false};
+    };
+    assert.equal((await operate('inspect',11,amazon)).status,200);
+    assert.equal((await operate('fill',11,amazon)).status,200);
+    assert.equal(selectedBytes,resume.toString('base64'));
+
     assert.equal(app.queue.jobs[0]!.status,'paused');
     assert.equal(app.queue.jobs[0]!.resumeVersion,'v18');
     assert.equal(readFileSync(inputPath,'utf8'),input);

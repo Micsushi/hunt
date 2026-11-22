@@ -58,7 +58,14 @@ export function readUploadOwnerLabels(inputs) {
         for (const child of children(node)) visit(child);
       };
       visit(group);
-      if (controls.length!==1 || controls[0]!==input) break;
+      if (controls.length!==1 || controls[0]!==input) {
+        // A file group may also own a notes input. Its explicit title can veto a
+        // contradictory picker, but cannot establish a positive resume binding.
+        if (group.matches('[role=group][aria-labelledby]') && controls.filter(node=>node.matches('input[type=file]')).length===1) {
+          names(group);
+        }
+        break;
+      }
       names(group);
       if (group.getClientRects().length && group.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
           !group.closest('[hidden],[inert],[aria-hidden=true]')) visibleHeadings.push(group.getAttribute('aria-label') || '');

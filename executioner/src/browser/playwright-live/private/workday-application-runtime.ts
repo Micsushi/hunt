@@ -2143,10 +2143,15 @@ export async function enrichQuestionnaireFields(
           }
           if (node !== leaf && !node.matches(owners)) continue;
           fileLabels.push(node.getAttribute('aria-label') ?? '');
-          for (const id of (node.getAttribute('aria-labelledby') ?? '').split(/\s+/u).filter(Boolean)) {
+          const ids = (node.getAttribute('aria-labelledby') ?? '').trim().split(/\s+/u).filter(Boolean);
+          for (const [position, id] of ids.entries()) {
             const references = document.querySelectorAll(`[id="${CSS.escape(id)}"]`);
-            if (references.length > 1) ambiguousFileLabel = true;
-            else if (references[0]?.textContent?.trim()) fileLabels.push(references[0].textContent);
+            const reference = references[0];
+            const text = reference?.textContent?.trim();
+            const label = reference?.getAttribute('aria-label')?.trim();
+            if (references.length > 1 || (position === 0 && !text && !label)) ambiguousFileLabel = true;
+            if (text) fileLabels.push(text);
+            if (label) fileLabels.push(label);
           }
           for (const label of node.querySelectorAll('label,legend,.application-label,.application-question-title')) {
             if (label.closest(owners) === node) fileLabels.push(label.textContent ?? '');

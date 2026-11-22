@@ -95,11 +95,16 @@ test('extension page actions verify Jobvite file history and the final SmartRecr
   try {
     const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');const page=await context.newPage();await fixture(page);
     const tabId=await worker.evaluate(async u=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===u).id,url);
-    const action=(operation:string,documentId?:string,pageHandoff?:string)=>worker.evaluate(p=>(globalThis as any).runAction(p),{tabId,expectedUrl:url,operation,documentId,pageHandoff,facts,resume,expiresAt:Date.now()+10000});
+    const action=(operation:string,documentId?:string,pageHandoff?:string,file=resume)=>worker.evaluate(p=>(globalThis as any).runAction(p),{tabId,expectedUrl:url,operation,documentId,pageHandoff,facts,resume:file,expiresAt:Date.now()+10000});
     const inspection=await action('inspect');const result=await action('fill',inspection.documentId);
     assert.equal(result.resume,'verified',JSON.stringify(result));assert.deepEqual(await counts(page),[1,0]);
     await action('undo',inspection.documentId);assert.deepEqual(await counts(page),[0,0]);
     await action('redo',inspection.documentId);assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.evaluate('submits'),0);
+    const occupied=await action('inspect',undefined,'imported-job');
+    const conflict=await action('fill',occupied.documentId,'imported-job',{...resume,base64:Buffer.from('%PDF-different-selected').toString('base64')});
+    assert.equal(conflict.resume,'unverified');
+    assert.ok(conflict.skipped.some((field:{reason:string})=>field.reason==='different_resume_requires_manual_review'));
+    assert.deepEqual(await counts(page),[1,0]);
     await action('undo',inspection.documentId);
     const selected=await action('inspect',undefined,'imported-job');
     assert.equal(selected.canRedo,false,'a selected job cannot redo an earlier default PDF');

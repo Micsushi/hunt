@@ -208,9 +208,9 @@ async function inspectUploadReadback(
             item.querySelector('[data-automation-id="file-upload-item-name"]')?.textContent?.trim() === expectedName &&
             !owner.querySelector('[aria-busy=true],[role=progressbar],[data-automation-id="file-upload-error"],[aria-invalid=true]');
           if (!ownsCompletedItem()) return {kind:"unavailable"};
-          // Workday can clear the native picker when it finishes receiving the file.
-          if (element.files.length === 0) {
-            const links = item.querySelectorAll<HTMLAnchorElement>('a[href]');
+          // A completed employer receipt can disagree with the file still in the picker.
+          const links = item.querySelectorAll<HTMLAnchorElement>('a[href]');
+          if (links.length > 0 || element.files.length === 0) {
             const link = links[0];
             if (links.length !== 1 || !link || !shown(link) ||
                 !(link.hasAttribute('download') || link.closest('[data-automation-id="file-upload-item-name"]') ||
@@ -236,8 +236,8 @@ async function inspectUploadReadback(
               }
               const digest = await crypto.subtle.digest('SHA-256', await new Blob(chunks).arrayBuffer());
               if (!size || !ownsCompletedItem() || item.querySelectorAll('a[href]').length !== 1 ||
-                  !item.contains(link) || !shown(link) || link.href !== url.href || element.files.length !== 0) return {kind:"unavailable"};
-              return {kind:'digest', size, sha256:[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')};
+                  !item.contains(link) || !shown(link) || link.href !== url.href) return {kind:"unavailable"};
+              return {kind:'employer-digest', size, sha256:[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')};
             } finally { reader.releaseLock(); }
           }
         }
@@ -259,7 +259,7 @@ async function inspectUploadReadback(
           const size = bytes.byteLength;
           const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
           if (
-            !ownsCompletedItem() || element.files.length !== 1 ||
+            !ownsCompletedItem() || owner?.querySelector('[data-automation-id="file-upload-item"] a[href]') || element.files.length !== 1 ||
             element.files[0] !== file
           ) {
             return { kind: "unavailable" };
@@ -267,7 +267,7 @@ async function inspectUploadReadback(
           const sha256 = [...new Uint8Array(digest)]
             .map((byte) => byte.toString(16).padStart(2, "0"))
             .join("");
-          return { kind: "digest", sha256, size };
+          return { kind: "picker-digest", sha256, size };
         } catch {
           return { kind: "unavailable" };
         } finally {
@@ -291,7 +291,7 @@ async function inspectUploadReadback(
     return { kind: "upload", resumeId: null, sha256: null };
   }
   if (
-    live.kind !== "digest" ||
+    (live.kind !== "employer-digest" && live.kind !== "picker-digest") ||
     uploaded === undefined ||
     Object.keys(live).sort().join("\n") !== ["kind", "sha256", "size"].join("\n") ||
     !("sha256" in live) ||
@@ -1948,7 +1948,7 @@ async function applyMutationUnchecked(
   } finally { await picker.dispose(); }
   if (await locator.evaluate((element) => element.closest('[data-automation-id$="-FileUpload"]') !== null)) {
     await locator.locator('xpath=ancestor::*[contains(@data-automation-id, "-FileUpload")][1]')
-      .locator('[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"]')
+      .locator('[data-automation-id="file-upload-item"]:is([data-upload-state=success], :has([data-automation-id="file-upload-successful"]:visible, [data-automation-id="file-upload-success"]:visible))')
       .waitFor({ state: "visible", timeout: timeoutMs });
   }
   return "applied";
