@@ -2122,12 +2122,21 @@ export async function enrichQuestionnaireFields(
         ? "multiple" as const
         : "single" as const;
       const fileLabels: string[] = [];
-      let unresolvedFileLabel = false;
+      let ambiguousFileLabel = false, completedUpload = false;
       if (leaf instanceof HTMLInputElement && leaf.type === 'file') {
         const owners = '[data-automation-id$="-FileUpload"],[data-automation-id="formField"],[data-automation-id^="formField-"],fieldset,[role="group"]';
+        const owner = leaf.closest('[data-automation-id$="-FileUpload"]');
+        const items = owner?.querySelectorAll('[data-automation-id="file-upload-item"]');
+        const item = items?.length === 1 ? items[0] : undefined;
+        const success = item?.matches('[data-upload-state=success]') ? item : item?.querySelector('[data-automation-id="file-upload-successful"],[data-automation-id="file-upload-success"]');
+        completedUpload = !!(owner && owner.querySelectorAll('input[type=file]').length === 1 && success &&
+          success.getClientRects().length && getComputedStyle(success).visibility !== 'hidden' &&
+          !owner.querySelector('[aria-busy=true],[role=progressbar],[data-automation-id="file-upload-error"],[aria-invalid=true]'));
         for (const label of leaf.labels ?? []) fileLabels.push(label.textContent ?? '');
         for (let node: Element | null = leaf; node && !node.matches('form,main,body'); node = node.parentElement) {
-          if (node.querySelectorAll('input:not([type=hidden]),select,textarea').length === 1) {
+          if (node !== leaf) {
+            const controls: NodeListOf<Element> = node.querySelectorAll('input:not([type=hidden]),select,textarea');
+            if (controls.length !== 1 || controls[0] !== leaf) break;
             for (const heading of node.querySelectorAll(':scope > .application-label,:scope > .application-question-title')) {
               fileLabels.push(heading.textContent ?? '');
             }
@@ -2136,8 +2145,8 @@ export async function enrichQuestionnaireFields(
           fileLabels.push(node.getAttribute('aria-label') ?? '');
           for (const id of (node.getAttribute('aria-labelledby') ?? '').split(/\s+/u).filter(Boolean)) {
             const references = document.querySelectorAll(`[id="${CSS.escape(id)}"]`);
-            if (references.length !== 1 || !references[0]?.textContent?.trim()) unresolvedFileLabel = true;
-            else fileLabels.push(references[0].textContent);
+            if (references.length > 1) ambiguousFileLabel = true;
+            else if (references[0]?.textContent?.trim()) fileLabels.push(references[0].textContent);
           }
           for (const label of node.querySelectorAll('label,legend,.application-label,.application-question-title')) {
             if (label.closest(owners) === node) fileLabels.push(label.textContent ?? '');
@@ -2146,7 +2155,7 @@ export async function enrichQuestionnaireFields(
       }
       return {
         target: element.getAttribute("data-hunt-target-token") ?? "",
-        fileLabels, unresolvedFileLabel,
+        fileLabels, ambiguousFileLabel, completedUpload,
         populatedValueValid: (leaf instanceof HTMLInputElement || leaf instanceof HTMLTextAreaElement) &&
           leaf.value.trim() !== "" && leaf.validity.valid &&
           (leaf.minLength < 0 || leaf.value.length >= leaf.minLength) &&
@@ -2180,10 +2189,13 @@ export async function enrichQuestionnaireFields(
     const text = field.behavior === "text" || field.behavior === "textarea";
     const choice = field.behavior === "radio" || field.behavior === "checkbox" ||
       field.behavior === "select" || field.behavior === "listbox";
+    const fileLabels = [field.rawQuestion ?? field.label, ...metadata.fileLabels].map(uploadLabelKind);
+    const resume = fileLabels.includes('resume'), other = fileLabels.includes('other');
+    const filePurpose = metadata.ambiguousFileLabel || resume && other ? 'ambiguous' : resume ? 'resume' : other ? 'other' : 'ambiguous';
     return Object.freeze({
       ...field,
-      ...(field.behavior === 'file_upload' && (metadata.unresolvedFileLabel || metadata.fileLabels.some(label=>uploadLabelKind(label)==='other'))
-        ? {state:'ambiguous' as const} : {}),
+      ...(field.behavior === 'file_upload' && {filePurpose,
+        ...(filePurpose === 'other' && metadata.completedUpload && {state:'populated' as const})}),
       populatedValueValid: metadata.populatedValueValid,
       ...(text ? {
         constraints: Object.freeze({ ...metadata.constraints }),

@@ -116,10 +116,13 @@ test('extension page actions verify Jobvite file history and the final SmartRecr
         button.onclick=()=>window.clicks++;
         document.querySelector('input').oninput=()=>{
           if(window.mode==='enabled')button.disabled=false;
+          if(window.mode==='hidden')footer.hidden=true;
+          if(window.mode==='transparent')footer.style.opacity='0';
+          if(window.mode==='zero')button.style.cssText='display:block;width:0;height:0;padding:0;border:0;overflow:hidden';
           if(window.mode==='unknown' && !footer.nextSibling)footer.after(footer.cloneNode(true));
         };
       </script>`}));
-    for (const mode of ['disabled','enabled','unknown']) {
+    for (const mode of ['disabled','enabled','unknown','hidden','transparent','zero']) {
       await page.goto(screening);
       await page.evaluate(mode=>{(window as any).mode=mode;},mode);
       const run=(operation:string, overrides:Record<string,unknown>={})=>worker.evaluate(
@@ -134,7 +137,7 @@ test('extension page actions verify Jobvite file history and the final SmartRecr
         fieldId:row.fieldId,signature:row.signature,frameId:row.frameId,answer:'Fixture',reason:'saved_fact',provisional:false,
       }]});
       assert.equal(await page.locator('input').inputValue(),'Fixture');
-      assert.equal(after.observation.screeningSubmissionControl,mode);
+      assert.equal(after.observation.screeningSubmissionControl,['hidden','transparent','zero'].includes(mode) ? 'unknown' : mode,mode);
       assert.equal(after.skipped.some((item:{reason:string})=>item.reason==='employer_submission_disabled'),mode==='disabled');
       if (mode==='unknown')assert.equal(after.observation.kind,'unknown');
       if (mode==='disabled')assert.equal(after.incomplete,true);

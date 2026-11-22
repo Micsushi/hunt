@@ -112,7 +112,7 @@ export async function inspectPage(
     const token = browserTargetToken(item.declaredToken);
     const uploaded = uploads.get(token) ?? expectedArtifact;
     let readback = item.control.kind === "file"
-      ? await inspectUploadReadback(page, item.index, uploaded)
+      ? await inspectUploadReadback(page, item.index, token, uploaded)
       : normalizeReadback(item.readback, item.declaredToken);
     if (
       item.interaction === "composite-date" && readback.kind === "text" &&
@@ -178,36 +178,68 @@ export async function inspectPage(
 async function inspectUploadReadback(
   page: Page,
   index: number,
+  token: string,
   uploaded: UploadedArtifactReadback | undefined,
 ): Promise<BrowserReadback> {
   let live: unknown;
   try {
     live = await page.locator(controlSelector).nth(index).evaluate(
-      async (element, { maximumBytes, expectedName }) => {
+      async (element, { maximumBytes, expectedName, token }) => {
         if (
           !(element instanceof HTMLInputElement) ||
-          element.type !== "file" ||
+          element.type !== "file" || element.getAttribute('data-hunt-target-token') !== token ||
           element.files === null
         ) return { kind: "unavailable" };
         const owner = element.closest('[data-automation-id$="-FileUpload"]');
+        const sameInput = () => element.isConnected && element.getAttribute('data-hunt-target-token') === token;
+        let ownsCompletedItem = sameInput;
         if (owner !== null) {
           const items = owner.querySelectorAll('[data-automation-id="file-upload-item"]');
           if (items.length === 0 && element.files.length === 0) return { kind: "empty" };
-          if (items.length !== 1 || expectedName === null ||
-              owner.querySelectorAll('input[type="file"]').length !== 1) return { kind: "unavailable" };
+          if (items.length !== 1 || expectedName === null) return { kind: "unavailable" };
           const item = items[0]!;
-          const name = item.querySelector('[data-automation-id="file-upload-item-name"]')?.textContent?.trim();
-          const success = item.querySelector(
-            '[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"]',
-          );
-          const pending = owner.querySelector(
-            '[aria-busy="true"], [role="progressbar"], [data-automation-id="file-upload-error"], [aria-invalid="true"]',
-          );
-          const shown = (node: Element) => node.getClientRects().length > 0 &&
-            getComputedStyle(node).visibility !== "hidden";
-          if (name !== expectedName || success === null || !shown(item) || !shown(success) || pending !== null ||
-              element.files.length !== 1) return { kind: "unavailable" };
-          // The completion row confirms the displayed name. Only file bytes confirm its digest.
+          const successSelector = '[data-automation-id="file-upload-successful"],[data-automation-id="file-upload-success"]';
+          const complete = () => item.matches('[data-upload-state=success]') ? item : item.querySelector(successSelector);
+          const success = complete();
+          const shown = (node: Element) => node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden";
+          ownsCompletedItem = () => sameInput() && element.closest('[data-automation-id$="-FileUpload"]') === owner &&
+            owner.querySelectorAll('input[type=file]').length === 1 && owner.querySelectorAll('[data-automation-id="file-upload-item"]').length === 1 &&
+            owner.contains(item) && shown(item) && success !== null && complete() === success && shown(success) &&
+            item.querySelector('[data-automation-id="file-upload-item-name"]')?.textContent?.trim() === expectedName &&
+            !owner.querySelector('[aria-busy=true],[role=progressbar],[data-automation-id="file-upload-error"],[aria-invalid=true]');
+          if (!ownsCompletedItem()) return {kind:"unavailable"};
+          // Workday can clear the native picker when it finishes receiving the file.
+          if (element.files.length === 0) {
+            const links = item.querySelectorAll<HTMLAnchorElement>('a[href]');
+            const link = links[0];
+            if (links.length !== 1 || !link || !shown(link) ||
+                !(link.hasAttribute('download') || link.closest('[data-automation-id="file-upload-item-name"]') ||
+                  link.querySelector('[data-automation-id="file-upload-item-name"]'))) return {kind:"unavailable"};
+            const url = new URL(link.href);
+            if (url.protocol !== 'https:' || url.origin !== location.origin || url.username || url.password) return {kind:"unavailable"};
+            const response = await fetch(url, {credentials:'same-origin', mode:'same-origin', redirect:'error',
+              cache:'no-store', signal:AbortSignal.timeout(5000)});
+            if (!response.ok || !response.body || Number(response.headers.get('content-length')) > maximumBytes ||
+                !/^(?:application\/(?:pdf|octet-stream))(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
+              await response.body?.cancel();
+              return {kind:"unavailable"};
+            }
+            const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = [];
+            let size = 0;
+            try {
+              for (;;) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                size += value.byteLength;
+                if (size > maximumBytes) { await reader.cancel(); return {kind:"unavailable"}; }
+                chunks.push(value);
+              }
+              const digest = await crypto.subtle.digest('SHA-256', await new Blob(chunks).arrayBuffer());
+              if (!size || !ownsCompletedItem() || item.querySelectorAll('a[href]').length !== 1 ||
+                  !item.contains(link) || !shown(link) || link.href !== url.href || element.files.length !== 0) return {kind:"unavailable"};
+              return {kind:'digest', size, sha256:[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')};
+            } finally { reader.releaseLock(); }
+          }
         }
         if (element.files.length === 0) return { kind: "empty" };
         if (element.files.length !== 1) return { kind: "unavailable" };
@@ -227,7 +259,7 @@ async function inspectUploadReadback(
           const size = bytes.byteLength;
           const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
           if (
-            element.files.length !== 1 ||
+            !ownsCompletedItem() || element.files.length !== 1 ||
             element.files[0] !== file
           ) {
             return { kind: "unavailable" };
@@ -242,7 +274,7 @@ async function inspectUploadReadback(
           bytes?.fill(0);
         }
       },
-      { maximumBytes: MAX_RESUME_ARTIFACT_BYTES,
+      { maximumBytes: MAX_RESUME_ARTIFACT_BYTES, token,
         expectedName: uploaded === undefined ? null : questionnaireUploadFileName(uploaded.sha256) },
     );
   } catch {
@@ -1901,14 +1933,19 @@ async function applyMutationUnchecked(
     return "applied";
   }
   if (target.control.kind !== "file" || upload === undefined) return "invalid";
-  await locator.setInputFiles(
-    {
+  const picker = await locator.elementHandle({timeout:timeoutMs});
+  if (!picker) return "invalid";
+  try {
+    const empty = await picker.evaluate(node => node instanceof HTMLInputElement && node.type === 'file' &&
+      node.isConnected && node.files?.length === 0 &&
+      !node.closest('[data-automation-id$="-FileUpload"]')?.querySelector('[data-automation-id="file-upload-item"],[aria-busy=true],[role=progressbar]'));
+    if (!empty) return "invalid";
+    await picker.setInputFiles({
       name: questionnaireUploadFileName(mutation.artifact.sha256),
       mimeType: "application/pdf",
       buffer: Buffer.from(upload.buffer, upload.byteOffset, upload.byteLength),
-    },
-    { timeout: timeoutMs },
-  );
+    }, {timeout:timeoutMs});
+  } finally { await picker.dispose(); }
   if (await locator.evaluate((element) => element.closest('[data-automation-id$="-FileUpload"]') !== null)) {
     await locator.locator('xpath=ancestor::*[contains(@data-automation-id, "-FileUpload")][1]')
       .locator('[data-automation-id="file-upload-successful"], [data-automation-id="file-upload-success"]')

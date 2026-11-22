@@ -164,7 +164,7 @@ test("draft fallbacks select visible options and preserve other required attachm
     for (const state of ["empty", "populated"] as const) {
       const input = request(field(label, "file_upload", [], state));
       const reply = await resolver.resolve({...input, answerFallbackPolicy:"deterministic_site_valid_editable"}, new AbortController().signal);
-      assert.equal(reply.ok && reply.value.kind, "unsupported", label);
+      assert.equal(reply.ok && reply.value.kind, state === "populated" ? "readback_only" : "unsupported", label);
     }
   }
   const result = await resolver.resolve(syntheticRequest(field(
@@ -280,6 +280,27 @@ test("only scoped recruitment terms use saved consent across controls and fallba
     kind: "answered", provenance: "owner_provided", lane: "live_owner_fact", value,
   }).resolver;
   const signal = new AbortController().signal;
+  const aiNotice = "To support an efficient recruitment process, ADI may use artificial intelligence (AI) tools to assess how your candidate information aligns with the role requirements. These tools do not make decisions about a candidate\u2019s status \u2014 every decision that leads ADI to select a candidate for this role involves human review or intervention. You have the right to choose whether your data is processed using AI tools: By selecting \u201cYes,\u201d you consent to the use of AI tools to evaluate your candidate information. By selecting \u201cNo,\u201d you decline consent. Your application will be manually reviewed by ADI recruiters in accordance with ADI policy. For more information about how Company processes your personal data, please review the Candidate Privacy Notice.*";
+  const binary = ["Yes","No"].map(label => ({id:optionId(label.toLowerCase()),label:boundedText(label)}));
+  const ai = resolverWith({kind:"profile_answer_missing"}).resolver;
+  for (const label of [aiNotice, "AI evaluation consent", "Do you consent to automated screening of your application?",
+    "I agree to using AI to evaluate my resume."]) {
+    const observed = {...field("Application screening", "radio", binary),rawQuestion:label};
+    const answer = await ai.resolve(request(observed),signal);
+    assert.ok(answer.ok && answer.value.kind === "resolved" && answer.value.intent.kind === "choice" &&
+      answer.value.intent.expectedOption === "Yes",label);
+    const optional = await ai.resolve(request({...observed,required:false}),signal);
+    assert.ok(optional.ok && optional.value.kind === "readback_only");
+    const committed = await ai.resolve(request({...observed,state:"populated"}),signal);
+    assert.ok(committed.ok && committed.value.kind === "readback_only");
+  }
+  for (const label of ["I consent to using AI to evaluate my resume and train models.", "I do not consent to AI screening of my application.",
+    "Opt out of AI evaluation consent", aiNotice + " I consent to a credit check."]) {
+    const answer = await ai.resolve(request({...field("Consent","checkbox"),rawQuestion:label}),signal);
+    assert.ok(!answer.ok && answer.error.code==="protected_answer_denied",label);
+  }
+  const checkbox = await ai.resolve(request(field("I consent to AI screening of my application.","checkbox")),signal);
+  assert.ok(checkbox.ok && checkbox.value.kind==="resolved" && checkbox.value.intent.kind==="toggle" && checkbox.value.intent.checked);
   const select = await ownerConsent(true).resolve(request(observedSelect), signal);
   assert.ok(select.ok && select.value.kind === "resolved" && select.value.intent.kind === "choice");
   assert.equal(select.value.lane, "live_owner_fact");

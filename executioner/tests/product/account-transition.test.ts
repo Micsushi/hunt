@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import test from "node:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,10 +61,63 @@ test("missing answers reload only a bound required empty busy catalog and only o
   } finally { await browser.close(); }
 });
 
-test("saved Review or Experience continues without rewinding and requires owner review", { timeout: 60_000 }, async () => {
+async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeof chromium.launch>>) {
+  const page = await browser.newPage();
+  const url = "https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1";
+  const pdf = Buffer.from("%PDF-1.4 selected résumé");
+  const filename = "c3-attachment-" + createHash("sha256").update(pdf).digest("hex") + ".pdf";
+  let label = "Academic transcript", restored = false, served = pdf, downloads = 0;
+  const profile = fixtureApplicantProfile({given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid"});
+  const fill = () => fillApplication(page, {url, profile, resume:pdf}, AbortSignal.timeout(15000), () => {});
+  await page.route(url, route => {
+    const item = `<div data-automation-id="file-upload-item"><a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a><span data-automation-id="file-upload-successful">Uploaded</span></div>`;
+    const fixture = applicationFixture.replace("profile();", `questions();
+      root.querySelector('section').innerHTML = '<div role="group" aria-label="Other application documents"><label>Other details<input></label>' +
+        '<div data-automation-id="formField-attachment"><label id="file-title" for="picker">${label}</label>' +
+        '<div data-automation-id="attachment-FileUpload"><input aria-labelledby="file-title missing-secondary-hint" id="picker" aria-required="true" type="file">' +
+        '${restored ? item : ""}</div></div></div><button>Save and Continue</button>';
+      window.writes = 0;
+      const picker=document.getElementById('picker');
+      picker.onchange=()=>{window.writes++; picker.insertAdjacentHTML('afterend',${JSON.stringify(item)});picker.value='';};
+      root.querySelector('button').onclick=review;`);
+    return route.fulfill({contentType:"text/html",body:fixture});
+  });
+  await page.route("**/attachment.pdf", route => {downloads++;return route.fulfill({contentType:"application/pdf",body:served});});
+  try {
+    await page.goto(url);
+    await assert.rejects(fill(),/required attachment needs your review/);
+    assert.equal(await page.evaluate("writes"),0);
+
+    restored = true;
+    await page.reload();
+    await fill();
+    assert.equal(await page.locator('[data-automation-id=applyFlowReviewPage]').count(),1);
+    assert.equal(await page.evaluate("writes"),0);
+
+    label = "Resume";
+    restored = false;
+    await page.reload();
+    await fill();
+    assert.equal(await page.evaluate("writes"),1);
+    assert.ok(downloads > 0);
+
+    restored = true;
+    await page.reload();
+    await fill();
+    assert.equal(await page.evaluate("writes"),0);
+    served = Buffer.from("%PDF-1.4 other file");
+    await page.reload();
+    await assert.rejects(fill(),/required attachment needs your review/);
+    assert.equal(await page.evaluate("writes"),0);
+    assert.equal(await page.evaluate("submits"),0);
+  } finally { await page.close(); }
+}
+
+test("saved Workday drafts preserve uploads and continue without rewinding", { timeout: 60_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
+    await verifySavedQuestionnaireUploads(browser);
     for (const scenario of ["review", "experience", "missing-back", "bad-summary"]) {
       const canGoBack = scenario !== "missing-back";
       const page = await browser.newPage();

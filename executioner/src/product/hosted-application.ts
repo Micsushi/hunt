@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { Page } from 'playwright';
 import { disposeResumeArtifact } from '../contracts/index.ts';
 import { createPageAnswerPlanner, matchLocationOption, type PageQuestion } from './page-answer-planner.ts';
-import { isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
+import { isAiEvaluationConsent, isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
 import { effectiveProfileFacts, productSources } from './sources.ts';
 import { resolveQuestion } from '../form/questions/catalog.ts';
@@ -148,7 +148,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           options:f.options,required:f.required,outcome:'observed',constraints:{inputType:f.inputType,
             min:f.min,max:f.max,step:f.step,minLength:f.minLength,maxLength:f.maxLength,pattern:f.pattern,readOnly:f.readOnly}};
         matching.record(matchObservation);
-        if (protectedQuestionCategory(f.label, undefined, f.options) === 'consent' && !isRecruitmentTermsConsent(f.label)) {
+        if (protectedQuestionCategory(f.label, undefined, f.options) === 'consent' && !isRecruitmentTermsConsent(f.label) && !isAiEvaluationConsent(f.label)) {
           const answered = f.kind==='checkbox' ? f.checked : !!f.value.trim();
           if(answered || !f.required){known.set(identity,answered?'existing':'optional');continue;}
           throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');

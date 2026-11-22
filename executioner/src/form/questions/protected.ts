@@ -33,6 +33,37 @@ export function isRecruitmentTermsConsent(label: string, requiredEmployerNames: 
   return requestsConsent;
 }
 
+// The owner authorizes affirmative answers to required application-screening consent.
+export function isAiEvaluationConsent(label: string): boolean {
+  if (!/\b(?:ai|artificial intelligence|automated)\b/iu.test(label)) return false;
+  const technology = '(?:ai|artificial intelligence(?: ai)?|automated)(?: (?:tools?|systems?|screening|evaluation))?';
+  const material = '(?:(?:my|your|this|the) )?(?:application(?: materials)?|candidate (?:information|data)|resume|candidacy)';
+  const purpose = new RegExp('^(?:(?:by selecting yes )?you consent to|do you (?:consent|agree) to|i (?:agree|consent) to|consent to) (?:the use of |using )?' +
+    technology + ' (?:to |for )(?:evaluate|evaluating|assess|assessing|screen|screening|review|reviewing) ' + material + '$', 'u');
+  const short = new RegExp('^(?:(?:i |do you )?(?:consent|agree) to )?' + technology +
+    ' (?:evaluation|screening|assessment) (?:consent|of ' + material + ')$', 'u');
+  const information = [
+    /^to support an efficient recruitment process [\p{L}\d]+(?: [\p{L}\d]+){0,3} may use artificial intelligence ai tools to assess how your candidate information aligns with the role requirements$/u,
+    /^these tools do not make decisions about a candidate s status every decision that leads [\p{L}\d]+(?: [\p{L}\d]+){0,3} to select a candidate for this role involves human review or intervention$/u,
+    /^you have the right to choose whether your data is processed using ai tools$/u,
+    /^by selecting no you decline consent$/u,
+    /^your application will be manually reviewed by [\p{L}\d]+(?: [\p{L}\d]+){0,3} recruiters in accordance with [\p{L}\d]+(?: [\p{L}\d]+){0,3} policy$/u,
+    /^for more information about how [\p{L}\d]+(?: [\p{L}\d]+){0,3} processes your personal data please review the candidate privacy notice$/u,
+  ];
+  const statements = label.split(/[.!?:;\n]+/u).map(normalizeCatalogText).filter(Boolean);
+  let affirmative = false;
+  for (const statement of statements) {
+    if (purpose.test(statement) || short.test(statement)) affirmative = true;
+    else if (!information.some(rule => rule.test(statement))) return false;
+  }
+  return affirmative;
+}
+
+export function isAiConsentControl(behavior: string, options: readonly string[]): boolean {
+  return ['checkbox','radio','select','listbox'].includes(behavior) && options.every(option =>
+    /^(?:|please select|select(?: one)?|choose(?: one)?|yes|no|(?:i )?(?:agree|accept|decline|disagree))$/u.test(normalizeCatalogText(option)));
+}
+
 export const contractApprovedPrivacyChoices = Object.freeze([
   "Prefer not to answer",
   "Prefer not to say",
@@ -75,6 +106,7 @@ export function protectedQuestionCategory(
   options: readonly string[] = [],
 ): ProtectedQuestionCategory | null {
   const normalized = normalizeCatalogText(label);
+  if (isAiEvaluationConsent(label)) return "consent";
   if (options.some(option => /\b(?:i (?:hereby )?(?:agree|consent|acknowledge|confirm|attest|certify)|acknowledge confirm)\b/u.test(normalizeCatalogText(option)))) return "consent";
   if (/\b(?:i|we) (?:hereby )?(?:confirm|certify|declare|attest|pledge)\b|\b(?:please )?(?:confirm|certify|attest) that\b|\b(?:consent|acknowledge|signature|privacy (?:notice|policy|statement)|terms (?:(?:and )?conditions|of (?:use|service)))\b|\b(?:(?:i|we) (?:hereby )?agree|agree to)\b|^agree$|^terms$|\b(?:accept|read) (?:the )?terms\b|\bi have (?:received )?read and (?:understood|understand)\b/u.test(normalized)) {
     return "consent";

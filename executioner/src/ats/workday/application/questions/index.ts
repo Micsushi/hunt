@@ -60,6 +60,8 @@ import type { ConfiguredNarrativeProvider } from "./narrative.ts";
 import {
   isRecruitmentTermsConsent,
   protectedAnswerProvenanceAllowed,
+  isAiEvaluationConsent,
+  isAiConsentControl,
   protectedQuestionCategory,
   type ProtectedQuestionCategory,
 } from "./protected.ts";
@@ -307,7 +309,9 @@ export function createQuestionnairePageHandler(
           const decision = isRecruitmentTermsConsent(fullQuestion)
             ? await (dependencies.profileQuery as ApplicationProfileQuery).query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal)
             : undefined;
-          if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && decision.value.lane === 'live_owner_fact' && typeof decision.value.value === 'boolean') {
+          if (isAiEvaluationConsent(fullQuestion) && isAiConsentControl(field.behavior,field.rawOptions ?? field.options.map(option => option.label))) {
+            consentDecision = true;
+          } else if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && decision.value.lane === 'live_owner_fact' && typeof decision.value.value === 'boolean') {
             consentDecision = decision.value.value;
           } else {
             recordUnset();

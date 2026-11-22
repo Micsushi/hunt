@@ -208,6 +208,7 @@ export interface ApplicationTextConstraints {
 }
 
 export type ApplicationFieldObservation = FieldObservation & {
+  readonly filePurpose?: "resume" | "other" | "ambiguous";
   /** Native validity and visible invalid-state checks passed for this observation. */
   readonly populatedValueValid?: boolean;
   readonly constraints?: ApplicationTextConstraints;

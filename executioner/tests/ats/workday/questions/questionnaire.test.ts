@@ -227,6 +227,13 @@ test("an injected owner answer can resolve an observed unknown question", async 
 
 
 test("preserved consent skips mutations and unknown consent cannot become an injected owner fact", async () => {
+  const {handler,calls} = dependencies();
+  const aiConsent = field("ai-screening","I consent to automated screening of my application.","checkbox");
+  const granted = await handler.complete(request([aiConsent]),new AbortController().signal);
+  assert.equal(granted.ok && granted.value.kind,"verified");
+  assert.equal(calls.driven,1);
+  assert.equal(calls.verified,1);
+
   for (const label of ["Yes, I have read and consent to the terms and conditions*",
     "Applicant Privacy Notice", "Privacy Policy", "I have read and understood",
     "I agree to the Recruitment Privacy Notice and confirm that no AI tools were used."]) {

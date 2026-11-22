@@ -40,6 +40,8 @@ import {
   isApplicationAccuracyDeclaration,
   isCriminalConvictionDisclosure,
   isRecruitmentTermsConsent,
+  isAiEvaluationConsent,
+  isAiConsentControl,
   protectedQuestionCategory,
 } from "../questions/protected.ts";
 import { semanticSyntheticTestDefault, syntheticTestDate } from "./testing-policy.ts";
@@ -448,8 +450,17 @@ export function createApplicationAnswerResolver(
       const questionText = field.rawQuestion ?? field.label;
       // A required upload can be a transcript, portfolio or another document.
       // A draft fallback never authorizes attaching the applicant's résumé to it.
-      if (field.behavior === 'file_upload' && (field.state === 'ambiguous' || uploadLabelKind(questionText) !== 'resume')) {
-        return unsupported(field);
+      if (field.behavior === 'file_upload') {
+        const purpose = field.filePurpose ?? uploadLabelKind(questionText);
+        if (field.state === 'populated') {
+          if (purpose === 'other' || purpose === 'resume' && request.committedReadback?.kind === 'upload' &&
+              request.committedReadback.sha256 === request.resumeArtifact.sha256 &&
+              request.committedReadback.resumeId === request.resumeArtifact.resumeId) {
+            return success({kind:'readback_only', fieldId:field.fieldId});
+          }
+          return unsupported(field);
+        }
+        if (field.state !== 'empty' || purpose !== 'resume') return unsupported(field);
       }
       if (field.readOnly === true || field.constraints?.readOnly === true) {
         return field.state === "populated"
@@ -489,13 +500,19 @@ export function createApplicationAnswerResolver(
         const backgroundCheck = questionResolution.kind === "resolved" && questionResolution.id === "owner-question-background-check-willing" &&
           field.required && field.behavior === "radio" && field.options.length === 2 &&
           ["yes", "no"].every(answer => field.options.some(option => normalizeCatalogText(option.label) === answer));
-        if (!backgroundCheck && !isRecruitmentTermsConsent(questionText, field.required ? request.employerNames : undefined)) return failure("protected_answer_denied");
-        const factId = backgroundCheck ? "background_check_willing" : "terms_consent";
-        const consent = await query({profileId:request.profileId, profileRevision:request.profileRevision, factId}, signal);
-        if (!consent.ok) return consent;
-        if (consent.value.kind !== "answered" || consent.value.provenance !== "owner_provided" ||
-            consent.value.lane !== "live_owner_fact" || typeof consent.value.value !== "boolean") return failure("protected_answer_denied");
-        const value = consent.value.value;
+        let value: boolean;
+        if (isAiEvaluationConsent(questionText)) {
+          if (!isAiConsentControl(field.behavior,field.rawOptions ?? field.options.map(option => option.label))) return failure("protected_answer_denied");
+          value = true;
+        } else {
+          if (!backgroundCheck && !isRecruitmentTermsConsent(questionText, field.required ? request.employerNames : undefined)) return failure("protected_answer_denied");
+          const factId = backgroundCheck ? "background_check_willing" : "terms_consent";
+          const consent = await query({profileId:request.profileId, profileRevision:request.profileRevision, factId}, signal);
+          if (!consent.ok) return consent;
+          if (consent.value.kind !== "answered" || consent.value.provenance !== "owner_provided" ||
+              consent.value.lane !== "live_owner_fact" || typeof consent.value.value !== "boolean") return failure("protected_answer_denied");
+          value = consent.value.value;
+        }
         if (field.behavior === "select" || field.behavior === "radio" || field.behavior === "listbox") {
           const choice = consentOption(value, field.options, field.rawOptions);
           if (!choice) return failure("protected_answer_denied");
