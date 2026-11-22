@@ -98,8 +98,8 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
       });
     });
     const facts=[{factId:'given_name',value:'Fixture'},{factId:'family_name',value:'Applicant'},{factId:'email_address',value:'fixture@example.invalid'}];
-    const fillPage = () => page.evaluate(fillVisibleFields,{facts,
-      resume:{name:'Resume.pdf',base64:Buffer.from('%PDF-current-page').toString('base64')},replaceExistingResume:true});
+    const fillPage = (replaceExistingResume=true) => page.evaluate(fillVisibleFields,{facts,
+      resume:{name:'Resume.pdf',base64:Buffer.from('%PDF-current-page').toString('base64')},replaceExistingResume});
     const currentPage = await fillPage();
     assert.equal(currentPage.resume,'verified');
     assert.equal(await resumeControl.evaluate(async(e:HTMLInputElement)=>e.files?.[0]?.text()),'%PDF-current-page');
@@ -138,6 +138,23 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     assert.notEqual((await fillPage()).resume,'verified');
     await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),/additional attachment/);
     assert.equal(await resumeControl.evaluate(async(e:HTMLInputElement)=>e.files?.[0]?.text()),'%PDF-existing');
+
+    await page.reload();
+    const existing=Buffer.concat([Buffer.from('%PDF-existing'),Buffer.from([0,255])]);
+    await resumeControl.setInputFiles({name:'Resume.pdf',mimeType:'application/pdf',buffer:existing});
+    const selectedBytes=()=>resumeControl.evaluate(async(input:HTMLInputElement)=>
+      Array.from(new Uint8Array(await input.files![0]!.arrayBuffer())));
+    assert.equal((await inspectHostedFields(page)).find(field=>field.kind==='file')?.resumeTarget,true);
+    const preserved=await fillPage(false);
+    assert.equal(preserved.resume,'unverified');
+    assert.ok(preserved.skipped.some(row=>row.reason==='existing_attachment_preserved'));
+    assert.deepEqual(await selectedBytes(),[...existing]);
+    await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),
+      /selected resume attachment could not be verified/);
+    assert.deepEqual(await selectedBytes(),[...existing]);
+    const matching=await fillApplication(page,{url,profile,resume:existing},AbortSignal.timeout(12000),()=>{});
+    assert.equal(matching.needsOwnerReview,true);
+    assert.deepEqual(await selectedBytes(),[...existing]);
     assert.equal(await page.evaluate('window.submitted'),undefined);
   } finally { await browser.close(); }
 });
