@@ -42,6 +42,18 @@ export function aiConsentAuthority(manifest: unknown) {
   return {owner, fact};
 }
 
+/** Keep the draft's pinned facts and use the current owner's permission for a new consent action. */
+export function withCurrentAiConsent(manifest: {profile: unknown}, currentManifest: unknown) {
+  const saved = parseApplicationProfile(manifest.profile);
+  const current = aiConsentAuthority(currentManifest);
+  const savedOwner = saved.facts.find(fact => fact.factId === 'email_address')?.value ?? saved.profileId;
+  const consent = current?.owner === savedOwner ? current.fact : undefined;
+  const facts = saved.facts.filter(fact => fact.factId !== 'ai_evaluation_consent');
+  if (consent) facts.push(consent);
+  const unsetFactIds = saved.unsetFactIds.filter(id => id !== 'ai_evaluation_consent');
+  return {...manifest, profile:parseApplicationProfile({...saved, facts, unsetFactIds})};
+}
+
 /** Product projections never change persisted facts or reattribute saved website answers. */
 export function effectiveProfileFacts(value: unknown) {
   const manifest = value as {profile?:unknown;profilePlan?:unknown} | undefined;

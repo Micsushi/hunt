@@ -7,8 +7,7 @@ import { writePrivateFileAtomic } from "../composition/private/s2-application-so
 import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
-import { aiConsentAuthority, applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
-import { parseApplicationProfile } from "../profile/application-profile.ts";
+import { aiConsentAuthority, applicantProfile, productSources, effectiveProfileFacts, withCurrentAiConsent } from "./sources.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
 import { AttachmentFailure } from './extension-bridge.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
@@ -154,17 +153,9 @@ export class ApplicationQueue {
       throw new Error('A saved application with an unreadable link needs recovery before using this posting.');
     }
   }
-  // A queued draft pins its facts and PDF. Permission for a new consent action follows the current owner.
   private jobInput(job: ProductJob) {
     const input = JSON.parse(readFileSync(join(this.root, job.id + '.input.json'), 'utf8'));
-    const saved = parseApplicationProfile(input.profile.profile);
-    const current = aiConsentAuthority(this.settings?.profile);
-    const savedOwner = saved.facts.find(fact => fact.factId === 'email_address')?.value ?? saved.profileId;
-    const consent = current?.owner === savedOwner ? current.fact : undefined;
-    const facts = saved.facts.filter(fact => fact.factId !== 'ai_evaluation_consent');
-    if (consent) facts.push(consent);
-    return {...input, profile:{...input.profile, profile:parseApplicationProfile({...saved, facts,
-      unsetFactIds:saved.unsetFactIds.filter(id => id !== 'ai_evaluation_consent')})}};
+    return {...input, profile:withCurrentAiConsent(input.profile, this.settings?.profile)};
   }
   currentPageInput(job: ProductJob): {profile: unknown; resume: string} {
     if (!job.pageHandoff || job.status !== 'paused' || !job.sourceJobId || !job.resumeVersion || !job.resumeSha256) {
