@@ -5,7 +5,7 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
   const locationChoice = input => {
     if (!input.matches(selector)) return null;
     const widget = input.closest('[data-testid=location]'), root = input.getRootNode(), owner = regionFor(input);
-    const result = {kind:'rippling_location', input, widget, owner, root, widgetId:input.id, labels:[], pills:[], options:[],
+    const result = {kind:'rippling_location', observation:{widget:'rippling-location', resumableProfileQuery:true}, input, widget, owner, root, widgetId:input.id, labels:[], pills:[], options:[],
       popup:null, popupStatus:'closed', query:input.value, empty:true, valid:false};
     const labelId = input.getAttribute('aria-labelledby'), label = labelId && root.getElementById(labelId);
     if (!input.id || widget.querySelectorAll('input').length !== 1 || !label ||
@@ -41,6 +41,17 @@ export function ripplingLocationChoices(fallback, state, regionFor, visible) {
         result.clear = write => write(input,'');
       }
     }
+    result.prepareQuery = (query, write) => {
+      if (result.query === query && !result.popup) write(input, '');
+    };
+    result.canResumeQuery = (plan, options, fact, norm) => {
+      const query = result.query;
+      if (query !== fact('city') || query.includes(',')) return false;
+      if (query === plan.query) return true;
+      if (plan.reason !== 'profile_answer' || typeof plan.answer !== 'string') return false;
+      const parts = plan.answer.split(',');
+      return parts.length === 3 && norm(parts[0]) === norm(query) && options.includes(plan.answer);
+    };
     result.confirmClick = async (value, pause) => {
       // Rippling writes the chosen identifier into a separate field owned by the application form.
       const selected = () => {

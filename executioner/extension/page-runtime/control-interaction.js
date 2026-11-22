@@ -58,7 +58,7 @@ export function createControlInteraction({ state, checkDeadline, boundChoice, ed
     form?.addEventListener('submit',preventSubmit,true);
     try {
       current.input.focus();
-      if(current.kind==='rippling_location' && current.query===query && !current.popup) write(current.input,'');
+      current.prepareQuery?.(query, write);
       write(current.input,query);
       current=boundChoice(change);
       if(!current || current.query!==query)throw new Error('The search query was not retained.');
