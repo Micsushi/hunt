@@ -140,13 +140,19 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
         await delay(1500, undefined, {signal});
         await command({operation:'return_to_job'});
         preferCreate = false;
-        attempted = false;
         await delay(1000, undefined, {signal});
         continue;
       }
       check(state);
+      if (verificationAttempted && attempted && (state.state==='sign_in' || state.state==='navigation' && state.action==='show_sign_in')) {
+        throw new ApplicationPause('C3 opened the verification link, but the employer still requests sign-in. Check the account in this tab before retrying.');
+      }
       if (state.state === 'account_exists') {
-        if (!creationAttempted) throw new ApplicationPause('The account already exists. Inspect the account page before retrying.');
+        const observed=state.observation;
+        if (!creationAttempted && (!state.documentId || observed?.version!=='workday-page-v1' || observed.kind!=='account_exists' ||
+            observed.conflicts?.length!==0 || !observed.signals?.includes('create_account_form') || !observed.signals.includes('account_exists_response'))) {
+          throw new ApplicationPause('C3 could not confirm the employer account-exists notice. Inspect the account page before retrying.');
+        }
         preferCreate = false; creationSince = 0;
       }
       if (state.state === 'application') {
@@ -224,7 +230,8 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           continue;
         }
         navigation.set(key, Date.now());
-        if (state.state === 'account_exists') record('account_exists');
+        // A notice left by an earlier session identifies the sign-in route, not which email was used.
+        if (state.state === 'account_exists' && creationAttempted) record('account_exists');
         check(await command({ operation: 'navigate', ...document, action, preferCreate }));
       }
       await delay(500, undefined, { signal });

@@ -172,9 +172,13 @@ retains its separate selected-file and completion checks.
 
 Workday tries Create Account when employer-account history is unknown, using the
 saved credentials and checking the confirmation password before its single click.
-An explicit account-exists response switches to Sign In. Confirmed account access
+An explicit account-exists response switches to Sign In, including a verified
+notice already visible on the selected posting when a run resumes. Confirmed account access
 is remembered per employer and email; uncertain registration prevents duplicate
-creation on retry. Verification uses the saved mailbox connection when available.
+creation on retry. For an observed verification request after registration, C3
+uses the saved mailbox connection when available. If the employer requests
+sign-in again after C3 has already tried it and opened the verification link,
+C3 pauses for the owner to check the account.
 CAPTCHA, password resets and unconfirmed outcomes remain visible stops.
 
 Draft filling uses saved details first, then reviewable defaults for unsupported
@@ -424,8 +428,8 @@ successfully before C3 can click the employer's Submit button.
 
 For a confirmed Workday site error, C3 makes bounded reload attempts, then reopens
 that same posting once while retaining the saved draft. Persistent site errors
-still pause. Rejected sign-in for an existing account can use the configured
-email connection for one password-reset attempt.
+still pause. Rejected sign-in pauses the job for the owner to check the saved
+credentials. If the employer requires a password reset, the owner completes it.
 
 C3 recognizes Workday's Take Assessment step and tries its normal Save and
 Continue action. If Workday requires the assessment, C3 preserves the draft and

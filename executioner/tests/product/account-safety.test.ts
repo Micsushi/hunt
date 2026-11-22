@@ -13,8 +13,9 @@ import {PlaywrightAccountPageAdapter} from '../../src/browser/playwright-live/pr
 
 test('delayed transition from Create Account to Sign In opens the link once', async () => {
   const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';
-  for (const route of ['existing','register','sign-in-before-register']) {
-    const existingResponse=route!=='existing';
+  for (const route of ['existing','register','sign-in-before-register','resume-exists']) {
+    const existingResponse=route==='register' || route==='sign-in-before-register';
+    const resumed=route==='resume-exists';
     let creating=existingResponse, opened=0, readsAfterOpen=0, signedIn=false;
     let entry=route==='sign-in-before-register' ? 'show_sign_in' : '';
     const clicks:string[]=[];
@@ -26,8 +27,9 @@ test('delayed transition from Create Account to Sign In opens the link once', as
         case 'inspect': {
           if (entry) return {state:'navigation',action:entry,documentId:'same-document',url};
           const state=signedIn ? 'application' : opened && ++readsAfterOpen>1 ? 'sign_in' :
-            existingResponse && !creating ? 'account_exists' : 'create_account';
-          return {state, documentId:'same-document', url, ready:true, clickReady:true};
+            (existingResponse || resumed) && !creating ? 'account_exists' : 'create_account';
+          return {state, documentId:'same-document', url, ready:true, clickReady:true,
+            ...(state==='account_exists' && {observation:{version:'workday-page-v1',documentKey:'fixture',kind:'account_exists',signals:['create_account_form','account_exists_response'],conflicts:[]}})};
         }
         case 'fill': return {state:'filled',verified:true};
         case 'navigate':
@@ -50,7 +52,47 @@ test('delayed transition from Create Account to Sign In opens the link once', as
     assert.deepEqual(clicks,existingResponse ? ['create','sign_in'] : ['sign_in']);
     assert.equal(events.filter(event=>event==='account_exists').length,Number(existingResponse));
     assert.ok(events.includes('application_opened'));
+    if(resumed) assert.ok(events.includes('sign_in_transition_observed'));
   }
+});
+
+test('a resumed account notice needs an explicit employer response before sign-in', async ()=>{
+  const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';
+  for(const signals of [[],['create_account_form']]) {
+    const calls:unknown[]=[];
+    await assert.rejects(prepareWorkdayAccount(async(method,request={})=>{
+      if(method==='agentStatus') return {capabilities:['workday-account-v1','workday-page-v1']};
+      calls.push(request.operation);
+      if(request.operation==='begin') return {tabId:1};
+      if(request.operation==='inspect') return {state:'account_exists',documentId:'fixture',url,
+        observation:{version:'workday-page-v1',documentKey:'fixture',kind:'account_exists',signals,conflicts:[]}};
+      return {};
+    },{url,signal:AbortSignal.timeout(2000),record:()=>{},onTab:()=>{}}),/could not confirm/);
+    assert.deepEqual(calls,['begin','inspect','end']);
+  }
+});
+
+test('a verification link followed by another sign-in prompt does not authorize a second sign-in', async ()=>{
+  const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';
+  const events:string[]=[], clicks:string[]=[];
+  let state='sign_in', mailboxReads=0;
+  await assert.rejects(prepareWorkdayAccount(async(method,request={})=>{
+    if(method==='agentStatus') return {capabilities:['workday-account-v1','workday-page-v1']};
+    if(request.operation==='begin') return {tabId:1};
+    if(request.operation==='inspect') return {state,url,documentId:'fixture',ready:true,clickReady:true,
+      ...(state==='blocked' && {reason:'verification'})};
+    if(request.operation==='fill') return {state:'filled',verified:true};
+    if(request.operation==='click') {
+      clicks.push(String(request.accountMode));state=clicks.length===1?'blocked':'application';return {state:'clicked'};
+    }
+    if(request.operation==='return_to_job') state='sign_in';
+    return {};
+  },{url,credentials:{email:'fixture@example.invalid',password:'fixture'},verificationSince:Date.now()-5000,
+    signal:AbortSignal.timeout(9000),record:event=>events.push(event),onTab:()=>{},
+    verifyEmail:async page=>{mailboxReads++;await page.goto(url+'?fixture-verification');}}),/still requests sign-in/);
+  assert.deepEqual(clicks,['sign_in']);assert.equal(mailboxReads,1);
+  assert.ok(events.includes('verification_link_opened'));assert.ok(events.includes('sign_in_uncertain'));
+  assert.equal(events.includes('sign_in_transition_observed'),false);
 });
 
 test('account journal preserves attempted effects atomically and rejects values outside its catalog',()=>{

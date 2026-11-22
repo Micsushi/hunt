@@ -45,6 +45,8 @@ test('attachment failures retain only fixed categories before opening any applic
       if (message===protectedTab) {
         assert.equal(job!.error!.includes('Workday opened the application.'),accountOpened);
         assert.match(job!.error!,/Chrome is protecting another extension/);
+        assert.match(job!.error!,/If an extension popup is open, dismiss it and retry/);
+        assert.match(job!.error!,/continue in the employer tab/);
         assert.doesNotMatch(job!.error!,/sign.in manually/i);
       }
       assert.doesNotMatch(receipt,/fixture secret|tab with id|fixture@example/);

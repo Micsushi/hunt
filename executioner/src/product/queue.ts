@@ -400,7 +400,7 @@ export class ApplicationQueue {
       job.error = controller.signal.aborted
         ? controller.signal.reason instanceof ApplicationPause ? controller.signal.reason.message : "Paused. Your draft is preserved."
         : error instanceof ApplicationPause ? error.message
-        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? (reachedWorkdayApplication ? 'Workday opened the application. ' : '') + 'Chrome is protecting another extension on this tab. Retry when C3 can access the application.'
+        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? (reachedWorkdayApplication ? 'Workday opened the application. ' : '') + 'Chrome is protecting another extension on this tab. If an extension popup is open, dismiss it and retry. If Chrome still blocks access, continue in the employer tab. Your draft is preserved.'
         : error instanceof AttachmentFailure && error.code==='attachment_viewport_unavailable' ? 'This tab has no usable page area. Resize or restore its browser window, then retry.'
         : error instanceof AttachmentFailure && error.code==='attachment_viewport_cleanup_pending' || error instanceof Error && error.message===viewportCleanupPending ? viewportCleanupPending
         : "C3 could not finish this page. Inspect the tab, then retry.";
