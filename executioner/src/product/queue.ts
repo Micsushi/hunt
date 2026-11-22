@@ -169,6 +169,8 @@ export class ApplicationQueue {
     const pendingInputs = new Map<string, {profile: unknown; resume: string}>();
     const next = this.jobs.map(job => ({ ...job }));
     for (const { input, target, resume, submissionAllowed } of prepared) {
+      if (input.sourceJobId !== undefined && next.some(job => job.status !== 'removed' && job.sourceJobId === input.sourceJobId &&
+          canonicalPostingKey(job.key) !== target.key)) throw new Error('The selected Hunt job already belongs to a different application link.');
       const existing = next.find(j => canonicalPostingKey(j.key) === target.key && j.status !== "removed");
       if (existing) {
         if (options.paused && (existing.status !== "paused" || this.running.has(existing.id) || this.reviewActions.has(existing.id))) throw new Error("This application is already active. Pause it before importing a resume.");
@@ -323,7 +325,8 @@ export class ApplicationQueue {
       job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.componentFailure; delete job.reviewDigest; this.changed(job); this.safePump(); return;
     }
     if (action === "remove" || action === "restore") {
-      if (action === "restore" && this.jobs.some(other => other.id !== id && possiblePostingAlias(other.key) === possiblePostingAlias(job.key) && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
+      if (action === "restore" && this.jobs.some(other => other.id !== id && other.status !== "removed" &&
+          (possiblePostingAlias(other.key) === possiblePostingAlias(job.key) || job.sourceJobId !== undefined && other.sourceJobId === job.sourceJobId))) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
       if (action === "remove" && !["paused", "queued", "review"].includes(job.status) || action === "restore" && job.status !== "removed" || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for the job to pause and its review to finish before removing it.");
       job.status = action === "remove" ? "removed" : "paused"; job.stage = action === "remove" ? "Removed" : "Restored. Retry when ready"; this.changed(job); return;
     }

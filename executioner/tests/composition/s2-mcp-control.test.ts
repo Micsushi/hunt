@@ -389,8 +389,10 @@ $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sy
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "ignore", "ignore"],
-      timeout: 10_000,
+      // A cold PowerShell process can exceed ten seconds on a hosted Windows runner.
+      timeout: 60_000,
     },
   );
+  if (result.error) throw result.error;
   assert.equal(result.status, 0);
 }

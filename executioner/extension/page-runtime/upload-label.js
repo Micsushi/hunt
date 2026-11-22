@@ -63,14 +63,16 @@ export function readUploadOwnerLabels(inputs) {
       if (controls.length!==1 || controls[0]!==input) {
         // A file group may also own a notes input. Its explicit title can veto a
         // contradictory picker, but cannot establish a positive resume binding.
-        if (controls.filter(node=>node.matches('input[type=file]')).length===1) {
-          names(group);
-          for (const title of headings.filter(node=>node.parentElement===group || node===preceding)) {
-            names(title);
-            labels.push(title.textContent || '');
-          }
+        if (controls.filter(node=>node.matches('input[type=file]')).length!==1) break;
+        names(group);
+        for (const title of headings) {
+          let container = parent(title);
+          while (container && container!==group && !container.matches(owner)) container=parent(container);
+          if (container!==group && title!==preceding) continue;
+          names(title);
+          labels.push(title.textContent || '');
         }
-        break;
+        continue;
       }
       names(group);
       if (group.getClientRects().length && group.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&

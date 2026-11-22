@@ -167,6 +167,10 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     const [variant] = await (await post('/handoff/import-paused',bundleFor(selectedUrl.replace('/fixture/','/Fixture/'),131))).json();
     assert.ok(variant.pageHandoff);
     await assert.rejects(app.queue.action(selected.id,'restore'),/already been added/);
+    await app.queue.action(variant.id,'remove');
+    const [movedSource]=await (await post('/handoff/import-paused',bundleFor(selectedUrl.replace('abc','different'),122))).json();
+    assert.ok(movedSource.pageHandoff);
+    await assert.rejects(app.queue.action(selected.id,'restore'),/already been added/);
 
     assert.equal(app.queue.jobs[0]!.status,'paused');
     assert.equal(app.queue.jobs[0]!.resumeVersion,'v18');

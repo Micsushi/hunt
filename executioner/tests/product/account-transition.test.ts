@@ -108,6 +108,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
     }
     await page.reload();
     await fill();
+    // The empty form inserts the attribute-only row in the file change handler. Restored forms start with a success child.
     assert.equal(await page.evaluate("writes"),1);
     assert.ok(downloads > 0);
 
