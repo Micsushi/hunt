@@ -13,8 +13,10 @@ import {PlaywrightAccountPageAdapter} from '../../src/browser/playwright-live/pr
 
 test('delayed transition from Create Account to Sign In opens the link once', async () => {
   const url='https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1';
-  for (const existingResponse of [false,true]) {
+  for (const route of ['existing','register','sign-in-before-register']) {
+    const existingResponse=route!=='existing';
     let creating=existingResponse, opened=0, readsAfterOpen=0, signedIn=false;
+    let entry=route==='sign-in-before-register' ? 'show_sign_in' : '';
     const clicks:string[]=[];
     const events:string[]=[];
     await prepareWorkdayAccount(async (method, request={})=>{
@@ -22,12 +24,20 @@ test('delayed transition from Create Account to Sign In opens the link once', as
       switch (request.operation) {
         case 'begin': return {tabId:1};
         case 'inspect': {
+          if (entry) return {state:'navigation',action:entry,documentId:'same-document',url};
           const state=signedIn ? 'application' : opened && ++readsAfterOpen>1 ? 'sign_in' :
             existingResponse && !creating ? 'account_exists' : 'create_account';
           return {state, documentId:'same-document', url, ready:true, clickReady:true};
         }
         case 'fill': return {state:'filled',verified:true};
-        case 'navigate': assert.equal(request.action,'show_sign_in'); opened++; return {state:'navigated'};
+        case 'navigate':
+          if (entry) {
+            assert.equal(request.action,entry);
+            entry=entry==='show_sign_in' ? 'show_create_account' : '';
+          } else {
+            assert.equal(request.action,'show_sign_in'); opened++;
+          }
+          return {state:'navigated'};
         case 'click':
           clicks.push(String(request.accountMode));
           if (request.accountMode==='create') creating=false; else signedIn=true;

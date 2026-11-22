@@ -214,7 +214,9 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           record('sign_in_diagnostic', 'submit_script_click_succeeded');
         }
       } else if (action && (!attempted || action === 'continue_application')) {
-        const key = `${state.documentId}:${state.url}:${action}`;
+        // Workday can reuse one document for entry and the return from registration.
+        const returningToSignIn = action === 'show_sign_in' && creationAttempted;
+        const key = JSON.stringify([state.documentId, state.url, action, returningToSignIn]);
         const clickedAt = navigation.get(key);
         if (clickedAt !== undefined) {
           if (Date.now() - clickedAt >= 30_000) throw new ApplicationPause('The employer did not advance after opening sign-in. Inspect the tab before retrying.');
