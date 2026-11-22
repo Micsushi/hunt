@@ -105,7 +105,8 @@ export class ApplicationQueue {
         const target=savedTarget(job.url);
         if (!target) continue;
         const {key}=target;
-        if (key!==job.key || job.status!=='removed' && activeKeys.has(key)) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
+        if (typeof job.key!=='string' || canonicalPostingKey(job.key)!==key || job.status!=='removed' && activeKeys.has(key)) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
+        job.key=key;
         if (job.status!=='removed') activeKeys.add(key);
         delete job.tabId;
         if (job.status === "submitting") { job.status = "submission_uncertain"; job.stage = "Check the employer site before doing anything else"; }

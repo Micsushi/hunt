@@ -83,15 +83,59 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
 });
 
 test("restoring a replaced job and silently changing its selected resume are rejected", async () => {
-  const queue = new ApplicationQueue(mkdtempSync(join(tmpdir(), "c3-duplicate-")), { connected: false, open: async () => { throw new Error(); }, release: async () => {} });
+  const root = mkdtempSync(join(tmpdir(), "c3-duplicate-"));
+  const bridge = { connected: false, open: async () => { throw new Error(); }, release: async () => {} };
+  let queue = new ApplicationQueue(root, bridge);
   try {
     queue.configure(applicantProfile({ given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid" }), Buffer.from("%PDF-original").toString("base64"));
     const input = { url: "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" };
     const [first] = queue.add([input]);
     assert.throws(() => queue.add([{ ...input, resumeBase64: Buffer.from("%PDF-replacement").toString("base64") }]), /different resume/);
     await queue.action(first!.id, "remove");
-    queue.add([input]);
+    const [neighbor] = queue.add([input]);
     await assert.rejects(queue.action(first!.id, "restore"), /already been added/);
+
+    const url = 'https://www.amazon.jobs/en/jobs/7654/fixture';
+    const selected = {url, sourceJobId:130, resumeBase64:Buffer.from('%PDF-selected').toString('base64'), resumeVersion:'v17'};
+    const options = {paused:true, currentPageHandoff:true};
+    const [amazon] = queue.add([selected], options);
+    const inputFile = join(root, amazon!.id+'.input.json');
+    const originalInput = readFileSync(inputFile);
+    const oldKey = 'www.amazon.jobs/jobs/7654'; // Written by the released www-host parser.
+    const canonicalUrl = url.replace('www.amazon.jobs','amazon.jobs');
+    for (const status of ['paused','removed'] as const) {
+      if (status==='removed') await queue.action(amazon!.id,'remove');
+      queue.jobs.find(job=>job.id===amazon!.id)!.key = oldKey;
+      await queue.close();
+      queue = new ApplicationQueue(root, bridge);
+      const visible = queue.snapshot().jobs;
+      assert.ok(visible.some(job=>job.id===neighbor!.id));
+      assert.equal(visible.some(job=>job.id===amazon!.id),status==='paused');
+      assert.equal(queue.jobs.find(job=>job.id===amazon!.id)!.key,'amazon.jobs/jobs/7654');
+      if (status==='paused') {
+        assert.equal(queue.add([{...selected,url:canonicalUrl}],options)[0]!.id,amazon!.id);
+        assert.throws(()=>queue.add([{...selected,url:canonicalUrl,sourceJobId:131}],options),/another Hunt job/);
+        assert.throws(()=>queue.add([{...selected,url:url+'/unrelated'}],options),/recognized public application form/);
+      } else {
+        const [replacement] = queue.add([{...selected,url:canonicalUrl}],options);
+        assert.notEqual(replacement!.id,amazon!.id);
+        await assert.rejects(queue.action(amazon!.id,'restore'),/already been added/);
+      }
+      assert.deepEqual(readFileSync(inputFile),originalInput);
+    }
+    await queue.close();
+    const stateFile = join(root,'jobs.json');
+    const saved = JSON.parse(readFileSync(stateFile,'utf8'));
+    const archived = saved.jobs.find((job:{id:string})=>job.id===amazon!.id);
+    for (const key of ['www.amazon.jobs/jobs/7655','www.amazon.jobs/jobs/7654/unrelated']) {
+      archived.key = key;
+      writeFileSync(stateFile,JSON.stringify(saved));
+      assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
+    }
+    archived.key = oldKey;
+    archived.status = 'paused';
+    writeFileSync(stateFile,JSON.stringify(saved));
+    assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
   } finally { await queue.close(); }
 });
 
