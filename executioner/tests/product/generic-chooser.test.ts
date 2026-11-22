@@ -49,7 +49,7 @@ test('Bamboo asynchronous chooser proves only binding; shared fill owns exact by
   }finally{await browser.close();}
 });
 
-test('a chooser opened for another input is refused without assigning either file',async()=>{
+test('wrong, missing and expired chooser attempts leave files and listeners untouched',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage();await fixture(page,"document.getElementById('cover').click();");
@@ -60,6 +60,17 @@ test('a chooser opened for another input is refused without assigning either fil
     });
     assert.equal(await page.locator('input[type=file]').evaluateAll(es=>es.some(e=>(e as HTMLInputElement).files!.length)),false);
     assert.equal(chooserListeners(page),0);assert.equal(await page.evaluate('submits'),0);
+    await page.locator('#choose').evaluate(e => { (e as HTMLButtonElement).onclick = null; });
+    await assert.rejects(prepareCurrentPage(page,{url,profile:{},resume:selected},AbortSignal.timeout(6000),()=>{}),error=>{
+      assert.match(String(error),/did not identify one upload field/);
+      assert.deepEqual(componentFailure(error),{component:'uploads',operation:'observe_file_chooser'});
+      return true;
+    });
+    assert.equal(chooserListeners(page),0);
+    const clicks=await page.evaluate('activations');
+    await assert.rejects(proveBambooResumeInput(page,url,AbortSignal.timeout(1000),Date.now()-1),/expired/);
+    assert.equal(await page.evaluate('activations'),clicks);
+    assert.equal(await page.locator('#file').evaluate((e:HTMLInputElement)=>e.files!.length),0);
   }finally{await browser.close();}
 });
 
@@ -84,23 +95,6 @@ test('Bamboo upload receipt allows profile fill without a parser toast and survi
     assert.ok((await fill(page)).skipped.some(item=>item.reason==='resume_parsing_pending_profile_not_filled'));
     assert.equal(await page.locator('[name=first]').inputValue(),'');
     assert.equal(await page.evaluate('activations'),1);assert.equal(await page.evaluate('submits'),0);
-  }finally{await browser.close();}
-});
-
-test('chooser timeout and expired operation preserve fields and remove the listener',async()=>{
-  const browser=await chromium.launch({headless:true});
-  try {
-    const page=await browser.newPage();await fixture(page,'');
-    await assert.rejects(prepareCurrentPage(page,{url,profile:{},resume:selected},AbortSignal.timeout(6000),()=>{}),error=>{
-      assert.match(String(error),/did not identify one upload field/);
-      assert.deepEqual(componentFailure(error),{component:'uploads',operation:'observe_file_chooser'});
-      return true;
-    });
-    assert.equal(chooserListeners(page),0);
-    const clicks=await page.evaluate('activations');
-    await assert.rejects(proveBambooResumeInput(page,url,AbortSignal.timeout(1000),Date.now()-1),/expired/);
-    assert.equal(await page.evaluate('activations'),clicks);
-    assert.equal(await page.locator('#file').evaluate((e:HTMLInputElement)=>e.files!.length),0);
   }finally{await browser.close();}
 });
 

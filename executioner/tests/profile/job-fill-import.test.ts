@@ -46,28 +46,19 @@ test("Job Fill v2 imports strict facts, documents, rules, and confirmation state
   assert.equal(result.replacementLedger.some(({ action }) => action === "duplicate_same"), true);
 });
 
-test("conflicting saved answers stay unresolved and never overwrite the first fact", () => {
-  const result = importJobFillBackup({
-    version: 1,
-    raw: { store: [
-      [1, { id: 1, section: "", fieldType: "TextInput", fieldName: "City", answer: "Calgary" }],
-      [2, { id: 2, section: "", fieldType: "TextInput", fieldName: "City", answer: "Edmonton" }],
-    ] },
-  }, { profileId: "owner-profile", revision: 1 });
-
-  assert.equal(result.profile.facts.find(({ factId }) => factId === "city")?.value, "Calgary");
-  assert.equal(result.unresolved[0]?.reason, "conflicting_values");
-  assert.equal(result.replacementLedger.at(-1)?.action, "conflict_review");
-});
-
-test("scoped saved answers cannot become global applicant facts", () => {
-  const result = importJobFillBackup({ records: [
-    { id: 1, fieldName: "City", section: "education 1", answer: "Toronto" },
+test("legacy imports retain the first unscoped fact and flag conflicting or scoped answers", () => {
+  const records = [
+    { id: 1, fieldType: "TextInput", fieldName: "City", section: "education 1", answer: "Toronto" },
     { id: 2, fieldName: "Work Authorization", questionCountry: "United States", answer: "Yes" },
-    { id: 3, fieldName: "City", section: "", answer: "Calgary" },
-  ] }, { profileId: "owner-profile", revision: 1 });
-  assert.equal(result.profile.facts.find(({ factId }) => factId === "city")?.value, "Calgary");
-  assert.equal(result.profile.facts.some(({ factId }) => factId === "work_authorization"), false);
-  assert.deepEqual(result.unresolved.map(({ reason }) => reason), ["scoped_record", "scoped_record"]);
-  assert.equal(result.unresolved[1]?.matching.questionCountry, "United States");
+    { id: 3, fieldType: "TextInput", fieldName: "City", section: "", answer: "Calgary" },
+    { id: 4, fieldType: "TextInput", fieldName: "City", section: "", answer: "Edmonton" },
+  ];
+  for (const backup of [{ records }, { version: 1, raw: { store: records.map(row => [row.id, row]) } }]) {
+    const result = importJobFillBackup(backup, { profileId: "owner-profile", revision: 1 });
+    assert.equal(result.profile.facts.find(({ factId }) => factId === "city")?.value, "Calgary");
+    assert.equal(result.profile.facts.some(({ factId }) => factId === "work_authorization"), false);
+    assert.deepEqual(result.unresolved.map(({ reason }) => reason), ["scoped_record", "scoped_record", "conflicting_values"]);
+    assert.equal(result.unresolved[1]?.matching.questionCountry, "United States");
+    assert.equal(result.replacementLedger.at(-1)?.action, "conflict_review");
+  }
 });

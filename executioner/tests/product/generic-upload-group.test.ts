@@ -30,6 +30,7 @@ test('duplicate names, multiple inputs and foreign group labels cannot authorize
   const browser=await chromium.launch({headless:true});
   try {
     for(const body of [
+      group('cover_letter','Cover Letter').replace('type="file"','type="file" required aria-label="Resume"'),
       group('resume','Resume/CV*').replace('</div><label','</div><input type="file"><label'),
       group('resume','Resume/CV*')+'<div id="upload-label-resume">Resume/CV</div>',
       group('resume','Resume/CV*').replace('aria-labelledby="upload-label-resume"','aria-labelledby="upload-label-resume other-label"')+'<div id="other-label">Cover Letter</div>',
@@ -40,13 +41,5 @@ test('duplicate names, multiple inputs and foreign group labels cannot authorize
       assert.equal(await page.locator('input[type=file]').evaluateAll(es=>es.some(e=>(e as HTMLInputElement).files!.length>0)),false);
       await page.close();
     }
-  }finally{await browser.close();}
-});
-
-test('an explicit Cover Letter group cannot be relabelled by its native file input',async()=>{
-  const browser=await chromium.launch({headless:true});
-  try {
-    const page=await browser.newPage();await fixture(page,group('cover_letter','Cover Letter').replace('type="file"','type="file" required aria-label="Resume"'));
-    assert.notEqual((await fill(page)).resume,'verified');assert.deepEqual(await bytes(page,'cover_letter'),[]);
   }finally{await browser.close();}
 });

@@ -18,7 +18,7 @@ import { assertReleaseContractProvenance } from "../../src/testing/s2-revision.t
 const repository = resolve(process.cwd(), "..");
 const acceptedStage1Base = "87c77e538d8bba378ec93516dbea3f4747beb822";
 
-test("the accepted Stage 1 base has exact ancestry, trees, and versions", () => {
+test("Stage 1 verifies frozen trees, versions and ancestry and rejects an earlier base", () => {
   const record = JSON.parse(
     readFileSync("docs/contract-revision.json", "utf8"),
   ) as Readonly<Record<string, unknown>>;
@@ -66,9 +66,6 @@ test("the accepted Stage 1 base has exact ancestry, trees, and versions", () => 
   }
   const release = assertReleaseContractProvenance(repository, Object.keys(treeOids));
   git("merge-base", "--is-ancestor", acceptedStage1Base, release.sourceRevision);
-});
-
-test("a wrong F1 base is rejected with a stable ancestry diagnostic", () => {
   assert.throws(
     () => assertFrozenContractBase(historicalR1Revision, repository),
     new RegExp(

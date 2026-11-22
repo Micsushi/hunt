@@ -37,7 +37,7 @@ test("normalization removes only Workday presentation noise", () => {
   }
 });
 
-test("weekly hours use one reusable numeric profile fact without matching unrelated hours", () => {
+test("reviewed questionnaire aliases resolve without admitting profile-page labels", () => {
   const definition = questionForField("How many hours per week are you available to work?", "text");
   assert.equal(definition?.id, "workday-question-weekly-hours");
   assert.deepEqual(definition?.source, {
@@ -46,12 +46,8 @@ test("weekly hours use one reusable numeric profile fact without matching unrela
   assert.deepEqual(questionAnswerGuide.find(({ id }) => id === "workday-question-weekly-hours")?.defaultPolicy, {
     kind: "generated_learning_default", value: 40, replaceWithOwnerAnswer: true,
   });
-  assert.deepEqual(resolveQuestion("Describe your preferred working hours"), { kind: "unknown" });
-  assert.deepEqual(resolveQuestion("Have you worked night hours before?"), { kind: "unknown" });
-});
-
-test("reviewed questionnaire aliases resolve without admitting profile-page labels", () => {
   const cases = [
+    ["How many hours per week are you available to work?", "workday-question-weekly-hours"],
     ["Are you legally authorized to work in this country?", "s1-question-work-authorization"],
     ["Are you 18 years of age or older?", "s1-question-age-requirement-met"],
     ["Will you now or in the future require sponsorship?", "s1-question-sponsorship-required"],
@@ -104,6 +100,8 @@ test("reviewed questionnaire aliases resolve without admitting profile-page labe
   }
 
   for (const label of [
+    "Describe your preferred working hours",
+    "Have you worked night hours before?",
     "Do you or a close associate meet this definition? A politically exposed person is a senior official in the executive, legislative, administrative, military or judicial branches of government.",
     "Do you have experience supplying equipment to the military?",
     "Have you worked with armed forces customers?",

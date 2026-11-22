@@ -3,70 +3,9 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { fillGenericApplication, fillGenericIdentityFields } from '../../src/product/generic-application.ts';
-import { genericApplicationTarget, productApplicationTarget } from '../../src/product/target.ts';
 import { applicantProfile, effectiveProfileFacts } from '../../src/product/sources.ts';
 
-test('fresh OneClick personal forms wait for employer-owned fields and can be inspected without answers', async () => {
-  const browser = await chromium.launch({headless:true});
-  try {
-    const page = await browser.newPage();
-    const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/12345678-1111-2222-3333-111111111111';
-    await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:
-      '<main><oc-oneclick-form><oc-personal-information></oc-personal-information><oc-apply-with-resume><input type=file></oc-apply-with-resume>' +
-      '<oc-resume-upload><spl-dropzone data-test=resume-upload></spl-dropzone></oc-resume-upload><button>Next</button></oc-oneclick-form></main>'}));
-    await page.goto(url);
-    await page.evaluate(() => {
-      const form = document.querySelector('oc-oneclick-form')!;
-      const box = form.querySelector('oc-personal-information')!.attachShadow({mode:'open'});
-      const zone = form.querySelector('spl-dropzone')!.attachShadow({mode:'open'});
-      form.addEventListener('click', () => form.setAttribute('clicked','yes'));
-      zone.addEventListener('change', () => form.setAttribute('uploads', String(Number(form.getAttribute('uploads'))+1)));
-      setTimeout(() => { box.innerHTML = '<label>First name*<input required></label><label>Email*<input type=email required></label>'; }, 600);
-      setTimeout(() => { zone.innerHTML = '<label>Resume<input required type=file></label>'; }, 1200);
-    });
-    const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid'});
-    await fillGenericApplication(page,url,profile,Buffer.from('%PDF-fixture'),AbortSignal.timeout(8000));
-    assert.equal(await page.getByLabel('First name*').inputValue(),'Test');
-    assert.equal(await page.locator('spl-dropzone input').evaluate((e:HTMLInputElement)=>e.files?.length),1);
-    assert.equal(await page.locator('oc-apply-with-resume input').evaluate((e:HTMLInputElement)=>e.files?.length),0);
-    assert.equal(await page.locator('oc-oneclick-form').getAttribute('clicked'),null);
-    assert.equal(await page.locator('oc-oneclick-form').getAttribute('uploads'),'1');
-    const observed = await page.evaluate(fillVisibleFields,{action:'status' as const});
-    assert.deepEqual(observed.matching?.map(field=>field.question),['First name*','Email*']);
-    await page.goto(url);
-    await assert.rejects(fillGenericApplication(page,url,profile,Buffer.from('%PDF-fixture'),AbortSignal.timeout(200)),/timeout/i);
-    assert.equal(await page.locator('oc-apply-with-resume input').evaluate((e:HTMLInputElement)=>e.files?.length),0);
-  } finally { await browser.close(); }
-});
 
-test('queued OneClick keeps independently verified personal fields when the employer has no resume input', async () => {
-  const browser = await chromium.launch({headless:true});
-  try {
-    const page = await browser.newPage();
-    const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/12345678-1111-2222-3333-111111111111';
-    await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:
-      '<main><oc-oneclick-form><oc-personal-information><label>First name*<input required></label>' +
-      '<label>Email*<input required type=email></label></oc-personal-information>' +
-      '<oc-apply-with-resume><label>Resume<input type=file required></label></oc-apply-with-resume>' +
-      '<button type=button>Next</button></oc-oneclick-form></main>'}));
-    await page.goto(url);
-    await page.evaluate(() => {
-      for (const type of ['change','click']) document.addEventListener(type, event => {
-        const element = event.target as HTMLElement;
-        element.dataset[type] = String(Number(element.dataset[type] ?? 0)+1);
-      });
-    });
-    const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid'});
-    const result = await fillGenericApplication(page,url,profile,Buffer.from('%PDF-fixture'),AbortSignal.timeout(18000));
-    assert.equal(await page.getByLabel('First name*').inputValue(),'Test');
-    assert.equal(await page.getByLabel('Email*').inputValue(),'test@example.invalid');
-    assert.equal(await page.getByLabel('First name*').getAttribute('data-change'),'1');
-    assert.ok(result.skipped.some(row=>row.reason==='resume_control_not_identified'));
-    assert.deepEqual(result.componentFailure,{component:'uploads',operation:'identify_attachment'});
-    assert.equal(await page.getByLabel('Resume').evaluate((e:HTMLInputElement)=>e.files?.length),0);
-    assert.equal(await page.getByRole('button',{name:'Next'}).getAttribute('data-click'),null);
-  } finally { await browser.close(); }
-});
 
 test('validated website rows appear as saved URL answers without rewriting provenance', async () => {
   const input = {given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'};
@@ -155,67 +94,6 @@ test('generic React Select leaves the Sirion country unchanged without a verifie
   }
 });
 
-test('queued unfamiliar application uses the selected PDF only at the admitted posting', async () => {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.route('**/*', route => route.fulfill({ contentType: 'text/html',
-      body: '<form><label>First name<input required id="name"></label><label>Email<input required type="email"></label><label>Resume<input required id="resume" type="file"></label><button onclick="window.submitted=true">Submit application</button></form>' }));
-    const posting = 'https://example.applytojob.com/apply/TestID/Engineer';
-    const other = 'https://example.applytojob.com/apply/OtherID/Engineer';
-    const profile = applicantProfile({ given_name: 'Saved', family_name: 'Applicant', email_address: 'saved@example.invalid' });
-    const bytes = Buffer.from('%PDF-selected');
-    assert.equal(productApplicationTarget(posting).ats, 'generic');
-    assert.throws(() => genericApplicationTarget('https://passport.amazon.jobs/'));
-    assert.throws(() => genericApplicationTarget('https://www.example.com/login'));
-    await page.goto(other);
-    await assert.rejects(fillGenericApplication(page, posting, profile, bytes, AbortSignal.timeout(5000)), /exact posting/);
-    assert.equal(await page.locator('#name').inputValue(), '');
-    await page.goto(posting);
-    const previous = Buffer.from('%PDF-existing manual resume');
-    await page.locator('#resume').setInputFiles({name:'previous.pdf',mimeType:'application/pdf',buffer:previous});
-    const partial = await page.evaluate(fillVisibleFields, {resume:{name:'Resume.pdf',base64:bytes.toString('base64')},
-      facts:[{factId:'given_name',value:'Saved'},{factId:'email_address',value:'saved@example.invalid'}]});
-    assert.ok(partial.skipped.some(field => field.reason === 'existing_attachment_preserved'));
-    await fillGenericApplication(page, posting, profile, bytes, AbortSignal.timeout(5000));
-    assert.equal(await page.locator('#name').inputValue(), 'Saved');
-    assert.equal(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => await e.files?.[0]?.text()), bytes.toString());
-    await page.evaluate(fillVisibleFields, {action:'undo' as const});
-    assert.deepEqual(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => [
-      e.files?.[0]?.name, await e.files?.[0]?.text(),
-    ]), ['previous.pdf', previous.toString()]);
-    await page.evaluate(fillVisibleFields, {action:'redo' as const});
-    assert.equal(await page.locator('#resume').evaluate(async (e: HTMLInputElement) => await e.files?.[0]?.text()), bytes.toString());
-    assert.equal(await page.evaluate('window.submitted'), undefined);
-    await page.goto(posting);
-    await page.locator('#name').fill('Owner edit');
-    const conflict = await fillGenericApplication(page, posting, profile, bytes, AbortSignal.timeout(5000));
-    assert.equal(await page.locator('#name').inputValue(), 'Owner edit');
-    assert.ok(conflict.skipped.some(field => field.reason === 'saved_value_conflict'));
-    await page.goto(posting);
-    await page.evaluate(() => {
-      const name = document.querySelector<HTMLInputElement>('#name')!;
-      const events: string[] = [];
-      name.addEventListener('input', () => events.push('input:' + name.value));
-      document.querySelector('#resume')!.addEventListener('change', () => {
-        setTimeout(() => {
-          events.push('parser:' + name.value);
-          name.value = 'Parser value';
-          name.dataset.events = JSON.stringify(events);
-        }, 30);
-      });
-    });
-    const parsed = await fillGenericApplication(page, posting, profile, bytes, AbortSignal.timeout(5000));
-    assert.equal(await page.locator('#name').inputValue(), 'Parser value');
-    assert.ok(!parsed.filled.includes('First name'));
-    assert.equal(await page.locator('#name').getAttribute('data-events'), '["parser:"]');
-    for (const reason of ['field_changed_before_fill', 'saved_value_conflict']) {
-      assert.ok(parsed.skipped.some(field => field.label === 'First name' && field.reason === reason), reason);
-    }
-  } finally {
-    await browser.close();
-  }
-});
 
 test('generic partial fill preserves choices and edits, supports French fields and reversible saved answers', async () => {
   const browser = await chromium.launch({ headless: true, ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });

@@ -10,8 +10,9 @@ const posting = `https://jobs.smartrecruiters.com/${company}/${id}-analyst?oga=t
 const application = `https://jobs.smartrecruiters.com/oneclick-ui/company/${company}/publication/${uuid}?dcr_ci=${company}`;
 const metadata = { id, uuid, company: { identifier: company }, active: true };
 
-test("invalid host, company, UUID, and conflicting tenant query never reach the public API", async t => {
-  const fetcher = t.mock.method(globalThis, "fetch", async () => Response.json(metadata));
+test("posting and screening bind only after the local identity and public metadata agree", async t => {
+  let response: () => Response = () => Response.json(metadata);
+  const fetcher = t.mock.method(globalThis, "fetch", async () => response());
   for (const candidate of [
     application.replace("jobs.smartrecruiters.com", "jobs.smartrecruiters.com.evil.example"),
     application.replace("/Fixture/", "/Other/"),
@@ -23,11 +24,7 @@ test("invalid host, company, UUID, and conflicting tenant query never reach the 
   }
   assert.equal(await verifySmartRecruitersApplication(application, posting), false);
   assert.equal(fetcher.mock.callCount(), 0);
-});
 
-test("unrelated, inactive, malformed, oversized and failed API responses cannot establish a binding", async t => {
-  let response: () => Response = () => Response.json(metadata);
-  const fetcher = t.mock.method(globalThis, "fetch", async () => response());
   for (const candidate of [
     () => Response.json({ ...metadata, id: "744000999999999" }),
     () => Response.json({ ...metadata, uuid: "11111111-1111-4111-8111-111111111111" }),
@@ -42,10 +39,8 @@ test("unrelated, inactive, malformed, oversized and failed API responses cannot 
     assert.equal(await verifySmartRecruitersApplication(posting, application), false);
   }
   assert.equal(fetcher.mock.callCount(), 8);
-});
 
-test("only the exact screening route shares the verified publication identity", async t => {
-  t.mock.method(globalThis, "fetch", async () => Response.json(metadata));
+  response = () => Response.json(metadata);
   const screening = application.replace("?", "/screening?");
   assert.equal(genericApplicationTarget(application).key,genericApplicationTarget(screening).key);
   assert.equal(genericApplicationTarget(screening).url,screening);

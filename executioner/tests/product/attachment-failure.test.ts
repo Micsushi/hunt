@@ -7,29 +7,37 @@ import {join} from 'node:path';
 import {WebSocket} from 'ws';
 import {AttachmentFailure,ExtensionBridge} from '../../src/product/extension-bridge.ts';
 
-test('unknown attach text is bounded in a local private receipt, never the public error',()=>{
+test('attachment failures stop after one request and bound private diagnostics',async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-attach-diagnostic-'));
   const previous=process.env.HUNT_C3_PRODUCT_ROOT;
   process.env.HUNT_C3_PRODUCT_ROOT=root;
+  const bridge=new ExtensionBridge(createServer(),'fixture','http://127.0.0.1:1');
   try {
-    const error=new AttachmentFailure(new Error('fixture private message '+ 'x'.repeat(9000)));
+    for (const [message, category] of [
+      ['Another debugger is already attached to the tab with id: 123.', 'debugger_already_attached'],
+      ['fixture private message ' + 'x'.repeat(9000), 'attachment_unknown'],
+    ] as const) {
+      let calls=0;
+      bridge.call=async method=>{calls++;assert.equal(method,'attach');throw new Error(message);};
+      await assert.rejects(bridge.open('https://job-boards.greenhouse.io/fixture/jobs/123',7,true),error=>{
+        assert.ok(error instanceof AttachmentFailure);
+        assert.equal(error.code,category);
+        if (category === 'attachment_unknown') {
+          assert.equal(error.message,'C3 attachment stopped: attachment_unknown');
+          assert.doesNotMatch(JSON.stringify(error),/fixture private message/);
+        }
+        return true;
+      });
+      assert.equal(calls,1);
+    }
     const receipt=JSON.parse(readFileSync(join(root,'attachment-error.private.json'),'utf8'));
     assert.deepEqual(Object.keys(receipt),['operation','recordedAt','message']);
-    assert.equal(receipt.operation,'browser.attach');assert.equal(receipt.message.length,8192);
-    assert.doesNotMatch(JSON.stringify(error),/fixture private message/);
-    assert.equal(error.message,'C3 attachment stopped: attachment_unknown');
+    assert.equal(receipt.operation,'browser.attach');
+    assert.equal(receipt.message.length,8192);
   } finally {
+    bridge.close();
     if(previous===undefined)delete process.env.HUNT_C3_PRODUCT_ROOT;else process.env.HUNT_C3_PRODUCT_ROOT=previous;
   }
-});
-
-test('only the attach request is classified; no retry or debugger takeover occurs',async()=>{
-  const bridge=new ExtensionBridge(createServer(),'fixture','http://127.0.0.1:1');let calls=0;
-  bridge.call=async method=>{calls++;assert.equal(method,'attach');throw new Error('Another debugger is already attached to the tab with id: 123.');};
-  try{
-    await assert.rejects(bridge.open('https://job-boards.greenhouse.io/fixture/jobs/123',7,true),error=>error instanceof AttachmentFailure&&error.code==='debugger_already_attached');
-    assert.equal(calls,1);
-  }finally{bridge.close();}
 });
 
 test('private transport evidence records only lifecycle enums, never CDP payloads',async()=>{

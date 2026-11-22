@@ -33,6 +33,8 @@ test('imports use paused endpoint only, serialize, preserve keys and never echo 
     if(url.endsWith('/handoff/preview')){await waiting;return Response.json({jobs:[{sourceJobId:1,resumeVersion:'8',status:'new',resumeBase64:'private'}]});}
     return Response.json([{id:'test',sourceJobId:1,resumeVersion:'8',status:'paused',profile:'private'}]);
   });
+  assert.equal((await f.call({...message('import'),expiresAt:Date.now()-1})).code,'expired');
+  assert.deepEqual(paths, []);
   const first=f.call(message('import'));
   assert.equal((await f.call(message('import'))).code,'busy');
   release();
@@ -46,10 +48,4 @@ test('imports use paused endpoint only, serialize, preserve keys and never echo 
   assert.deepEqual(old.opened,[]);
   const broken=fixture(async()=>{throw new Error('private-key applicant-private-details');});
   assert.deepEqual(JSON.parse(JSON.stringify(await broken.call(message('import')))),{ok:false,code:'unconfirmed'});
-});
-
-test('expired website commands cannot import',async()=>{
-  let calls=0;const f=fixture(async()=>{calls++;return Response.json({});});
-  assert.equal((await f.call({...message('import'),expiresAt:Date.now()-1})).code,'expired');
-  assert.equal(calls,0);
 });

@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { testRunnerArgs, testTargets } from "../runner.ts";
+import { testTargets } from "../runner.ts";
 
-test("an explicit directory with no tests is rejected", () => {
-  assert.throws(
-    () => testTargets(["tests/architecture/empty"]),
-    /No test files found in tests\/architecture\/empty/,
-  );
-});
-
-test("an explicit file must use the test filename", () => {
-  assert.throws(
-    () => testTargets(["tests/run.ts"]),
-    /Test file must match \*\.test\.ts: tests\/run\.ts/,
-  );
+test("explicit test targets reject empty directories and non-test files", () => {
+  for (const [target, reason] of [
+    ["tests/architecture/empty", /No test files found in tests\/architecture\/empty/],
+    ["tests/run.ts", /Test file must match \*\.test\.ts: tests\/run\.ts/],
+  ] as const) {
+    assert.throws(() => testTargets([target]), reason, target);
+  }
 });

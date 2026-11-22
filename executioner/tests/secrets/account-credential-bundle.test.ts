@@ -13,7 +13,7 @@ const input = () => ({
   password: bytes(112, 97, 115, 115),
 });
 
-test("AccountCredentialBundleV1 decodes its exact layout and rejects corrupt copies", () => {
+test("credential bundles round-trip only valid fields and the approved binary layout", () => {
   const encoded = encodeAccountCredentialBundleV1(input());
   assert.notEqual(encoded, null);
   if (encoded === null) return;
@@ -47,9 +47,6 @@ test("AccountCredentialBundleV1 decodes its exact layout and rejects corrupt cop
   ]) {
     assert.equal(decodeAccountCredentialBundleV1(candidate), null);
   }
-});
-
-test("AccountCredentialBundleV1 rejects empty, oversized, and invalid UTF-8 fields", () => {
   const oversizeEmail = new Uint8Array(321).fill(65);
   const oversizePassword = new Uint8Array(4097).fill(65);
   const invalidUtf8 = bytes(0xc0, 0xaf);

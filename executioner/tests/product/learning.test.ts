@@ -11,7 +11,7 @@ import { admitPendingProfileQuestionsEvidence } from "../../src/live/evidence/qu
 
 const basic = { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" };
 
-test("failed profile page observations reach the product journal despite reused unknown ordinals", () => {
+test("profile journal preserves repeated required-field ordinals and optional date metadata together", () => {
   const root = mkdtempSync(join(tmpdir(), "hunt-failed-profile-learning-"));
   const sources = productSources(applicantProfile(basic), Buffer.from("%PDF-1.4\nfixture"));
   try {
@@ -26,10 +26,24 @@ test("failed profile page observations reach the product journal despite reused 
       }] }, "s2-profile");
       pending.forEach(question => learning.sink.recordPendingProfile?.(question));
     }
+    const pending = observedPendingProfileQuestions({ pageType: "profile", rows: [], controls:
+      (["month", "number", "year"] as const).map((behavior, index) => ({
+        controlId: `date-${index}`, fieldId: `unknown.optional.${index}`, label: `Issue Date ${behavior}`,
+        required: false, uiBehavior: behavior, uiVariant: "workday_empty_optional_date_segment_v1", readback: null,
+      })),
+    }, "s2-profile");
+    assert.throws(() => admitPendingProfileQuestionsEvidence({ schemaVersion: 2, evidenceRevision: "s2-pending-profile-questions-v2",
+      pendingProfileQuestions: [{ ...pending[0]!, observedUi: { behavior: "invalid", variant: "bad variant" } } as never],
+    }), /denied/);
+    pending.forEach(question => learning.sink.recordPendingProfile?.(question));
     learning.finish();
     const questions = JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8")).pendingProfileQuestions;
-    assert.deepEqual(questions.map((q: { exactQuestion: string }) => q.exactQuestion), ["Have you ever worked here?", "Certification"]);
+    assert.deepEqual(questions.slice(0, 2).map((q: { exactQuestion: string }) => q.exactQuestion), ["Have you ever worked here?", "Certification"]);
     assert.ok(questions.every((q: { validation: string; actualOwnerValue: unknown }) => q.validation === "not_attempted" && q.actualOwnerValue === null));
+    assert.deepEqual(questions.slice(2).map((q: { observedUi: unknown }) => q.observedUi),
+      ["month", "number", "year"].map(behavior => ({ behavior, variant: "workday_empty_optional_date_segment_v1" })));
+    assert.ok(questions.slice(2).every((q: { testDefault: unknown; actualOwnerValue: unknown; validation: string }) =>
+      q.testDefault === null && q.actualOwnerValue === null && q.validation === "not_attempted"));
   } finally {
     disposeResumeArtifact(sources.resumeIntent.artifact);
     rmSync(root, { recursive: true, force: true });
@@ -63,34 +77,6 @@ test("observation journal retains constraints and reports unavailable storage wi
     const blocked = productQuestionLearning(blockedRoot, sources);
     blocked.sink.recordObserved(observed);
     assert.throws(() => blocked.finish(), /could not preserve discovered questions/);
-  } finally {
-    disposeResumeArtifact(sources.resumeIntent.artifact);
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-
-test("untouched optional date segments retain their actual UI metadata in the product journal", () => {
-  const root = mkdtempSync(join(tmpdir(), "hunt-date-discovery-"));
-  const sources = productSources(applicantProfile(basic), Buffer.from("%PDF-1.4\nfixture"));
-  try {
-    const learning = productQuestionLearning(root, sources);
-    const pending = observedPendingProfileQuestions({ pageType: "profile", rows: [], controls:
-      (["month", "number", "year"] as const).map((behavior, index) => ({
-        controlId: `date-${index}`, fieldId: `unknown.optional.${index}`, label: `Issue Date ${behavior}`,
-        required: false, uiBehavior: behavior, uiVariant: "workday_empty_optional_date_segment_v1", readback: null,
-      })),
-    }, "s2-profile");
-    assert.throws(() => admitPendingProfileQuestionsEvidence({ schemaVersion: 2, evidenceRevision: "s2-pending-profile-questions-v2",
-      pendingProfileQuestions: [{ ...pending[0]!, observedUi: { behavior: "invalid", variant: "bad variant" } } as never],
-    }), /denied/);
-    pending.forEach(question => learning.sink.recordPendingProfile?.(question));
-    learning.finish();
-    const questions = JSON.parse(readFileSync(join(root, "pending-profile-questions.json"), "utf8")).pendingProfileQuestions;
-    assert.deepEqual(questions.map((q: { observedUi: unknown }) => q.observedUi),
-      ["month", "number", "year"].map(behavior => ({ behavior, variant: "workday_empty_optional_date_segment_v1" })));
-    assert.ok(questions.every((q: { testDefault: unknown; actualOwnerValue: unknown; validation: string }) =>
-      q.testDefault === null && q.actualOwnerValue === null && q.validation === "not_attempted"));
   } finally {
     disposeResumeArtifact(sources.resumeIntent.artifact);
     rmSync(root, { recursive: true, force: true });

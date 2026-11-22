@@ -15,7 +15,7 @@ const proveF5ObservationAssignable = (value: ClassifiedAccountObservation): void
   acceptLifecycleObservation(value);
 void proveF5ObservationAssignable;
 
-test("production, live, and composition owners cannot import synthetic evidence capture", () => {
+test("dependency rules reject synthetic and private imports and admit the shipped source", () => {
   const testOnlyImport = "../testing/evidence/retained-fixture-control-learning.ts";
   const files: SourceFile[] = [
     {
@@ -37,9 +37,6 @@ test("production, live, and composition owners cannot import synthetic evidence 
     "src/live/runner/application-walk.ts imports test-only source src/testing/evidence/retained-fixture-control-learning.ts",
     "src/composition/runtime.ts imports test-only source src/testing/evidence/retained-fixture-control-learning.ts",
   ]);
-});
-
-test("executioner source follows the dependency rule", () => {
   const assigned = Object.values(productBoundary.sourceOwners).flat();
   assert.equal(new Set(assigned).size, assigned.length);
   for (const path of [
