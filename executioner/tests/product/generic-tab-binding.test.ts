@@ -172,6 +172,13 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     await app.queue.action(variant.id,'remove');
     const [movedSource]=await (await post('/handoff/import-paused',bundleFor(selectedUrl.replace('abc','different'),122))).json();
     assert.ok(movedSource.pageHandoff);
+    const collision=await post('/handoff/import-paused',bundleFor(selectedUrl,122));
+    assert.equal(collision.status,400);
+    assert.match((await collision.json()).error,/different application link/);
+    const batchConflict={...bundle,jobs:[bundleFor(selectedUrl,132).jobs[0],bundleFor(selectedUrl.replace('abc','new'),132).jobs[0]]};
+    const count=app.queue.jobs.length;
+    assert.equal((await post('/handoff/import-paused',batchConflict)).status,400);
+    assert.equal(app.queue.jobs.length,count);
     await assert.rejects(app.queue.action(selected.id,'restore'),/already been added/);
 
     assert.equal(app.queue.jobs[0]!.status,'paused');

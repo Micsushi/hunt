@@ -33,17 +33,17 @@ export function readUploadOwnerLabels(inputs) {
     const labels = [];
     const visibleHeadings = [];
     let ambiguous = false;
-    const names = node => {
-      labels.push(node.getAttribute('aria-label') || '');
+    const names = (node, destination=labels) => {
+      destination.push(node.getAttribute('aria-label') || '');
       const ids = (node.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
       for (const [index,id] of ids.entries()) {
         const refs=node.getRootNode().querySelectorAll('[id="'+CSS.escape(id)+'"]');
         if (refs.length>1 || index===0 && refs.length===0) ambiguous=true;
         if (refs.length===1 && refs[0]!==input) {
           const text=refs[0].textContent || '';
-          labels.push(text);
+          destination.push(text);
           if (index===0 && !text.trim() && !refs[0].getAttribute('aria-label')?.trim()) ambiguous=true;
-          labels.push(refs[0].getAttribute('aria-label') || '');
+          destination.push(refs[0].getAttribute('aria-label') || '');
         }
       }
     };
@@ -64,14 +64,17 @@ export function readUploadOwnerLabels(inputs) {
         // A file group may also own a notes input. Its explicit title can veto a
         // contradictory picker, but cannot establish a positive resume binding.
         if (controls.filter(node=>node.matches('input[type=file]')).length!==1) break;
-        names(group);
+        const titles = [];
+        names(group,titles);
         for (const title of headings) {
           let container = parent(title);
           while (container && container!==group && !container.matches(owner)) container=parent(container);
           if (container!==group && title!==preceding) continue;
-          names(title);
-          labels.push(title.textContent || '');
+          names(title,titles);
+          titles.push(title.textContent || '');
         }
+        // A section called "Your documents" is neutral when it owns several controls.
+        labels.push(...titles.filter(text => !/^(?:(?:your|my|application|required) )?(?:documents|attachments|files)$/i.test(text.trim())));
         continue;
       }
       names(group);

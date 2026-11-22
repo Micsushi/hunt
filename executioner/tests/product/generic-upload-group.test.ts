@@ -54,6 +54,10 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     const hosted=(await inspectHostedFields(page)).find(field=>field.kind==='file');
     assert.equal(hosted?.label,'Résumé / CV');assert.equal(hosted.resumeTarget,true);
     assert.equal((await fill(page)).resume,'verified');
+    await page.reload();
+    await fixture(page,'<fieldset><legend>Your documents</legend><div class="field"><label>Notes<input></label><div class="field"><label>Resume<input type="file" required></label></div></div></fieldset>');
+    assert.equal((await inspectHostedFields(page)).find(field=>field.kind==='file')?.resumeTarget,true);
+    assert.equal((await fill(page)).resume,'verified');
 
   }finally{await browser.close();}
 });
