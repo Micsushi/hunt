@@ -7,6 +7,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { productApplicationTarget } from './target.ts';
 import { smartRecruitersPublication, verifySmartRecruitersApplication } from './smartrecruiters-target.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
+import { pageFillSource, pageFillWorld } from '../../extension/page-runtime/serialize.js';
+import type { SelectedResumeFill } from './application-contract.ts';
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; sessionId?: string; result?: unknown; error?: { message: string } };
 
@@ -238,7 +240,7 @@ export class ExtensionBridge {
       this.extension!.send(JSON.stringify({ id, method, params }));
     });
   }
-  async open(url: string, existingTabId?: number, existingOnly = false, selectedDocument?: string, selectedApplicationUrl = url): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }> {
+  async open(url: string, existingTabId?: number, existingOnly = false, selectedDocument?: string, selectedApplicationUrl = url): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string; selectedResumeFill?: SelectedResumeFill }> {
     const posting = productApplicationTarget(url);
     let target = await this.existingTarget(posting, existingTabId);
     let boundTabId = existingTabId;
@@ -297,7 +299,29 @@ export class ExtensionBridge {
             }
           },
         } : null);
-      return { tabId, page, browser, ...(target.ats==='generic'?{applicationUrl:target.url}:{}) };
+      const selectedResumeFill: SelectedResumeFill | undefined = selectedDocument && publication && !publication.screening ?
+        async (input,sha256) => {
+          if (this.tabs.get(tabId)!==tab || input.expectedUrl!==target.url) throw new Error('The selected application document changed.');
+          const cdp=(method:string,params:Record<string,unknown>={})=>this.call('cdp',{tabId,method,params});
+          const {frame}= (await cdp('Page.getFrameTree')).frameTree;
+          if (frame.loaderId!==selectedDocument || frame.url!==target.url) throw new Error('The selected application document changed.');
+          const {executionContextId}=await cdp('Page.createIsolatedWorld',{frameId:frame.id,worldName:pageFillWorld});
+          const reply=await cdp('Runtime.callFunctionOn',{executionContextId,awaitPromise:true,returnByValue:true,
+            functionDeclaration:`async function(input,sha256) {
+              if (location.href!==input.expectedUrl) throw new Error('The selected application changed.');
+              const state=globalThis.__huntC3PartialFill;
+              const receipt=state?.resumeAttempt;
+              if (!receipt || receipt.url!==input.expectedUrl) return null;
+              if (!receipt.customUpload || receipt.fileSha256!==sha256 || !receipt.selectedFileAccepted ||
+                  state.fileEvents?.get(receipt.element)!==receipt.file ||
+                  receipt.customUpload.currentSelection?.()!==true ||
+                  !receipt.customUpload.acknowledged(receipt.file.name)) return 'attachment_conflict';
+              return (${pageFillSource})({...input,queueHistory:true});
+            }`,arguments:[{value:input},{value:sha256}]});
+          if (reply.exceptionDetails || reply.result?.value===undefined) throw new Error('Could not read the selected attachment receipt.');
+          return reply.result.value;
+        } : undefined;
+      return { tabId, page, browser, ...(target.ats==='generic'?{applicationUrl:target.url}:{}),...(selectedResumeFill && {selectedResumeFill}) };
     } catch (error) {
       tab.resolveFrame();
       // An older attempt must never detach a replacement attachment to this tab.

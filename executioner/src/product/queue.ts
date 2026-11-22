@@ -10,6 +10,7 @@ import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
 import { AttachmentFailure, verifiedScreeningTransition } from './extension-bridge.ts';
+import type { SelectedResumeFill } from './application-contract.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
 
 import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
@@ -52,7 +53,7 @@ export interface ProductJob {
 }
 export interface BrowserConnection {
   connected: boolean;
-  open(url: string, tabId?: number, existingOnly?: boolean, selectedDocument?: string, selectedApplicationUrl?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string }>;
+  open(url: string, tabId?: number, existingOnly?: boolean, selectedDocument?: string, selectedApplicationUrl?: string): Promise<{ tabId: number; page: Page; browser: Browser; applicationUrl?: string; selectedResumeFill?: SelectedResumeFill }>;
   release(tabId: number): Promise<void>;
   focus?(tabId: number, url?: string): Promise<void>;
   prepareAccount?(options: import('./workday-sign-in.ts').WorkdayAccountOptions): Promise<void>;
@@ -375,6 +376,7 @@ export class ApplicationQueue {
       const executionUrl=productApplicationTarget(job.url).ats==='generic' ? session.applicationUrl ?? job.url : job.url;
       const result = await this.fill(session.page, { url: executionUrl, profile: input.profile, learningRoot: join(this.root, "learning", job.id, runId),
         screeningTransition: url => verifiedScreeningTransition(session.page,url),
+        selectedResumeFill: session.selectedResumeFill,
         onSmartRecruitersScreening: url => {
           if (!job.selectedDocument || job.selectedApplicationUrl !== executionUrl) return;
           const personal = new URL(executionUrl);

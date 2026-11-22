@@ -52,7 +52,7 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
     const uploadOwner=composedClosest(zone,'oc-resume-upload'), root=zone.shadowRoot;
     const items=()=>root.querySelectorAll('li.c-spl-file-list-item');
     const occupied=items().length>0;
-    let acknowledgedItem;
+    let acknowledgedItem, selectedFile, selectionChanged = false, observation;
     const matchingItem = name => {
       if (!current() || !zone.isConnected || zone.shadowRoot!==root || deepQuery(owner,'oc-resume-upload').length!==1 ||
           composedClosest(zone,'oc-resume-upload')!==uploadOwner || composedClosest(uploadOwner,'oc-oneclick-form')!==owner ||
@@ -69,7 +69,37 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
           !composedClosest(buttons[0],'spl-button') || buttons[0].getAttribute('aria-label')!=='Delete file '+name) return false;
       return entry;
     };
-    return {occupied, filenameVisible:name=>!!matchingItem(name), acknowledged(name) {
+    const invalidateSelection = () => {
+      selectionChanged = true;
+      observation?.abort();
+    };
+    const differentInput = input => input.files?.length &&
+      (input!==element || input.files.length!==1 || input.files[0]!==selectedFile);
+    const currentSelection = () => {
+      if (selectedFile && !selectionChanged && deepQuery(root,'input[type=file]').some(differentInput)) invalidateSelection();
+      return !!selectedFile && !selectionChanged;
+    };
+    const watchSelection = file => {
+      selectedFile = file;
+      observation = new AbortController();
+      const options = {capture:true,signal:observation.signal};
+      const observeInput = event => {
+        const input = event.composedPath()[0];
+        if (input?.matches?.('input[type=file]') && differentInput(input)) invalidateSelection();
+      };
+      root.addEventListener('input',observeInput,options);
+      root.addEventListener('change',observeInput,options);
+      root.addEventListener('drop',event=>{
+        if (event.dataTransfer?.files.length) invalidateSelection();
+      },options);
+      root.addEventListener('click',event=>{
+        const path = event.composedPath();
+        if (acknowledgedItem && path.includes(acknowledgedItem) && path.some(node=>
+          node?.matches?.('button[aria-label]') && node.getAttribute('aria-label')==='Delete file '+file.name)) invalidateSelection();
+      },options);
+    };
+    return {occupied, filenameVisible:name=>!!matchingItem(name), watchSelection, currentSelection, acknowledged(name) {
+      if (!currentSelection()) return false;
       const entry = !occupied && matchingItem(name);
       if (!entry || acknowledgedItem && acknowledgedItem !== entry) return false;
       acknowledgedItem=entry;

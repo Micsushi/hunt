@@ -18,6 +18,15 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     const labels = [...host?.children??[]].filter(child=>child.slot==='label-content');
     return labels.length===1 ? labels[0].textContent.trim() : '';
   };
+  const dynamicCheckbox = element => {
+    if (element.type!=='checkbox' || !form?.screening || form.region(element)!==form.owner) return;
+    const field = composedClosest(element,'sr-question-field-checkbox');
+    if (!field) return;
+    const host = composedClosest(element,'spl-checkbox');
+    const hosts = deepQuery(field,'spl-checkbox');
+    const inputs = deepQuery(field,'input[type=checkbox]');
+    return {label:hosts.length===1 && hosts[0]===host && inputs.length===1 && inputs[0]===element ? labelOf(host) : ''};
+  };
   const selectQuestion = element => {
     if (!element.matches('input[role=combobox][id^=question_]')) return null;
     const host = composedClosest(element,'spl-autocomplete');
@@ -53,7 +62,7 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
   };
   const label = element => {
     if (!form?.screening || form.region(element)!==form.owner) return '';
-    if (element.type==='checkbox') return labelOf(composedClosest(element,'spl-checkbox[data-test=consent-box]'));
+    if (element.type==='checkbox') return dynamicCheckbox(element)?.label ?? labelOf(composedClosest(element,'spl-checkbox[data-test=consent-box]'));
     if (element.matches('fieldset[role=radiogroup]')) return labelOf(composedClosest(element,'spl-radio-group'));
     return selectQuestion(element)?.question ?? '';
   };
@@ -168,5 +177,5 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     }
     throw new Error('The employer did not confirm the restored screening choice.');
   };
-  return {label,read,select,reversibleChoice,historyValue,restore};
+  return {label,read,select,reversibleChoice,historyValue,restore,dynamicCheckbox};
 }

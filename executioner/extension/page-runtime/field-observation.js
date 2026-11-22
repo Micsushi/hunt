@@ -1,5 +1,5 @@
 export function createFieldObserver({
-  deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext, provinceValue
+  deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext, provinceValue
 }) {
   const buttonChoiceObservation = e => {
     const id=e.getAttribute('aria-controls'),root=e.getRootNode();
@@ -18,7 +18,7 @@ export function createFieldObserver({
   const observe = (e, label) => {
     const fabric=fabricWidget(e),fabricRead=fabric && fabricState(fabric),committed=state.committedChoices?.get(e),searchChoice=sharedChoice(e),buttonChoice=semanticChoiceButton(e)?buttonChoiceObservation(e):null;
     const province = !fabric && provinceContext(e);
-    const queryDraft=searchChoice?.widget && state.choiceDrafts?.get(searchChoice.widget);
+    const queryDraft=searchChoice?.widget && choiceDraft(searchChoice.widget);
     const cachedOptions=queryDraft && boundChoice(queryDraft.change) && choiceState(searchChoice)===queryDraft.change.after?queryDraft.options:[];
     const choice=committed?.value===e.value?committed:null;
     const group=e.type==='radio' ? composedClosest(e,'fieldset,[role=radiogroup]') : null;

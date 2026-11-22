@@ -696,6 +696,7 @@ export const productBoundary = {
       "src/product/application-wait.ts",
     ],
     "src/product/application-contract.ts": [
+      "src/product/page-matching.ts",
       "src/product/account-journal.ts",
     ],
     "src/product/application-review.ts": [
@@ -736,11 +737,14 @@ export const productBoundary = {
       "src/product/component-diagnostics.ts",
     ],
     "src/product/extension-bridge.ts": [
+      "extension/page-runtime/serialize.js",
+      "src/product/application-contract.ts",
       "src/product/smartrecruiters-target.ts",
       "src/product/target.ts",
       "src/product/workday-sign-in.ts",
     ],
     "src/product/generic-application.ts": [
+      "src/product/component-diagnostics.ts",
       "src/product/bamboo-application-entry.ts",
       "extension/form-page.js",
       "extension/generic-fill.js",
@@ -779,6 +783,7 @@ export const productBoundary = {
       "src/form/questions/normalize.ts",
     ],
     "src/product/page-answer-planner.ts": [
+      "src/form/questions/matching.ts",
       "src/form/questions/protected.ts",
       "src/product/component-diagnostics.ts",
       "src/composition/private/s2-derived-profile-country.ts",

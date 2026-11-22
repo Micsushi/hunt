@@ -62,6 +62,7 @@ test('queued OneClick keeps independently verified personal fields when the empl
     assert.equal(await page.getByLabel('Email*').inputValue(),'test@example.invalid');
     assert.equal(await page.getByLabel('First name*').getAttribute('data-change'),'1');
     assert.ok(result.skipped.some(row=>row.reason==='resume_control_not_identified'));
+    assert.deepEqual(result.componentFailure,{component:'uploads',operation:'identify_attachment'});
     assert.equal(await page.getByLabel('Resume').evaluate((e:HTMLInputElement)=>e.files?.length),0);
     assert.equal(await page.getByRole('button',{name:'Next'}).getAttribute('data-click'),null);
   } finally { await browser.close(); }

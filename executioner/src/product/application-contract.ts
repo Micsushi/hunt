@@ -1,5 +1,9 @@
 import type { Page } from "playwright";
 import type { AccountEvent } from "./account-journal.ts";
+import type { MatchedPageResult } from './page-matching.ts';
+
+export type SelectedResumeFill = (request: Record<string, unknown>, selectedSha256: string) =>
+  Promise<MatchedPageResult | null | 'attachment_conflict'>;
 
 export interface WorkableReviewAttempt { selectedSize: number; rechecked: boolean }
 export interface ResumeUploadReceipt { token: string; selectedSha256: string; filename: string; applicationKey: string }
@@ -15,6 +19,7 @@ export interface ProductInput {
   /** Queue-owned authorization for the selected browser document. */
   screeningTransition?: (url:string) => () => Promise<void>;
   onSmartRecruitersScreening?: (url:string) => void;
+  selectedResumeFill?: SelectedResumeFill;
   /** Queue-owned durable recorder. Absence forbids account mutation. */
   recordAccountAction?: (event: AccountEvent, trace?: string) => void;
   resumeExpected?: boolean;

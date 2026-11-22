@@ -157,6 +157,14 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
           const showScreening=()=>{
             first.remove();next.remove();
             form.insertAdjacentHTML('afterbegin','<section ng-form="scopeData.step2" ng-if="showStep(2)"><label>First name<input required></label></section><button type=submit>Send Application</button>');
+            if (mode === 'advance') {
+              form.querySelector('section')!.insertAdjacentHTML('beforeend', `
+                <fieldset class="jv-input-group">
+                  <legend>Which intake(s) are you available for? *</legend>
+                  <label><input hidden type="checkbox" name="intake"> January</label>
+                  <label><input hidden type="checkbox" name="intake"> May</label>
+                </fieldset>`);
+            }
           };
           if(mode==='slow') setTimeout(showScreening,4100); else showScreening();
         };
@@ -184,8 +192,15 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
         mode==='expanded-conflict' ? /saved profile differs.*C3 clicked Next and opened the full Jobvite form\. Review the first step/ :
         ['stall','ambiguous-disclosure','foreign-disclosure'].includes(mode) ? /clicked Next once/ :
         mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /clicked Next, opened the full Jobvite form, checked the required fields and clicked Next again\. Jobvite still requests more information\. Review the first step\. The attached PDF contents remain unverified\./ : /has not advanced/;
-      await assert.rejects(attempt(),stop);
-      if(mode==='advance') assert.equal(await page.locator('section input').inputValue(),'Fixture');
+      await assert.rejects(attempt(), (error: Error) => {
+        assert.match(error.message, stop);
+        if (mode === 'advance') assert.match(error.message, /Review suggested answers/);
+        return true;
+      });
+      if (mode === 'advance') {
+        assert.equal(await page.getByRole('textbox', {name: 'First name'}).inputValue(), 'Fixture');
+        assert.equal(await page.getByLabel('January').isChecked(), true);
+      }
       if(mode==='stall') await assert.rejects(attempt(),/has not advanced|could not be confirmed/);
       if (mode==='twice') await assert.rejects(attempt(),/has not advanced|stayed on the first step/);
       const count=['rejected','twice'].includes(mode)?2:['advance','slow','stall','expanded-conflict','ambiguous-disclosure','foreign-disclosure'].includes(mode)?1:0;

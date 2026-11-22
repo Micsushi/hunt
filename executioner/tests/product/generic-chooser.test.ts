@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {chromium,type Page} from 'playwright';
 import {fillGenericApplication,proveBambooResumeInput} from '../../src/product/generic-application.ts';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {prepareCurrentPage} from '../../src/product/current-page-workflow.ts';
+import {componentFailure} from '../../src/product/component-diagnostics.ts';
 
 const url='https://fixture.bamboohr.com/careers/123';
 const selected=Buffer.from('%PDF-selected-chooser-fixture');
@@ -51,7 +53,11 @@ test('a chooser opened for another input is refused without assigning either fil
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage();await fixture(page,"document.getElementById('cover').click();");
-    await assert.rejects(proveBambooResumeInput(page,url,AbortSignal.timeout(5000),Date.now()+5000),/different upload/);
+    await assert.rejects(prepareCurrentPage(page,{url,profile:{},resume:selected},AbortSignal.timeout(5000),()=>{}),error=>{
+      assert.match(String(error),/different upload field/);
+      assert.deepEqual(componentFailure(error),{component:'uploads',operation:'bind_file_chooser'});
+      return true;
+    });
     assert.equal(await page.locator('input[type=file]').evaluateAll(es=>es.some(e=>(e as HTMLInputElement).files!.length)),false);
     assert.equal(chooserListeners(page),0);assert.equal(await page.evaluate('submits'),0);
   }finally{await browser.close();}
@@ -85,7 +91,11 @@ test('chooser timeout and expired operation preserve fields and remove the liste
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage();await fixture(page,'');
-    await assert.rejects(proveBambooResumeInput(page,url,AbortSignal.timeout(1000),Date.now()+250));
+    await assert.rejects(prepareCurrentPage(page,{url,profile:{},resume:selected},AbortSignal.timeout(6000),()=>{}),error=>{
+      assert.match(String(error),/did not identify one upload field/);
+      assert.deepEqual(componentFailure(error),{component:'uploads',operation:'observe_file_chooser'});
+      return true;
+    });
     assert.equal(chooserListeners(page),0);
     const clicks=await page.evaluate('activations');
     await assert.rejects(proveBambooResumeInput(page,url,AbortSignal.timeout(1000),Date.now()-1),/expired/);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { currentPageInterruption } from '../../extension/form-page.js';
 import { observePageSource, checkPageSource, oneClickPersonalReadySource } from '../../extension/page-runtime/serialize.js';
 import { inspectChoiceWidget } from '../../extension/shared-choice-widget.js';
@@ -11,9 +12,17 @@ import { genericApplicationTarget } from './target.ts';
 import { fillMatchedPage } from './page-matching.ts';
 import { openBambooApplication } from './bamboo-application-entry.ts';
 import { effectiveProfileFacts } from './sources.ts';
-import { ApplicationPause } from './application-contract.ts';
+import { ApplicationPause, type SelectedResumeFill } from './application-contract.ts';
 import { pause } from './application-wait.ts';
 import { smartRecruitersPublication } from './smartrecruiters-target.ts';
+
+import { recordComponentFailure } from './component-diagnostics.ts';
+
+function chooserPause(message: string, operation: string): ApplicationPause {
+  const pause = new ApplicationPause(message);
+  recordComponentFailure(pause, 'uploads', operation);
+  return pause;
+}
 
 interface ChooserProbes {
   blocked(): ReturnType<typeof currentPageInterruption>;
@@ -74,10 +83,10 @@ async function proveBambooInDocument(page:Page, expectedUrl:string, signal:Abort
     if (blocked) return blocked;
     const chooser = await event;
     check();
-    if (!chooser || observed.length!==1) throw new Error('Choose File did not identify one upload field. No resume was sent.');
+    if (!chooser || observed.length!==1) throw chooserPause('Choose File did not identify one upload field. No resume was sent.', 'observe_file_chooser');
     const chosen=chooser.element();handles.push(chosen);
     if (!await input.evaluate((element,chosen)=>element===chosen && element.isConnected,chosen)) {
-      throw new Error('Choose File opened a different upload field. No resume was sent.');
+      throw chooserPause('Choose File opened a different upload field. No resume was sent.', 'bind_file_chooser');
     }
     await page.evaluate(found=>{
       const {input,button,group,form}=found!;
@@ -125,6 +134,7 @@ export async function fillGenericApplication(
   resume: Buffer,
   signal: AbortSignal,
   learningRoot?: string,
+  selectedResumeFill?: SelectedResumeFill,
 ) {
   signal.throwIfAborted();
   const expected = genericApplicationTarget(expectedUrl);
@@ -163,18 +173,37 @@ export async function fillGenericApplication(
   }
   signal.throwIfAborted();
   if (page.url()!==boundUrl) throw new Error('The application page changed before filling.');
+  const reconcile = selectedResumeFill && smartRecruitersPublication(new URL(boundUrl))?.screening === false &&
+    !await page.evaluate(url=>(globalThis as any).__huntC3PartialFill?.resumeAttempt?.url===url,boundUrl);
+  const sha256 = reconcile ? createHash('sha256').update(resume).digest('hex') : '';
+  let isolated = false;
   const result = await fillMatchedPage({profile:settings,resume,url:boundUrl,root:learningRoot,workflow:'C3.1',signal,
     call:async(action,matchingPlans,matchingRunId)=>{
       const interruption = await prepareGenericDocument(page);
       if (interruption) return interruption;
-      return {...await page.evaluate(fillVisibleFields, {
-    action,matchingPlans,matchingRunId,queuedScreening:true,facts: effectiveProfileFacts(settings),
-    expectedUrl: boundUrl,
-    expiresAt,
-    resume: action==='fill'?{name:'Resume.pdf', base64:resume.toString('base64')}:undefined,
-    replaceExistingResume: true,
-  })};}});
+      const request = {
+        action, matchingPlans, matchingRunId, queuedScreening: true,
+        facts: effectiveProfileFacts(settings),
+        expectedUrl: boundUrl,
+        expiresAt,
+        resume: action === 'fill' ? {name: 'Resume.pdf', base64: resume.toString('base64')} : undefined,
+        replaceExistingResume: true,
+      };
+      if (reconcile) {
+        const report = await selectedResumeFill(request,sha256);
+        if (report==='attachment_conflict' || !report && isolated) {
+          throw new ApplicationPause('The existing attachment no longer matches C3’s selected upload. To replace it, delete it on the employer page, reload, then choose Prepare this job and Run.');
+        }
+        if (report) { isolated = true; return report; }
+      }
+      return {...await page.evaluate(fillVisibleFields,request)};
+    }});
   signal.throwIfAborted();
+  if (isolated) await page.evaluate(url=>{
+    if (location.href!==url) throw new Error('The selected application changed.');
+    // The guarded Next action uses its own marker in the main world.
+    (globalThis as any).__huntC3PartialFill ??= {undo:[],redo:[],busy:false};
+  },boundUrl);
   if (page.url() !== current.url && genericApplicationTarget(page.url()).key !== expected.key) {
     throw new Error('The application page changed while filling.');
   }

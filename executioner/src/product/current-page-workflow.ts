@@ -7,7 +7,7 @@ import { componentFailure, recordComponentFailure } from './component-diagnostic
 
 export async function prepareCurrentPage(page: Page, input: ProductInput, signal: AbortSignal, progress: (stage: string) => void): Promise<never> {
   progress("Filling this unfamiliar application page");
-  const fill = () => fillGenericApplication(page, input.url, input.profile, input.resume, signal, input.learningRoot);
+  const fill = () => fillGenericApplication(page, input.url, input.profile, input.resume, signal, input.learningRoot, input.selectedResumeFill);
   let advanced = false;
   let jobviteStop: string | undefined;
   try {
@@ -26,12 +26,14 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
       const terminal = await advanceSmartRecruiters(page,smartStep.screeningUrl,screening,signal);
       smartStop = typeof terminal === 'string' ? terminal : 'The employer screening step is open. Review the remaining questions.';
       report = {...screening, filled:[...new Set([...report.filled,...screening.filled])], skipped:[...report.skipped,...screening.skipped],
+        needsOwnerReview:report.needsOwnerReview || screening.needsOwnerReview,
         resume:report.resume, componentFailure:screening.componentFailure ?? report.componentFailure};
     }
     const repeatFill = async () => {
       const next = await fill();
       const skips = new Map([...report.skipped,...next.skipped].map(row=>[JSON.stringify(row),row]));
       report = {...next,filled:[...report.filled,...next.filled],skipped:[...skips.values()],
+        needsOwnerReview:report.needsOwnerReview || next.needsOwnerReview,
         componentFailure:report.componentFailure ?? next.componentFailure,
         resume:report.resume==='unverified' ? 'unverified' : next.resume};
     };
@@ -52,15 +54,18 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     Object.assign(reasons,{
       employer_submission_disabled:'the employer still has submission disabled',
       protected_answer_denied:'choose your answer on the employer page',
+      screening_checkbox_label_unconfirmed:'read the checkbox on the employer page',
+      screening_checkbox_requires_owner_answer:'review this checkbox on the employer page',
       screening_choice_not_confirmed:'check the selected answer on the employer page',
       screening_choice_requires_queue:'choose the answer on the employer page',
       uploaded_attachment_requires_review:'check the uploaded attachment on the page',
       resume_filename_visible_contents_unverified:'the employer shows the matching filename. PDF contents unverified',
+      existing_smartrecruiters_attachment_requires_review:'C3 cannot confirm this attachment came from its selected PDF. If you choose to replace it, use the employer’s Delete file control, then choose Run in Applications',
       resume_upload_already_attempted_review_attachment:'upload already attempted; check the attachment before retrying',
       resume_parsing_pending_profile_not_filled:'waiting for upload or parsing confirmation; profile fields were left unchanged',
       resume_parser_value_conflict:'resume parsing produced a value that differs from your saved profile',
       resume_parser_unmapped_value_requires_review:'review the value entered by resume parsing; no saved answer confirms it',
-      resume_control_not_identified:'resume upload control could not be verified',
+      resume_control_not_identified:'no eligible résumé upload field was found',
       application_form_not_identified:'application form could not be identified',
       field_replaced_without_stable_identity:'field changed during filling',
       field_no_longer_editable:'field is not editable',
@@ -93,7 +98,8 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     if (unresolved.length > 4) warnings.push(`${unresolved.length - 4} more fields need review`);
     const resumeStatus=jobvite==='screening' ? 'Jobvite acknowledged the selected resume. The employer PDF contents remain unverified.'
       : report.resume==='verified' ? 'Selected resume verified.' : report.resume==='optional' ? 'Optional resume left unchanged.' : 'Selected resume needs review.';
-    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeStatus}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? jobviteStop ?? 'Review the draft. C3 has not advanced or submitted.'}`);
+    const reviewNotice = report.needsOwnerReview ? ' Review suggested answers and unresolved fields on the employer page.' : '';
+    const paused = new ApplicationPause(`Partial page fill: ${report.filled.length} fields filled. ${resumeStatus}${warnings.length ? ` ${warnings.join('; ')}.` : ''} ${smartStop ?? jobviteStop ?? 'Review the draft. C3 has not advanced or submitted.'}${reviewNotice}`);
     if (report.componentFailure) {
       recordComponentFailure(paused, report.componentFailure.component, report.componentFailure.operation);
     }

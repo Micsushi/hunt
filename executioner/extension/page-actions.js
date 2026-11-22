@@ -1,4 +1,4 @@
-import {pageFillSource, observePageSource, checkPageSource} from './page-runtime/serialize.js';
+import {pageFillSource, observePageSource, checkPageSource, pageFillWorld} from './page-runtime/serialize.js';
 import { inspectChoiceWidget } from './shared-choice-widget.js';
 import { bambooResumeControl } from './page-adapters/bamboo-resume.js';
 import { annotateQuestionContext } from './question-context.js';
@@ -10,7 +10,6 @@ const observeCurrentDocument = `(${observePageSource})()`;
 const interruption = checkPageSource;
 
 export const pageActionTabs = new Set();
-const worldName = 'Hunt C3 page fill v1';
 const pageErrors = new Set([
   viewportUnavailable,
   viewportCleanupPending,
@@ -44,7 +43,7 @@ const emptyHiddenFrame = async (send,frame) => {
     }`});
     if(owner.exceptionDetails || owner.result?.value!==true)return false;
   }finally{await send('Runtime.releaseObject',{objectId}).catch(()=>{});}
-  const {executionContextId}=await send('Page.createIsolatedWorld',{frameId:frame.id,worldName});
+  const {executionContextId}=await send('Page.createIsolatedWorld',{frameId:frame.id,worldName:pageFillWorld});
   const empty=await send('Runtime.callFunctionOn',{executionContextId,returnByValue:true,functionDeclaration:`function() {
     return location.href==='about:blank' && document.readyState==='complete' && !!document.body &&
       document.body.children.length===0 && !document.body.textContent.trim() &&
@@ -155,7 +154,7 @@ export async function pageAction(params, attached) {
       }
       try {
         checkDeadline();
-        const {executionContextId} = await send('Page.createIsolatedWorld',{frameId:frame.id,worldName});
+        const {executionContextId} = await send('Page.createIsolatedWorld',{frameId:frame.id,worldName:pageFillWorld});
         const latest = await send('Page.getFrameTree');
         if (await documentKey(framesIn(latest.frameTree)) !== binding) throw new Error('The page changed during this action.');
         checkDeadline();
@@ -212,6 +211,8 @@ export async function pageAction(params, attached) {
       canUndo:completed.some(result=>result.canUndo),canRedo:completed.some(result=>result.canRedo),
       frames:results.map(({frameId,status,error})=>({frameId,status,...(error?{error}: {})}))};
   } catch (error) {
+    if (!owned && operation === 'inspect' && params.reportProtectedAttachment === true &&
+        error.message === 'Cannot access a chrome-extension:// URL of different extension') throw new Error('debugger_protected_extension');
     if (pageErrors.has(error.message)) throw error;
     throw new Error('C3 could not access the selected tab. Inspect the draft before retrying.');
   } finally {

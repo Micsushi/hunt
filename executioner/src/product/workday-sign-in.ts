@@ -31,6 +31,13 @@ export async function fillWorkdayAccountCurrentPage(call: (method:string, params
   try {
     await call('workdayAccount',{...base,operation:'begin',existingOnly:true}); opened = true;
     const state = await call('workdayAccount',{...base,operation:'inspect',fillOnly:true});
+    const observed = state.observation;
+    if (request.operation === 'inspect' && state.state === 'application' && state.documentId &&
+        observed?.version === 'workday-page-v1' && observed.conflicts?.length === 0 &&
+        ((observed.kind === 'application' && observed.signals?.includes('application_root')) ||
+         (observed.kind === 'review' && observed.signals?.includes('review_root')))) {
+      return {priorWorkdayPage:observed.kind as 'application'|'review'};
+    }
     if (state.observation && !['application','review','entry','create_account','sign_in'].includes(state.observation.kind)) {
       if (request.operation === 'inspect' && state.documentId) return {tabId:request.tabId,url:request.expectedUrl,documentId:state.documentId,operation:request.operation,
         observation:state.observation,filled:[],skipped:[{label:'Employer page',reason:state.observation.kind}],incomplete:true,canUndo:false,canRedo:false,frames:[]};

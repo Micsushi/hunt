@@ -91,7 +91,12 @@ export function createControlInteraction({ state, checkDeadline, boundChoice, ed
       checkDeadline();choiceClick(matches[0].node);
       if(current.confirmClick)await current.confirmClick(label,choicePause);
       const started=Date.now();
-      do {await choicePause();current=boundChoice(change);if(!current || current.labels.length)break;}while(Date.now()-started<1800);
+      do {
+        await choicePause();
+        current=boundChoice(change);
+        // A widget can render its committed label before validation and the clear control settle.
+        if (current?.labels.length || !change.choiceWidget.input.isConnected || !change.region.isConnected) break;
+      } while(Date.now()-started<1800);
     }
     if(!current || current.labels.length!==1 || current.labels[0]!==label || !current.clear && (current.pills.length!==1 || !current.pills[0].remove))throw new Error('The selection or its reset was not confirmed.');
     closeChoice(change);await choicePause();

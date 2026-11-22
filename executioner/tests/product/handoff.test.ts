@@ -9,6 +9,58 @@ import { inspectHandoffBundle, handoffMaxBytes } from '../../src/product/handoff
 import {ExtensionBridge} from '../../src/product/extension-bridge.ts';
 import {effectiveProfileFacts} from '../../src/product/sources.ts';
 
+test('protected inspection reports the previously observed Workday page without issuing a document binding', async () => {
+  const {pageAction} = await import(new URL('../../extension/page-actions.js',import.meta.url).href);
+  const root = mkdtempSync(join(tmpdir(),'c3-workday-protected-inspection-'));
+  const service = await startProductServer({root,port:0});
+  const url = 'https://fixture.wd5.myworkdayjobs.com/External/job/City/Developer_R1/apply';
+  const bridge = (service.queue as unknown as {bridge:ExtensionBridge}).bridge;
+  const calls: string[] = [];
+  let kind = 'application', conflict = false, protection = true;
+  const oldChrome = Object.getOwnPropertyDescriptor(globalThis,'chrome');
+  Object.defineProperty(globalThis,'chrome',{configurable:true,value:{
+    tabs:{get:async () => ({url})}, debugger:{attach:async () => {
+      calls.push('attach');
+      throw new Error(protection ? 'Cannot access a chrome-extension:// URL of different extension' : 'arbitrary browser error');
+    }},
+  }});
+  try {
+    bridge.call = async (method, params = {}) => {
+      calls.push(method === 'workdayAccount' ? String(params.operation) : method);
+      if (method === 'agentStatus') return {capabilities:['workday-account-fill-v1','workday-page-v1']};
+      if (method === 'workdayAccount') return params.operation === 'inspect' ? {
+        state:'application',documentId:'observed-account-document',observation:{version:'workday-page-v1',
+          kind, signals:[kind === 'review' ? 'review_root' : 'application_root'], conflicts:conflict ? ['sign_in_form'] : []},
+      } : {};
+      assert.equal(method,'pageAction');
+      return pageAction(params,new Set());
+    };
+    for (const mode of ['application','review','conflicting','different error']) {
+      kind = mode === 'review' ? 'review' : 'application';
+      conflict = mode === 'conflicting';
+      protection = mode !== 'different error';
+      calls.length = 0;
+      const response = await fetch(service.origin+'/browser/page',{method:'POST',headers:{
+        Authorization:'Bearer '+readFileSync(service.tokenPath,'utf8').trim(),'Content-Type':'application/json',
+      },body:JSON.stringify({operation:'inspect',tabId:1,expectedUrl:url})});
+      assert.equal(response.status,400);
+      const body = await response.json() as {error:string;partialObservation?:unknown};
+      if (conflict || !protection) {
+        assert.deepEqual(body,{error:'C3 could not access the selected tab. Inspect the draft before retrying.'});
+      } else {
+        assert.deepEqual(body.partialObservation,{kind,incomplete:true,reason:'debugger_protected_extension'});
+        assert.match(body.error,/Chrome blocked detailed inspection/);
+        assert.deepEqual(Object.keys(body).sort(),['error','partialObservation']);
+      }
+      assert.deepEqual(calls,['agentStatus','begin','inspect','end','pageAction','attach']);
+    }
+  } finally {
+    if (oldChrome) Object.defineProperty(globalThis,'chrome',oldChrome);
+    else Reflect.deleteProperty(globalThis,'chrome');
+    await service.close();
+  }
+});
+
 function job(id: number) {
   const pdf = Buffer.from(`%PDF-selected-resume-${id}`);
   return {url:`https://job-boards.greenhouse.io/fixture/jobs/${id}`,title:`Fixture job ${id}`,sourceJobId:id,

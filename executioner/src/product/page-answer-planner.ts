@@ -4,6 +4,7 @@ import type { ApplicationFieldObservation } from '../form/answers/application-ty
 import { inspectQuestionMatch, resolveQuestion } from '../form/questions/catalog.ts';
 import { contractApprovedPrivacyChoices, isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import { normalizeCatalogText } from '../form/questions/normalize.ts';
+import { sameEmployer } from '../form/questions/matching.ts';
 import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equivalence.ts';
 import { canonicalCanadianRegion } from '../composition/private/s2-derived-profile-country.ts';
 import { recordComponentFailure } from './component-diagnostics.ts';
@@ -26,7 +27,7 @@ function provinceResidenceAnswer(question: string, canadianRegion: string | unde
 }
 
 export interface PageQuestion extends MatchingObservation {
-  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple' | 'rippling-location'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
+  state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple' | 'rippling-location' | 'smartrecruiters-screening-checkbox'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
 type PeerQuestion = Pick<PageQuestion, 'question' | 'selected' | 'frameId' | 'formId'>;
 export interface PageAnswerPlan {
@@ -234,6 +235,30 @@ export function createPageAnswerPlanner(
     try {
       const plan = await planAnswer(row, observations, signal);
       if (plan.reason === 'protected_answer_denied') return plan;
+      const listed=/^have you previously worked for\s+([^,]+),\s*([^,?]+?)\s+or\s+any\s+aff(?:i)?liate\??\*?$/iu.exec(row.question.trim());
+      const defaults = sources.profileQuery.ownerDefaults;
+      if (listed && defaults?.employmentRelationship === false && plan.lane === 'synthetic_test_default' &&
+          employerNames.some(name=>sameEmployer(name,listed[1]!))) {
+        const employers=[listed[1]!,listed[2]!];
+        const savedCompanies = [
+          ...facts.filter(fact => fact.factId==='current_company' && typeof fact.value==='string')
+            .map(fact => ({name:fact.value as string, owner:fact.provenance==='owner_provided' && fact.lane==='live_owner_fact'})),
+          ...sources.profilePlan.repeatables.filter(section => section.section==='experience').flatMap(section =>
+            section.rows.flatMap(row => row.fields.flatMap(field =>
+              field.fieldId==='experience.company' && field.answer.kind==='answered'
+                ? [{name:field.answer.value, owner:field.answer.provenance==='owner_provided' && field.answer.lane==='live_owner_fact'}] : []))),
+        ];
+        const matches=savedCompanies.filter(company=>employers.some(name=>sameEmployer(company.name,name)));
+        const prior=facts.find(fact=>fact.factId==='previously_worked_for_organization' && fact.value===true);
+        const positive=!!prior || matches.length>0;
+        const ownerPositive=prior?.provenance==='owner_provided' && prior.lane==='live_owner_fact' || matches.some(company=>company.owner);
+        const options=row.options.filter(option=>normalizeCatalogText(option)===(positive?'yes':'no'));
+        if (options.length===1) return {...plan,answer:options[0]!,provisional:!ownerPositive,
+          reason:positive?'profile_answer':'prior_employment_default',lane:ownerPositive?'live_owner_fact':plan.lane};
+      }
+      if (row.widget === 'smartrecruiters-screening-checkbox' && row.required && plan.provisional) {
+        return {...plan,answer:null,reason:row.state==='ambiguous' ? 'screening_checkbox_label_unconfirmed' : 'screening_checkbox_requires_owner_answer'};
+      }
       if (row.widget === 'native-multiple' && row.required && !row.selected && plan.provisional && typeof plan.answer === 'string') {
         const question = resolveQuestion(row.question, employerNames);
         const sensitive = protectedQuestionCategory(row.question, question.kind === 'resolved' ? question.id : undefined) ||

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {chromium,type Browser} from 'playwright';
+import {pageFillSource,pageFillWorld} from '../../extension/page-runtime/serialize.js';
+import {effectiveProfileFacts} from '../../src/product/sources.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 import {mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -116,7 +118,7 @@ test('selected SmartRecruiters Prepare proves the posting and preserves the boun
   const edit=(expectedUrl=url, operation='fill')=>post('/browser/page',{tabId:tabId+1,expectedUrl,documentId,operation});
   try {
     observe();
-    const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'});
+    const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',city:'Example',region:'Ontario',country:'Canada'});
     const selected=Buffer.from('%PDF-selected-default').toString('base64');
     app.queue.configure(profile,selected);
     const imported=app.queue.add([{url:postingUrl,sourceJobId:9,resumeVersion:'v1',
@@ -190,7 +192,11 @@ test('selected SmartRecruiters Prepare proves the posting and preserves the boun
       zone.querySelector('input')!.onchange=async event=>{
         const file=(event.target as HTMLInputElement).files?.[0];
         if (!file) return;
+        (event.target as HTMLInputElement).value='';
+        (event.target as HTMLInputElement).required=false;
+        (event.target as HTMLInputElement).setAttribute('aria-required','true');
         trace.uploaded=await file.text();
+        trace.uploads=String(Number(trace.uploads??0)+1);
         zone.querySelector('ul')!.innerHTML='<li class="c-spl-file-list-item"><span class="c-spl-file-list-item-label-container"><span class="c-spl-file-list-item-name"></span></span><spl-button><button></button></spl-button></li>';
         zone.querySelector('li span span')!.textContent=file.name;
         zone.querySelector('li button')!.setAttribute('aria-label','Delete file '+file.name);
@@ -216,7 +222,13 @@ test('selected SmartRecruiters Prepare proves the posting and preserves the boun
       connections++;
       return {contexts:()=>boundBrowser.contexts(),close:async()=>{}} as Browser;
     };
+    const renderer=await page.context().newCDPSession(page);
+    const {frame}= (await renderer.send('Page.getFrameTree')).frameTree;
     const fixtureCall:ExtensionBridge['call']=async(method,args)=>{
+      if (method==='cdp') {
+        if (args?.method==='Page.getFrameTree') return {frameTree:{frame:{...frame,loaderId:loader,url:current}}};
+        return renderer.send(args?.method as 'Page.createIsolatedWorld',args?.params as {frameId:string; worldName:string});
+      }
       if (method==='pageTabs') return [{tabId,url:current}];
       if (method==='attach') {
         attachments++;
@@ -255,12 +267,80 @@ test('selected SmartRecruiters Prepare proves the posting and preserves the boun
     assert.equal(connections,0);
     assert.equal(await page.locator('input[type=email]').inputValue(),'');
     returnedLoader=loader;
+    const prior=await page.context().newCDPSession(page);
+    const {executionContextId}=await prior.send('Page.createIsolatedWorld',{frameId:frame.id,worldName:pageFillWorld});
+    const popupFill=(input:Record<string,unknown>)=>prior.send('Runtime.callFunctionOn',{executionContextId,
+      returnByValue:true,awaitPromise:true,functionDeclaration:`async function(input) { return (${pageFillSource})(input); }`,
+      arguments:[{value:{expectedUrl:url,scope:'page',...input}}]});
+    const facts=effectiveProfileFacts(profile);
+    const first=await popupFill({facts:facts.filter(f=>f.factId!=='email_address'),matchingRunId:'popup-name',
+      resume:{name:'Resume.pdf',base64:selected}});
+    assert.equal(first.result.value.resume,'unverified');
+    await popupFill({facts,matchingRunId:'popup-email'});
+    assert.equal(await page.locator('input[type=email]').inputValue(),'fixture@example.invalid');
+    const undone=await popupFill({action:'undo'});
+    assert.equal(undone.result.value.canUndo,true);
+    assert.equal(undone.result.value.canRedo,true);
+    assert.equal(await page.locator('input[type=email]').inputValue(),'');
+    const readHistory=async()=> (await renderer.send('Runtime.evaluate',{contextId:executionContextId,
+      returnByValue:true,expression:`(() => {
+        const {undo,redo,matchingRunId,choiceDrafts,queuedHistory} = globalThis.__huntC3PartialFill;
+        const labels = stack => stack.map(batch=>batch.map(edit=>edit.label));
+        return {undo:labels(undo),redo:labels(redo),matchingRunId,popupChoices:!!choiceDrafts,queued:labels(queuedHistory?.undo??[])};
+      })()`})).result.value;
+    const popupHistory=await readHistory();
+    assert.equal(popupHistory.undo.length,1);
+    assert.equal(popupHistory.redo.length,1);
+    const digest=await prior.send('Runtime.evaluate',{contextId:executionContextId,returnByValue:true,
+      expression:'globalThis.__huntC3PartialFill.resumeAttempt.fileSha256'});
+    const setReceiptHash=(sha:string)=>prior.send('Runtime.evaluate',{contextId:executionContextId,
+      expression:`globalThis.__huntC3PartialFill.resumeAttempt.fileSha256 = ${JSON.stringify(sha)}`});
+    await setReceiptHash('0'.repeat(64));
+    await page.locator('input[type=email]').fill('');
     await run();
-    assert.equal(connections,1);
+    assert.match(restored.error??'',/attachment no longer matches/);
+    assert.equal(await page.locator('input[type=email]').inputValue(),'');
+    assert.equal(transitions,0);
+    assert.deepEqual(await readHistory(),popupHistory);
+    assert.equal(await page.evaluate(()=>document.body.dataset.uploads),'1');
+    await setReceiptHash(digest.result.value);
+    await page.locator('oc-personal-information').evaluate(personal=>{
+      personal.insertAdjacentHTML('beforeend','<oc-location-autocomplete><spl-autocomplete label="City" data-test="location-autocomplete"></spl-autocomplete></oc-location-autocomplete>');
+      const host=personal.querySelector('spl-autocomplete')!;
+      const shadow=host.attachShadow({mode:'open'});
+      shadow.innerHTML='<input aria-label="City*" required role=combobox aria-autocomplete=list aria-controls="locations" aria-expanded=false aria-invalid=true>' +
+        '<spl-icon role=button aria-label="Clear City value" hidden>Clear</spl-icon><div id="locations" role=listbox hidden></div>';
+      const input=shadow.querySelector('input')!, menu=shadow.querySelector<HTMLElement>('#locations')!, clear=shadow.querySelector<HTMLElement>('spl-icon')!;
+      const close=()=>{input.setAttribute('aria-expanded','false');menu.hidden=true;};
+      input.addEventListener('keydown',event=>{if(event.key==='Escape')close();});
+      input.addEventListener('input',()=>{
+        menu.replaceChildren();
+        if(!input.value){close();return;}
+        input.setAttribute('aria-expanded','true');menu.hidden=false;
+        const label='Example, Ontario, Canada', option=document.createElement('spl-select-option');
+        option.innerHTML='<div class="c-spl-autocomplete-default-option"><div data-sr-id="example-content"><spl-truncate title="'+label+'">'+label+'</spl-truncate></div></div>';
+        const item=document.createElement('spl-dropdown-item');
+        option.attachShadow({mode:'open'}).append(item);
+        item.innerHTML='<slot></slot>';
+        const itemShadow=item.attachShadow({mode:'open'});
+        itemShadow.innerHTML='<div role=option><slot></slot></div>';
+        itemShadow.querySelector('[role=option]')!.addEventListener('click',()=>{
+          input.value=label;host.setAttribute('value','[object Object]');clear.hidden=false;
+          input.setAttribute('aria-invalid','false');document.body.dataset.city=label;close();
+        });
+        menu.append(option);
+      });
+    });
+    await prior.detach();
+    await run();
+    assert.equal(connections,2);
     assert.equal(transitions,1,restored.error);
     assert.match(restored.error??'',/employer Review screen is open/);
+    const afterQueue=await readHistory();
+    assert.deepEqual({...afterQueue,queued:[]},popupHistory);
+    assert.deepEqual(afterQueue.queued,[['Email','City*']]);
     assert.equal(await page.locator('input').inputValue(),'Fixture');
-    assert.deepEqual(await page.evaluate(()=>({...document.body.dataset})),{uploaded:'%PDF-selected-default',next:'clicked'});
+    assert.deepEqual(await page.evaluate(()=>({...document.body.dataset})),{uploaded:'%PDF-selected-default',uploads:'1',city:'Example, Ontario, Canada',next:'clicked'});
     assert.equal(restored.selectedApplicationUrl,screeningUrl);
     assert.equal(await page.locator('input').inputValue(),'Fixture');
 
@@ -273,7 +353,7 @@ test('selected SmartRecruiters Prepare proves the posting and preserves the boun
     current=screeningUrl;
     bindBrowser(restartedBridge);
     await run();
-    assert.equal(connections,1);
+    assert.equal(connections,2);
     observe();
     inspectedUrl=screeningUrl;
     assert.equal((await prepare(screeningUrl+'&other=1')).status,400);
@@ -283,11 +363,11 @@ test('selected SmartRecruiters Prepare proves the posting and preserves the boun
     bindBrowser(restartedBridge);
     await page.locator('input').fill('');
     await run();
-    assert.equal(connections,2);
+    assert.equal(connections,3);
     assert.equal(transitions,1);
     assert.equal(await page.locator('input').inputValue(),'Fixture');
     assert.equal(readFileSync(stored,'utf8'),original);
-    assert.deepEqual(await page.evaluate(()=>({...document.body.dataset})),{uploaded:'%PDF-selected-default',next:'clicked'});
+    assert.deepEqual(await page.evaluate(()=>({...document.body.dataset})),{uploaded:'%PDF-selected-default',uploads:'1',city:'Example, Ontario, Canada',next:'clicked'});
   } finally {
     globalThis.fetch=realFetch;
     chromium.connectOverCDP=realConnect;

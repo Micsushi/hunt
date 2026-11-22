@@ -36,6 +36,8 @@ import { normalizeCatalogText } from "../questions/normalize.ts";
 import { employmentQuestion, referralQuestion, sameEmployer } from '../questions/matching.ts';
 import {
   contractApprovedPrivacyChoices,
+  isApplicationAccuracyDeclaration,
+  isCriminalConvictionDisclosure,
   isRecruitmentTermsConsent,
   protectedQuestionCategory,
 } from "../questions/protected.ts";
@@ -454,6 +456,11 @@ export function createApplicationAnswerResolver(
       ) {
         return unsupported(field);
       }
+      const questionText = field.rawQuestion ?? field.label;
+      // The saved profile has no conviction-history fact. Existing answers still need owner review.
+      if (isCriminalConvictionDisclosure(questionText) || isApplicationAccuracyDeclaration(questionText)) {
+        return failure("protected_answer_denied");
+      }
       if ((field.rawQuestion !== undefined || field.rawOptions !== undefined) && field.state === 'populated' &&
           (!['text', 'textarea', 'date'].includes(field.behavior) || field.populatedValueValid !== false)) {
         const current = request.committedReadback;
@@ -464,7 +471,6 @@ export function createApplicationAnswerResolver(
             !placeholderOption.test(normalizeCatalogText(current.option)) && !isEmptyCatalogMessage(current.option);
         if (committed) return success({kind: 'readback_only', fieldId: field.fieldId});
       }
-      const questionText = field.rawQuestion ?? field.label;
       const questionResolution = resolveQuestion(questionText, request.employerNames);
       const protectedCategory = protectedQuestionCategory(questionText,
         questionResolution.kind === 'resolved' ? questionResolution.id : undefined, field.rawOptions ?? field.options.map(option => option.label));

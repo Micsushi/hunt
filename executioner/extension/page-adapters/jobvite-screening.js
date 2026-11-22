@@ -198,3 +198,39 @@ export function watchJobviteScreening(receipt, binding, state) {
     },event=>{queuedAttempts++; queuedClick=event;});
   };
 }
+
+export function readJobviteGroup(group, screening, state, visible, insideStep) {
+  if (!screening || !group.isConnected || !screening.contains(group) || !visible(group)) return null;
+  const legends = [...group.children].filter(node => node.tagName === 'LEGEND');
+  const inputs = [...group.querySelectorAll('input[type=radio],input[type=checkbox]')];
+  if (legends.length !== 1 || inputs.length < 2 || inputs.some(visible) ||
+      inputs.some(input => !insideStep(input, screening) || input.disabled || input.closest('fieldset') !== group) ||
+      new Set(inputs.map(input => input.type)).size !== 1 ||
+      new Set(inputs.map(input => input.name)).size !== 1 || !inputs[0].name) return null;
+
+  const labels = inputs.map(input => input.labels?.length === 1 ? input.labels[0] : null);
+  if (labels.some((label, i) => !label || label.control !== inputs[i] || !group.contains(label) ||
+      !visible(label) || label.closest('fieldset') !== group || label.querySelectorAll('input').length !== 1 ||
+      label.querySelector('button,a,select,textarea,[role=button]'))) return null;
+  const options = labels.map(label => label.textContent.trim().replace(/\s+/g, ' '));
+  if (options.some(option => !option) || new Set(options).size !== options.length) return null;
+
+  const question = legends[0].innerText.trim();
+  const owner = group.closest('.jv-form-field-checkbox,.jv-form-field-radio');
+  const chosen = inputs.map((input, i) => input.checked ? options[i] : null).filter(Boolean);
+  const individuallyRequired = input => input.required || input.getAttribute('aria-required') === 'true';
+  const required = inputs.some(individuallyRequired) ||
+    /[✱*]/.test(question) || !!owner?.classList.contains('ng-invalid-required') ||
+    (chosen.length > 0 && !!state.jobviteGroups?.get(group)?.row.required);
+  if (!question || !required || inputs[0].type === 'radio' && chosen.length > 1) return null;
+  state.matchingIds ??= new WeakMap();
+  if (!state.matchingIds.has(group)) state.matchingIds.set(group, crypto.randomUUID());
+  const row = {
+    pageId:location.href, fieldId:state.matchingIds.get(group), question,
+    control:inputs[0].type === 'radio' ? 'radio' : 'select',
+    ...(inputs[0].type === 'checkbox' ? {widget:'native-multiple'} : {}),
+    options, required:true, selected:chosen.join('; '),
+    valid:chosen.length > 0 && inputs.every(input => input.type !== 'checkbox' || !individuallyRequired(input) || input.checked),
+  };
+  return {row:{...row, signature:JSON.stringify(row)}, inputs, labels};
+}

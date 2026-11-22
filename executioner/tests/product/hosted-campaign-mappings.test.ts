@@ -112,10 +112,10 @@ test('bilingual screening uses Canadian eligibility, separates background consen
     const sources = productSources(profile, Buffer.from('%PDF-fixture'));
     try {
       const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), company);
-      const answer = async (question: string, control: 'radio'|'listbox'|'checkbox', options: string[], required = true) => {
+      const answer = async (question: string, control: 'radio'|'listbox'|'checkbox', options: string[], required = true, planner = plan) => {
         const row = {pageId:'screening',fieldId:'q',signature:'fixture',question,options,
           selected:control==='checkbox'?false:'',required,control,valid:false};
-        return plan(row, [row], AbortSignal.timeout(3000));
+        return planner(row, [row], AbortSignal.timeout(3000));
       };
       for (const [q,expected,lane] of [
         [eligible,granted ? 'Yes' : 'No','live_owner_fact'],
@@ -140,6 +140,12 @@ test('bilingual screening uses Canadian eligibility, separates background consen
         [privacy + ' You also authorize a background check.',true]] as const) {
         assert.equal((await answer(q,'checkbox',[],required)).answer,null);
       }
+      const spectrum = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), 'SpectrumHealthCare');
+      const spectrumNotice = 'You declare that you have read and understand the privacy notice of Spectrum Health Care.';
+      assert.equal((await answer(spectrumNotice,'checkbox',[],true,spectrum)).answer,granted);
+      assert.equal((await answer(spectrumNotice,'checkbox',[],false,spectrum)).answer,null);
+      assert.equal((await answer(spectrumNotice,'checkbox',[])).answer,null);
+      assert.equal((await answer(spectrumNotice+' You also authorize a background check.','checkbox',[],true,spectrum)).answer,null);
       const otherCountry = await answer(eligible.replace('Canada?', 'France?'),'radio',['Yes','No']);
       assert.ok(otherCountry.provisional);
     } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }

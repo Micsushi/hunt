@@ -223,6 +223,8 @@ If Jobvite requests more information in a collapsed form, C3 can open **View Ful
 Application Form**, recheck the newly visible required fields and retry **Next** once.
 C3 fills the screening step and stops before submission. Use the existing queue entry
 for a job imported from C1 to preserve its selected résumé.
+Review suggested screening answers, including availability and work-term preferences,
+on the employer page. C3 leaves personal accuracy declarations for the applicant.
 
 On a recognized SmartRecruiters personal-information step, **Prepare this job**
 checks the employer's posting and adds the selected application with the saved
@@ -233,6 +235,12 @@ same screening page before running the saved draft. If C3 could not confirm the
 move to screening, use the employer's **Back** control to return to the personal
 step and choose **Prepare this job** again. **Fill current page** stays on the
 selected step.
+
+SmartRecruiters can continue a prepared application from a résumé already uploaded
+by C3 on the same loaded page if the selected PDF and upload receipt still match.
+The employer's stored PDF contents remain unverified. If C3 cannot confirm the
+attachment and you want to replace it, delete it on the employer page. Reopen
+**Prepare this job** after any page reload before choosing **Run**.
 
 **Fill current page** stays on the current Jobvite step. To continue manually, choose
 **Next** on the employer form and then **Fill current page** again. A displayed filename

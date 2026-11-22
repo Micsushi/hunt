@@ -9,7 +9,7 @@ export type ProtectedQuestionCategory = "authorization" | "legal" | "consent";
 // attestation cannot authorize that attestation.
 export function isRecruitmentTermsConsent(label: string, requiredEmployerNames: readonly string[] = []): boolean {
   // A named privacy notice applies only to the employer on the required field.
-  const named = /^you declare that you have read and agree to the privacy notice of (.+)$/u.exec(normalizeCatalogText(label));
+  const named = /^you declare that you have read and (?:agree to|understand) the privacy notice of (.+)$/u.exec(normalizeCatalogText(label));
   if (named) {
     const companyKey = (name: string) => normalizeCatalogText(name).replace(/\bltée\b/gu, 'lte').replace(/\s+/gu, '');
     return requiredEmployerNames.some(name => companyKey(name) === companyKey(named[1]!));
@@ -97,4 +97,28 @@ export function protectedQuestionCategory(
     return "legal";
   }
   return null;
+}
+
+/** Includes declarations phrased as statements, without an explicit "I certify". */
+export function isApplicationAccuracyDeclaration(label: string): boolean {
+  const text = normalizeCatalogText(label);
+  const applicantMaterial = /\b(?:statements?|answers?|information|details)\b|\bapplication (?:is|was)\b|\b(?:is|was) (?:my|your|this|the) application\b/u;
+  const suppliedByApplicant = /\b(?:my|your|this|the) application\b|\b(?:i|you) (?:have )?(?:provided|supplied|entered|given)\b|\b(?:provided|given|entered) (?:above|here|in this form)\b/u;
+  // Questions and declarations can put the verb on either side of the subject.
+  return applicantMaterial.test(text) && suppliedByApplicant.test(text) &&
+    /\b(?:true|accurate|correct|complete|truthful)\b/u.test(text) &&
+    /\b(?:is|are|was|were|be|confirm|certify|attest|declare|affirm)\b/u.test(text);
+}
+
+/** Whether the employer is asking for the applicant's actual conviction or pardon history. */
+export function isCriminalConvictionDisclosure(label: string): boolean {
+  const question = normalizeCatalogText(label).normalize('NFD').replace(/\p{M}/gu, '');
+  // Omit the subject of a screening check, keeping any separate disclosure in the question.
+  const disclosure = question
+    .replace(/\bcriminal (?:record|history|background|conviction) (?:background )?(?:checks?|screenings?|search(?:es)?)\b/gu, '')
+    .replace(/\b(?:check|review|verification|search) (?:of |de |du |des )?(?:your |votre |vos )?(?:criminal (?:record|history)|casier judiciaire|antecedents judiciaires)\b/gu, '');
+  const outcome = /\b(?:convicted|found guilty|ple(?:d|ad(?:ed)?) (?:guilty|no contest|nolo contendere)|guilty plea|pardoned|record suspension)\b/u;
+  const history = /\b(?:criminal (?:record|history|convictions?)|(?:any|prior|past|previous|unpardoned|felony|misdemeanou?r) convictions?|felon(?:y|ies)|misdemeanou?rs?|pardons?)\b/u;
+  const french = /\b(?:casier judiciaire|antecedents judiciaires|condamnations? (?:criminelles?|penales?)|condamnee?|reconnue? coupable|plaidee? (?:non )?coupable|suspension du casier)\b/u;
+  return outcome.test(disclosure) || history.test(disclosure) || french.test(disclosure);
 }

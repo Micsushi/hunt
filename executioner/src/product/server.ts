@@ -158,7 +158,8 @@ export async function startProductServer(options: { root?: string; port?: number
         const accountPage = await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
           accountProfile?.profilePlan?.mode === 'synthetic_test_non_submittable' ? undefined : queue.credentials,
           accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
-        if (accountPage !== undefined) {response.end(JSON.stringify(accountPage));return;}
+        const priorWorkdayPage = accountPage?.priorWorkdayPage;
+        if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
         if (writesProfile) {
           let key:string|undefined;
@@ -196,14 +197,25 @@ export async function startProductServer(options: { root?: string; port?: number
           if (body.operation==='fill' && !status.capabilities.includes('question-matching-v1')) throw new Error('Reload Hunt C3 before filling so this page uses shared question matching.');
         }
         if (Date.now() >= expiresAt) throw new Error('This page action expired. Inspect the page again before changing it.');
-        result = body.operation==='fill' ? await fillMatchedPage({profile,resume:Buffer.from(resume??'','base64'),url:body.expectedUrl,
+        if (body.operation==='fill') result = await fillMatchedPage({profile,resume:Buffer.from(resume??'','base64'),url:body.expectedUrl,
           root:pageMatchingRoot(root,body.expectedUrl),workflow:'C3.2',signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),
           call:async(action,matchingPlans,matchingRunId)=> {
             const observed=await bridge.call('pageAction',{...body,operation:action==='status'?'inspect':'fill',expiresAt,
               facts:effectiveProfileFacts(profile),matchingPlans,matchingRunId,...(action==='fill'&&resume?{resume:{name:'Resume.pdf',base64:resume}}:{})}) as MatchedPageResult;
             if(observed.documentId!==body.documentId)throw new Error('The page changed. Inspect it again before filling.');
             return observed;
-          }}) : await bridge.call('pageAction',{...body,expiresAt});
+          }});
+        else {
+          try { result = await bridge.call('pageAction',{...body,expiresAt,...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
+          catch (error) {
+            if (!priorWorkdayPage || !(error instanceof Error) || error.message !== 'debugger_protected_extension') throw error;
+            response.writeHead(400).end(JSON.stringify({
+              error:`Workday showed the ${priorWorkdayPage === 'review' ? 'Review page' : 'application'} before Chrome blocked detailed inspection to protect another extension.`,
+              partialObservation:{kind:priorWorkdayPage,incomplete:true,reason:'debugger_protected_extension'},
+            }));
+            return;
+          }
+        }
         } finally {pageActions.delete(body.tabId);}
       } else if (path === "/settings") {
         const revision = (queue.getSettings()?.profile as {profile?:{revision?:number}} | undefined)?.profile?.revision ?? null;

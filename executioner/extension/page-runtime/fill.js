@@ -11,7 +11,7 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false, queueHistory = false } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
@@ -29,6 +29,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   const norm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
   const state = globalThis.__huntC3PartialFill ??= { undo: [], redo: [], busy: false };
   if (state.busy) throw new Error('A field fill is already running.');
+  if (queueHistory && action !== 'status' && action !== 'fill') throw new Error('Queue fill does not support popup history actions.');
+  // The queue can reuse the document's receipt, but popup edits have their own history.
+  const historyState = queueHistory ? (state.queuedHistory ??= {undo:[],redo:[]}) : state;
   state.busy = true;
   const result = { status: 'partial', filled: [], skipped: [], canUndo: false, canRedo: false, matching: [],
     resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ (action === 'status' ? 'unverified' : 'missing') };
@@ -106,7 +109,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return false;
     };
-  const changeEditable = (e,change) => change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
+  const changeEditable = (e,change) => change.jobviteChoice ? e===change.element && jobviteState(change)!==null : change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
     ? editable(e) && e===change.phoneCountry.input && regionFor(e)===change.region && phoneState(change.phoneCountry)!==null
     : provinceMenu.savedContext(change) ? editable(e) && provinceMenu.same(e,provinceMenu.savedContext(change))
       : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region : editable(e);
@@ -153,6 +156,14 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return [...element.getRootNode().querySelectorAll('input[type=radio]')].every(peer =>
       peer.name !== element.name || peer.form !== element.form || group.contains(peer) && step.contains(peer));
   };
+  const jobviteGroup = group => adapters.readJobviteGroup(group,screening,state,visible,insideStep);
+  const jobviteState = change => {
+    const original=change.jobviteChoice, current=original && jobviteGroup(original.group);
+    if (!current || screening!==original.panel || current.row.question!==original.question ||
+        current.inputs.length!==original.inputs.length || current.inputs.some((input,i)=>input!==original.inputs[i] ||
+          current.labels[i]!==original.labels[i] || current.row.options[i]!==original.options[i])) return null;
+    return current.row.selected;
+  };
   const currentElement = change => {
     const element = resolveElement(change);
     const step = change.screeningStep ?? checkedStep;
@@ -198,15 +209,15 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (!checkedForm?.writePhone(element,value,nativeWrite)) nativeWrite(element,value);
   };
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
-  const readChange = (e,change) => change.screeningChoice ? screeningFields.historyValue(e,change.screeningChoice) : change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
-  const unchangedChange = (e,change,value) => change.screeningChoice || change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
+  const readChange = (e,change) => change.jobviteChoice ? jobviteState(change) : change.screeningChoice ? screeningFields.historyValue(e,change.screeningChoice) : change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
+  const unchangedChange = (e,change,value) => change.jobviteChoice || change.screeningChoice || change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
   const { selectPhone } = createCompositeControlActions({
     phoneState, phoneOptions, changeEditable, checkDeadline, visible, editable, write
   });
   const preserveRemoteUpload = change => {
     if(!change.uploadReceipt || !ownedUploadCompleted(change.uploadReceipt))return false;
-    change.uploadReceipt.externalized=true;state.externalizedUploadHistory??=[];
-    if(!state.externalizedUploadHistory.includes(change))state.externalizedUploadHistory.push(change);
+    change.uploadReceipt.externalized=true;historyState.externalizedUploadHistory??=[];
+    if(!historyState.externalizedUploadHistory.includes(change))historyState.externalizedUploadHistory.push(change);
     return true;
   };
   try {
@@ -217,19 +228,19 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     // Uploads can finish after a native file was journaled. Preserve the remote
     // attachment separately so it cannot prevent unrelated text from undoing.
     let preservedRemote=false;
-    for(const history of [state.undo,state.redo]) for(let index=history.length-1;index>=0;index--) {
+    for(const history of [historyState.undo,historyState.redo]) for(let index=history.length-1;index>=0;index--) {
       history[index]=history[index].filter(change=> {
         if(!preserveRemoteUpload(change))return true;
         preservedRemote=true;return false;
       });
       if(!history[index].length)history.splice(index,1);
     }
-    preservedRemote ||= state.externalizedUploadHistory?.some(change=>ownedUploadCompleted(change.uploadReceipt));
+    preservedRemote ||= historyState.externalizedUploadHistory?.some(change=>ownedUploadCompleted(change.uploadReceipt));
     if(preservedRemote && (action==='undo' || action==='redo')) {
       result.resume='verified';result.skipped.push({label:'Resume',reason:state.resumeAttempt?.clientOnly?'client_attachment_preserved':'remote_upload_preserved'});
     }
     if (action === 'undo' || action === 'redo') {
-      const from = state[action], to = state[action === 'undo' ? 'redo' : 'undo'], entry = from.at(-1);
+      const from = historyState[action], to = historyState[action === 'undo' ? 'redo' : 'undo'], entry = from.at(-1);
       if (!entry) return result;
       const changes=action==='undo'?[...entry].reverse():entry;
       const chronological=items=>action==='undo'?[...items].reverse():items;
@@ -245,6 +256,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const e=currentElement(c);
           if(!e || !changeEditable(e,c) || !unchangedChange(e,c,c[previous]))throw new Error('Fields changed since C3 filled them. Your edits were preserved.');
           c.element=e;
+          if (c.jobviteChoice) {
+            if (c[next]) c.jobviteChoice.labels[c.jobviteChoice.index].click();
+            else write(e,false);
+            written++;
+            continue;
+          }
           if (c.screeningChoice) {
             // Include an interrupted attempt in the catch block's independent before/after readback.
             written++;
@@ -435,6 +452,19 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     };
     let applicationRegions = identifyApplicationRegions(fields);
     const finalReport = () => {
+      if (screening) for (const group of screening.querySelectorAll('fieldset.jv-input-group')) {
+        const legend=group.querySelector(':scope > legend');
+        const controls=[...group.querySelectorAll('input[type=radio],input[type=checkbox]')];
+        const owner=group.closest('.jv-form-field-checkbox,.jv-form-field-radio');
+        const required=controls.some(input=>input.required || input.getAttribute('aria-required')==='true') ||
+          /[✱*]/.test(legend?.innerText??'') || !!owner?.classList.contains('ng-invalid-required');
+        if (!required || !visible(group) || !controls.length || controls.some(input=>!insideStep(input,screening))) continue;
+        if (!controls.some(input=>input.checked) || controls.some(input=>input.type==='checkbox' &&
+            (input.required || input.getAttribute('aria-required')==='true') && !input.checked)) {
+          result.incomplete=true;
+          addSkip((legend?.innerText??'Required choice').trim(), 'required_choice_unconfirmed', 'field_recognition', 'identify_option');
+        }
+      }
       // Read the employer's final action after filling. Never activate it to test readiness.
       const [form] = applicationRegions;
       if (applicationRegions.length === 1 && form instanceof HTMLFormElement && form.isConnected) {
@@ -454,11 +484,18 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       verifiedDialogUpload, fabricWidget, composedClosest, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel
     });
     const { observe:baseObserve } = createFieldObserver({
-      deepQuery, visible, norm, fabricWidget, fabricState, state, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
+      deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
+      sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
     const observe = (element,label) => {
       const control = screeningFields.read(element);
-      if (!control) return baseObserve(element,label);
+      if (!control) {
+        const checkbox = screeningFields.dynamicCheckbox(element);
+        if (!checkbox) return baseObserve(element,label);
+        const {signature:_signature,...observed} = baseObserve(element,checkbox.label || 'Unidentified screening checkbox');
+        const row = {...observed,widget:'smartrecruiters-screening-checkbox',...(!checkbox.label && {state:'ambiguous'})};
+        return {...row,signature:JSON.stringify(row)};
+      }
       state.matchingIds ??= new WeakMap();
       if (!state.matchingIds.has(element)) state.matchingIds.set(element,crypto.randomUUID());
       const row = {pageId:location.href,fieldId:state.matchingIds.get(element),question:control.question,
@@ -472,6 +509,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (deepQuery(f.region,'input[type=password]').some(visible) || /password|passcode|verification code|one.time code/i.test(f.label)) continue;
         if (scope!=='page' && !applicationRegions.includes(f.region)) continue;
         const row=observe(f.element,f.label); rows.set(row.fieldId,row);
+      }
+      if (screening) for (const group of screening.querySelectorAll('fieldset.jv-input-group')) {
+        const choice=jobviteGroup(group); if (choice) { state.jobviteGroups??=new WeakMap(); state.jobviteGroups.set(group,choice); rows.set(choice.row.fieldId,choice.row); }
       }
       return [...rows.values()];
     };
@@ -508,7 +548,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     let parserPending = false;
     const acknowledged = receipt => !!receipt?.customUpload && checkedForm?.owner===receipt.region && receipt.selectedFileAccepted &&
       !!receipt.fileSha256 && state.fileEvents?.get(receipt.element)===receipt.file &&
-      !parserBusy() && receipt.customUpload.acknowledged(receipt.file.name);
+      !parserBusy() && receipt.customUpload.currentSelection?.()===true && receipt.customUpload.acknowledged(receipt.file.name);
     const retainedJobvite = !uploadReceipt && validResume && adapters.jobviteRetainedResume(firstStep, resume.name);
     if (retainedJobvite) {
       result.resume = 'unverified';
@@ -524,6 +564,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         'uploads', 'verify_attachment');
       if (!targets.length && resumeFields.length && !uploadReceipt) result.resume='optional';
       if (uploadReceipt) {
+        if (uploadReceipt.customUpload && uploadReceipt.customUpload.currentSelection?.()!==true) {
+          result.resume='unverified';
+          addSkip('Resume', 'existing_smartrecruiters_attachment_requires_review', 'uploads', 'verify_attachment');
+          return finalReport();
+        }
         // Retain the attempted upload even when a site clears/replaces its input.
         // Repeating Fill must not create another remote attachment.
         const requested=Uint8Array.from(atob(resume.base64),char=>char.charCodeAt(0));
@@ -547,7 +592,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       } else if (targets.length === 1) {
         const e = targets[0], label = fileBinding(e).label, fileRegion = regionFor(e);
         result.resume = 'unverified';
-        if (customUpload?.occupied || externalAttachment(e)) {
+        if (customUpload?.occupied && !parserBusy() && customUpload.filenameVisible(resume.name)) {
+          reportAttachment(label, 'existing_remote_attachment_requires_review');
+          addSkip(label, 'existing_smartrecruiters_attachment_requires_review', 'uploads', 'verify_attachment');
+          return finalReport();
+        } else if (customUpload?.occupied || externalAttachment(e)) {
           reportAttachment(label, 'existing_remote_attachment_requires_review');
           parserPending=customUpload?.occupied || parserBusy() || !ownedAttachmentPresent(e) && !parserComplete();
         } else if ((e.files?.length ?? 0) > 1 && replaceExistingResume) {
@@ -568,6 +617,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             uploadReceipt = {url:location.href,element:e,region:fileRegion,file,fieldsBefore:fields,customUpload,...adapters.clientAttachmentState(owner,fileBinding(e)),
               externalized:false,parserCompleted:false,owner,fileSha256,hadAttachmentId:!!owner && attachmentIds(owner).some(input=>input.value),hadUploadSuccess:!!owner && (uploadSuccess(owner,file.name).length>0 || uploadRemoveControls(owner,file.name).length>0),selectedFileAccepted:false};
             state.resumeAttempt=uploadReceipt;
+            customUpload?.watchSelection(file);
             adapters.watchJobviteScreening(uploadReceipt, state.nativeFileBindings?.get(e), state);
             const observeParser=()=>{if (!hadParserComplete && parserComplete()) uploadReceipt.parserCompleted=true;};
             const observer=new MutationObserver(observeParser);
@@ -602,7 +652,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (targets.length > 1) {
           result.resume = 'unverified';
           addSkip('Resume', 'ambiguous_duplicate', 'uploads', 'identify_attachment');
-        } else addSkip('Resume', 'resume_control_not_identified');
+        } else addSkip('Resume', 'resume_control_not_identified', 'uploads', 'identify_attachment');
       }
     }
     if (uploadReceipt?.customUpload && uploadReceipt.externalized) {
@@ -626,7 +676,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const existingMatchReason = element => element.validity.valid && element.getAttribute('aria-invalid')!=='true'
       ? 'saved_value_already_present' : 'value_not_accepted';
     const reportExisting = (row, plan, same, skip) => {
-      if (!same) {
+      if (plan?.reason === 'protected_answer_denied') {
+        skip(plan.reason, 'answer_matching', 'match_field');
+        reportMatch(row, plan, 'unconfirmed', plan.reason, row.selected);
+      } else if (!same) {
         skip('saved_value_conflict');
         reportMatch(row, plan, 'unconfirmed', 'existing_value_preserved', row.selected);
       } else if (!row.valid) {
@@ -644,6 +697,46 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return match && Number.isFinite(date.getTime()) && date.toISOString().slice(0,10)===value
         ? `${match[2]}/${match[3]}/${match[1]}` : undefined;
     };
+    if (screening && checkedStep===screening && queuedScreening && matchingPlans) for (const group of screening.querySelectorAll('fieldset.jv-input-group')) {
+      const choice=jobviteGroup(group); if (!choice) continue;
+      const row=choice.row, plan=matchingPlans.find(plan=>plan.fieldId===row.fieldId), original=state.jobviteGroups?.get(group);
+      if (!plan || plan.signature!==row.signature || !original || original.row.signature!==row.signature ||
+          choice.inputs.some((input,i)=>input!==original.inputs[i] || choice.labels[i]!==original.labels[i])) continue;
+      if (plan.reason==='protected_answer_denied') {
+        addSkip(row.question,plan.reason,'answer_matching','match_field',row.fieldId);
+        reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;
+      }
+      if (row.selected) { reportMatch(row,plan,'unconfirmed','existing_value_preserved',row.selected); continue; }
+      if (/\b(?:attest|certify|declare|consent|agree|acknowledge|signature)\b/i.test([row.question,...row.options].join(' '))) {
+        addSkip(row.question,'protected_answer_denied','answer_matching','match_field',row.fieldId);reportMatch(row,plan,'unconfirmed','protected_answer_denied',row.selected);continue;
+      }
+      const index=row.options.indexOf(plan.answer);
+      if (index<0) {addSkip(row.question,plan.reason??'choice_requires_mapping','answer_matching','match_field',row.fieldId);reportMatch(row,plan,'unconfirmed',plan.reason??'choice_requires_mapping',row.selected);continue;}
+      checkDeadline();
+      const before=jobviteGroup(group);
+      if (!before || before.row.signature!==row.signature || before.inputs[index]!==choice.inputs[index] || before.labels[index]!==choice.labels[index]) {
+        addSkip(row.question,'field_changed_before_fill','field_recognition','rebind_field',row.fieldId);continue;
+      }
+      choice.labels[index].click();
+      await new Promise(resolve=>setTimeout(resolve,100));
+      checkDeadline();
+      const after=jobviteGroup(group);
+      if (after && after.inputs[index]===choice.inputs[index] && after.labels[index]===choice.labels[index] && after.row.selected===row.options[index]) {
+        changes.push({element:choice.inputs[index],region:choice.inputs[index].form,label:row.question,
+          before:'',after:row.options[index],jobviteChoice:{group,panel:screening,question:row.question,
+            inputs:choice.inputs,labels:choice.labels,options:row.options,index}});
+        result.filled.push(row.question);
+        if (after.row.valid) reportMatch(after.row,plan,'verified','product_readback_confirmed',after.row.selected);
+        else {
+          result.incomplete=true;
+          addSkip(row.question,'required_choice_unconfirmed','field_recognition','identify_option',row.fieldId);
+          reportMatch(after.row,plan,'unconfirmed','required_choice_unconfirmed',after.row.selected);
+        }
+      } else {
+        addSkip(row.question,'choice_commit_unconfirmed','browser_interaction','verify_selection',row.fieldId);
+        reportMatch(row,plan,'unconfirmed','choice_commit_unconfirmed',after?.row.selected??'');
+      }
+    }
     const radiosHandled = new Set();
     for (const f of fields) {
       if (checkedStep || checkedForm) checkDeadline();
@@ -699,15 +792,15 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const same=searchChoice.labels.length===1 && searchChoice.labels[0]===plan.answer;
           reportExisting(row, plan, same, skip);continue;
         }
-        state.choiceDrafts??=new WeakMap();
-        const draft=state.choiceDrafts.get(searchChoice.widget),ownedDraft=draft && boundChoice(draft.change) && choiceState(searchChoice)===draft.change.after;
+        historyState.choiceDrafts??=new WeakMap();
+        const draft=historyState.choiceDrafts.get(searchChoice.widget),ownedDraft=draft && boundChoice(draft.change) && choiceState(searchChoice)===draft.change.after;
         const resumeSameCity = searchChoice.kind==='rippling_location' && searchChoice.query === fact('city') && !searchChoice.query.includes(',') &&
           (searchChoice.query === plan.query || plan.reason === 'profile_answer' && typeof plan.answer === 'string' &&
             plan.answer.split(',').length === 3 && norm(plan.answer.split(',')[0]) === norm(searchChoice.query) && row.options.includes(plan.answer));
         if(searchChoice.query && !ownedDraft && !resumeSameCity) {skip('existing_search_query_preserved');reportMatch(row,plan,'unconfirmed','existing_search_query_preserved',row.selected);continue;}
         const querying=typeof plan.query==='string' && plan.query.length>0 && plan.answer==null;
         if(!querying && (typeof plan.answer!=='string' || !row.options.includes(plan.answer))) {skip(plan.reason, 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;}
-        const reusable=ownedDraft && (changes.includes(draft.change) || state.undo.at(-1)?.includes(draft.change));
+        const reusable=ownedDraft && (changes.includes(draft.change) || historyState.undo.at(-1)?.includes(draft.change));
         const change=reusable?draft.change:{element:e,region:f.region,label:row.question,choiceWidget:searchChoice,before:choiceState(searchChoice),after:choiceState(searchChoice),searchQuery:querying?plan.query:searchChoice.query||plan.answer};
         const beforeWrite=choiceState(searchChoice);touchedChoices.add(change);
         try {
@@ -717,12 +810,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             const options=current.options.filter(option=>!option.disabled).map(option=>option.label);
             closeChoice(change);await choicePause();change.after=choiceState(boundChoice(change));
             if(!change.after)throw new Error('The search owner changed.');
-            state.choiceDrafts.set(searchChoice.widget,{change,options});
+            historyState.choiceDrafts.set(searchChoice.widget,{change,options});
             if(!reusable && change.after!==change.before)changes.push(change);
             reportMatch(observe(currentElement(change),row.question),plan,'observed','choice_options_observed');
           } else {
             change.after=await selectChoice(change,plan.answer);
-            state.choiceDrafts.set(searchChoice.widget,{change,options:row.options});
+            historyState.choiceDrafts.set(searchChoice.widget,{change,options:row.options});
             if(!reusable && change.after!==change.before)changes.push(change);
             result.filled.push(row.question);reportMatch(observe(currentElement(change),row.question),plan,'verified','product_readback_confirmed',plan.answer);
           }
@@ -738,11 +831,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
             // Keep a failed irreversible write out of the ordinary Undo batch.
             // Its durable evidence remains attached to this exact widget.
             if(reusable) {
-              for(const history of [changes,...state.undo]) {const index=history.indexOf(change);if(index>=0)history.splice(index,1);}
-              state.undo=state.undo.filter(entry=>entry.length);
+              for(const history of [changes,...historyState.undo]) {const index=history.indexOf(change);if(index>=0)history.splice(index,1);}
+              historyState.undo=historyState.undo.filter(entry=>entry.length);
             }
           } else if(change.after && change.after!==change.before && !reusable && !changes.includes(change))changes.push(change);
-          if(change.after)state.choiceDrafts.set(searchChoice.widget,{change,options:[]});
+          if(change.after)historyState.choiceDrafts.set(searchChoice.widget,{change,options:[]});
           skip('choice_commit_or_reset_unconfirmed', 'browser_interaction', 'verify_selection');reportMatch(row,plan,'unconfirmed','choice_commit_or_reset_unconfirmed',{before:beforeWrite,after:change.after});
         }
         continue;
@@ -856,7 +949,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           const reason=!e?'field_replaced_without_stable_identity':'value_not_accepted';
           skip(reason, 'browser_interaction', 'verify_field');reportMatch(row,plan,'verification_failed',reason,{before:change.before,after:e?read(e):null,written,restored});continue;
         }
-        changes.push({...change,element:e,after:read(e),matchingDynamic:!!matchingRunId && state.matchingRunId===matchingRunId});result.filled.push(row.question);
+        changes.push({...change,element:e,after:read(e),matchingDynamic:!!matchingRunId && historyState.matchingRunId===matchingRunId});result.filled.push(row.question);
         reportMatch(row,plan,'verified','product_readback_confirmed',observe(e,row.question).selected);
         continue;
       }
@@ -1008,8 +1101,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       state.unconfirmedChoices??=new WeakMap();state.unconfirmedChoiceHistory??=[];
       state.unconfirmedChoices.set(change.choiceWidget.widget,change);
       if(!state.unconfirmedChoiceHistory.includes(change))state.unconfirmedChoiceHistory.push(change);
-      for(const history of [changes,...state.undo]) {const index=history.indexOf(change);if(index>=0)history.splice(index,1);}
-      state.undo=state.undo.filter(entry=>entry.length);
+      for(const history of [changes,...historyState.undo]) {const index=history.indexOf(change);if(index>=0)history.splice(index,1);}
+      historyState.undo=historyState.undo.filter(entry=>entry.length);
       result.filled=result.filled.filter(label=>label!==change.label);
       addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field');
       for(const row of result.matching.filter(row=>row.question===change.label && row.outcome==='verified')) {row.outcome='verification_failed';row.reason='value_changed_after_fill';row.provisional=true;}
@@ -1036,10 +1129,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return finalReport();
   } finally {
     if (checkedStep) for (const change of changes) change.screeningStep = checkedStep;
-    if (action === 'fill' && changes.length) { if (matchingRunId && state.matchingRunId===matchingRunId && state.undo.length) state.undo.at(-1).push(...changes); else state.undo.push(changes); state.matchingRunId=matchingRunId; state.undo = state.undo.slice(-10); state.redo = []; }
+    if (action === 'fill' && changes.length) { if (matchingRunId && historyState.matchingRunId===matchingRunId && historyState.undo.length) historyState.undo.at(-1).push(...changes); else historyState.undo.push(changes); historyState.matchingRunId=matchingRunId; historyState.undo = historyState.undo.slice(-10); historyState.redo = []; }
     const failed = result.skipped.find(row => row.componentFailure);
     if (failed) result.componentFailure = failed.componentFailure;
-    state.busy = false; result.canUndo = state.undo.length > 0; result.canRedo = state.redo.length > 0;
+    state.busy = false; result.canUndo = historyState.undo.length > 0; result.canRedo = historyState.redo.length > 0;
     if(state.unconfirmedControls?.some(change=>change.region?.isConnected))result.incomplete=true;
     if(state.unconfirmedChoiceHistory?.some(change=>change.region?.isConnected && searchChoiceCandidates(change.region).some(input=>pendingChoice(sharedChoice(input))===change)))result.incomplete=true;
   }

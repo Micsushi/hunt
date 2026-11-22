@@ -181,7 +181,7 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
     assert.notEqual(unowned.resume,'verified');
     assert.deepEqual(await bytes(page,'#bound input'),[]);
     assert.deepEqual(await bytes(page,'#parser input'),[]);
-    for (const mode of ['acknowledged','preexisting','duplicate','busy','wrong-name','wrong-button','error','late-owner','late-login']) {
+    for (const mode of ['acknowledged','same-row-replacement','preexisting','duplicate','busy','wrong-name','wrong-button','error','late-owner','late-login']) {
       await page.reload();await page.evaluate(mount);
       await page.evaluate(mode=>{
         const root=document.getElementById('bound')!.shadowRoot!, input=root.querySelector('input')!;
@@ -201,7 +201,8 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
         (window as any).uploads=0;
         input.addEventListener('change',()=>{
           (window as any).uploads++;(window as any).sent=input.files![0]!.arrayBuffer();
-          input.value='';render();
+          input.value='';
+          if (mode!=='same-row-replacement' || !root.querySelector('li.c-spl-file-list-item')) render();
           if(mode==='late-owner')document.querySelector('main')!.append(document.createElement('oc-oneclick-form'));
           if(mode==='late-login')document.querySelector('main')!.insertAdjacentHTML('beforeend','<input type="password">');
         });
@@ -210,24 +211,30 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
         // The employer restored the file row on reload. C3 has no upload receipt in this document.
         await assert.rejects(prepareCurrentPage(page, {
           url: app, profile: applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'}), resume:selected,
-        }, AbortSignal.timeout(5000), ()=>{}), /employer shows the matching filename\. PDF contents unverified/);
+        }, AbortSignal.timeout(5000), ()=>{}), (error:Error) => {
+          assert.match(error.message,/employer shows the matching filename\. PDF contents unverified/);
+          assert.match(error.message,/Delete file control/);
+          assert.doesNotMatch(error.message,/waiting for upload or parsing confirmation/);
+          return true;
+        });
         assert.equal(await page.evaluate('uploads'), 0);
       }
+      const acknowledged = mode==='acknowledged' || mode==='same-row-replacement';
       if (mode.startsWith('late-')) await assert.rejects(fill(page),/application form or attachment changed/);
       else {
         const updated=await fill(page);
         assert.equal(updated.resume,'unverified',mode);
         assert.equal(updated.skipped.some(row=>row.reason==='resume_filename_visible_contents_unverified'),
-          mode==='acknowledged' || mode==='preexisting', mode);
-        if(mode==='acknowledged'){
+          acknowledged || mode==='preexisting', mode);
+        if(acknowledged){
           assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).sent))),[...selected]);
           const retried=await fill(page);
           assert.equal(retried.resume,'unverified');
           assert.ok(retried.skipped.some(row=>row.reason==='resume_filename_visible_contents_unverified'));
         }
       }
-      assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),mode==='acknowledged'?'Fixture':'',mode);
-      assert.equal(await page.locator('spl-input#email-input input').inputValue(),mode==='acknowledged'?'fixture@example.invalid':'',mode);
+      assert.equal(await page.locator('spl-input#first-name-input input').inputValue(),acknowledged?'Fixture':'',mode);
+      assert.equal(await page.locator('spl-input#email-input input').inputValue(),acknowledged?'fixture@example.invalid':'',mode);
       assert.equal(await page.evaluate('uploads'),mode==='preexisting'?0:1,mode);
       if(mode==='acknowledged'){
         await page.locator('spl-input#email-input input').fill('');
@@ -239,6 +246,18 @@ test('SmartRecruiters shadow dropzone binds only the exact Resume section, never
         assert.equal((await fill(page)).resume,'unverified');
         assert.equal(await page.locator('spl-input#email-input input').inputValue(),'');
         assert.equal(await page.evaluate('uploads'),1);
+      }
+      if(mode==='same-row-replacement'){
+        await page.locator('spl-input#email-input input').fill('');
+        const replacement=Buffer.from('%PDF-different-owner-selection');
+        await page.locator('#bound input[type=file]').setInputFiles({name:'Resume.pdf',mimeType:'application/pdf',buffer:replacement});
+        assert.deepEqual(await bytes(page,'#bound input'),[]);
+        assert.deepEqual(await page.evaluate(async()=>Array.from(new Uint8Array(await (window as any).sent))),[...replacement]);
+        const paused=await fill(page);
+        assert.equal(paused.resume,'unverified');
+        assert.ok(paused.skipped.some(row=>row.reason==='existing_smartrecruiters_attachment_requires_review'));
+        assert.equal(await page.locator('spl-input#email-input input').inputValue(),'');
+        assert.equal(await page.evaluate('uploads'),2);
       }
     }
   }finally{await browser.close();}

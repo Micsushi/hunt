@@ -39,9 +39,12 @@ test('a postal dropdown selects only a unique match for the saved code', async (
   } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
 });
 
-test('OneClick city search verifies the selected location and supports Undo and Redo', async () => {
+for (const scenario of [
+  {field:'City',query:'Example',options:['Example, Ontario, Canada','Example, Ohio, United States'],delay:0},
+  {field:'Postal code / zip code',query:'K1A 0B1',options:['K1A 0B1, Example, ON, CAN'],delay:250},
+]) test(`OneClick ${scenario.field} verifies the selected location and supports Undo and Redo`, async () => {
   const browser = await chromium.launch({headless:true});
-  const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid',city:'Example',region:'Ontario',country:'Canada'});
+  const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid',city:'Example',region:'Ontario',country:'Canada',postal_code:'K1A 0B1'});
   const facts = effectiveProfileFacts(profile);
   const sources = productSources(profile, Buffer.from('%PDF-fixture'));
   const plan = createPageAnswerPlanner(sources,facts,'Fixture');
@@ -53,19 +56,22 @@ test('OneClick city search verifies the selected location and supports Undo and 
       '<oc-location-autocomplete><spl-autocomplete id="city" label="City" data-test="location-autocomplete"></spl-autocomplete></oc-location-autocomplete>' +
       '<oc-resume-upload><spl-dropzone data-test="resume-upload"><label>Resume<input type=file></label></spl-dropzone></oc-resume-upload></oc-oneclick-form></main>'}));
     await page.goto(url);
-    await page.evaluate(() => {
-      const host = document.querySelector('spl-autocomplete')!;
+    await page.evaluate(({field,options,delay}) => {
+      const host = document.querySelector<HTMLElement>('spl-autocomplete')!;
+      host.setAttribute('label',field);
       const root = host.attachShadow({mode:'open'});
       root.innerHTML = '<input aria-label="City*" required role=combobox aria-autocomplete=list aria-controls="city-list" aria-expanded=false aria-invalid=true>' +
         '<spl-icon role=button aria-label="Clear City value" hidden>Clear</spl-icon><div id="city-list" role=listbox hidden></div>';
       const input = root.querySelector('input')!, menu = root.querySelector<HTMLElement>('[role=listbox]')!, clear = root.querySelector<HTMLElement>('spl-icon')!;
+      input.setAttribute('aria-label',field+'*');
+      clear.setAttribute('aria-label','Clear '+field+' value');
       const close = () => { input.setAttribute('aria-expanded','false'); menu.hidden = true; };
       input.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
       input.addEventListener('input', () => {
         menu.replaceChildren();
         if (!input.value) { close(); return; }
         input.setAttribute('aria-expanded','true'); menu.hidden = false;
-        for (const label of ['Example, Ontario, Canada','Example, Ohio, United States']) {
+        for (const label of options) {
           const option = document.createElement('spl-select-option');
           option.innerHTML = '<div class="c-spl-autocomplete-default-option"><div data-sr-id="example-content"><spl-truncate></spl-truncate></div></div>';
           const title = option.querySelector<HTMLElement>('spl-truncate')!;
@@ -78,7 +84,9 @@ test('OneClick city search verifies the selected location and supports Undo and 
           shadow.innerHTML = '<div role=option aria-disabled=false><slot></slot></div>';
           shadow.querySelector('div')!.onclick = () => {
             input.value = label; host.setAttribute('value','[object Object]');
-            clear.hidden = false; input.setAttribute('aria-invalid','false'); close();
+            close();
+            host.dataset.clicks = String(Number(host.dataset.clicks ?? 0)+1);
+            setTimeout(() => { clear.hidden = false; input.setAttribute('aria-invalid','false'); },delay);
           };
           menu.append(option);
         }
@@ -87,32 +95,33 @@ test('OneClick city search verifies the selected location and supports Undo and 
         input.value = ''; host.removeAttribute('value'); clear.hidden = true;
         input.setAttribute('aria-invalid','true'); menu.replaceChildren(); close();
       };
-    });
-    const city = async () => {
+    },scenario);
+    const location = async () => {
       const status = await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
-      const row = status.matching?.find(field => field.question === 'City*');
+      const row = status.matching?.find(field => field.question === scenario.field+'*');
       assert.ok(row, JSON.stringify(status.matching?.map(r=>r.question)));
       return row;
     };
-    const initial = await city();
+    const initial = await location();
     assert.equal(initial.queryable,true);
     const signal = new AbortController().signal;
     const search = await plan(initial,[initial],signal);
-    assert.equal(search.query,'Example');
+    assert.equal(search.query,scenario.query);
     await page.evaluate(fillVisibleFields,{facts,matchingPlans:[search]});
-    const options = await city();
+    const options = await location();
     assert.equal(options.selected,'');
     const selection = await plan(options,[options],signal);
-    const answer = 'Example, Ontario, Canada';
+    const answer = scenario.options[0];
     assert.equal(selection.answer,answer);
     const filled = await page.evaluate(fillVisibleFields,{facts,matchingPlans:[selection]});
-    assert.deepEqual(filled.filled,['City*'],JSON.stringify(filled.skipped));
-    assert.equal((await city()).selected,answer);
+    assert.deepEqual(filled.filled,[scenario.field+'*'],JSON.stringify(filled.skipped));
+    assert.equal((await location()).selected,answer);
+    assert.equal(await page.locator('spl-autocomplete').getAttribute('data-clicks'),'1');
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.equal(await page.locator('input[role=combobox]').inputValue(),'');
     assert.equal(await page.locator('spl-autocomplete').getAttribute('value'),null);
     await page.evaluate(fillVisibleFields,{action:'redo' as const});
-    assert.equal((await city()).selected,answer);
+    assert.equal((await location()).selected,answer);
     await page.locator('input[role=combobox]').evaluate((el:HTMLInputElement) => { el.value = 'Owner edit'; });
     await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/changed/i);
     assert.equal(await page.locator('input[role=combobox]').inputValue(),'Owner edit');
@@ -433,4 +442,83 @@ test('direct screening fills reversible listboxes and leaves radios to the queue
     assert.equal(await page.locator('spl-radio-group').getAttribute('value'),'');
 
   } finally {await browser.close();}
+});
+
+test('screening leaves certifications and conviction disclosures for the owner', async () => {
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    const url='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/abcd1234-1111-2222-3333-111111111111/screening';
+    const conviction='Have you ever been convicted of a criminal offence for which you have not received a pardon?';
+    const radioGroup=(id:string,question:string,selected='',values=['1','0'])=>
+      '<sr-question-field-radio><spl-radio-group id="'+id+'" value="'+selected+'"><span slot="label-content">'+question+'</span>'+
+        values.map(value=>'<spl-radio role="radio" aria-disabled="false" value="'+value+'" aria-checked="'+(value===selected)+
+          '" label="'+(value==='1'?'Yes':'No')+'">'+(value==='1'?'Yes':'No')+'</spl-radio>').join('')+'</spl-radio-group></sr-question-field-radio>';
+    await page.route('**/*',route=>route.request().url()===url?route.fulfill({contentType:'text/html',body:
+      '<main><oc-screening-questions><oc-screening-questions-form><sr-screening-questions-form data-test="screening-questions-form">' +
+      '<sr-question-field-checkbox><spl-checkbox id="accuracy"><span slot="label-content">I certify that the statements on my application are true and complete.</span></spl-checkbox></sr-question-field-checkbox>' +
+      '<sr-question-field-checkbox><spl-checkbox id="already-checked"><span slot="label-content">I attest that my application is accurate.</span></spl-checkbox></sr-question-field-checkbox>' +
+      '<sr-question-field-checkbox><spl-checkbox id="unknown"></spl-checkbox></sr-question-field-checkbox>' +
+      radioGroup('conviction-existing','Have you ever had a criminal conviction?','0') +
+      radioGroup('conviction',conviction) + radioGroup('conviction-reversed','Have you ever pled guilty to a felony?','',['0','1']) +
+      radioGroup('casier','Avez-vous un casier judiciaire ?') +
+      radioGroup('accuracy-statement','The statements in this application are true and complete.') +
+      radioGroup('accuracy-single','All information on my application is accurate.') +
+      radioGroup('accuracy-question','Is the information in your application correct?') +
+      radioGroup('background','Are you willing to undergo a background check?') +
+      '<label>Preferred orientation schedule<select required><option value="">Choose one</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option></select></label>' +
+      '</sr-screening-questions-form></oc-screening-questions-form>' +
+      '<oc-consent-decisions><spl-checkbox id="privacy" data-test="consent-box"><span slot="label-content">I agree to the privacy notice</span></spl-checkbox></oc-consent-decisions>' +
+      '<oc-nav-screening-questions><oc-button data-test="footer-submit"><spl-button id="submit">Submit</spl-button></oc-button></oc-nav-screening-questions>' +
+      '</oc-screening-questions></main>'}):route.abort());
+    await page.goto(url);
+    await page.evaluate(()=>{
+      for(const host of document.querySelectorAll('spl-checkbox')) {
+        const root=host.attachShadow({mode:'open'});
+        root.innerHTML='<slot name="label-content"></slot><label>*<input type="checkbox" aria-required="true"></label>';
+        const input=root.querySelector('input')!;
+        if(host.id==='already-checked') input.checked=true;
+        input.onchange=()=>host.setAttribute('data-changed','true');
+      }
+      for(const group of document.querySelectorAll('spl-radio-group')) {
+        group.attachShadow({mode:'open'}).innerHTML='<slot name="label-content"></slot><fieldset role="radiogroup" aria-required="true"><slot></slot></fieldset>';
+        for(const option of group.querySelectorAll('spl-radio')) option.addEventListener('click',()=>{
+          group.setAttribute('value',option.getAttribute('value')!);
+          group.setAttribute('data-changed','true');
+          for(const peer of group.querySelectorAll('spl-radio')) peer.setAttribute('aria-checked',String(option===peer));
+        });
+      }
+      const submit=document.querySelector('#submit')!;
+      const footer=submit.attachShadow({mode:'open'});
+      footer.innerHTML='<button type="button"><slot></slot></button>';
+      footer.querySelector('button')!.onclick=()=>submit.setAttribute('data-clicked','true');
+    });
+    const base=applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid'}) as {profile:ReturnType<typeof parseApplicationProfile>};
+    const profile={...base,profile:{...base.profile,unsetFactIds:base.profile.unsetFactIds.filter(id=>id!=='background_check_willing'),
+      facts:[...base.profile.facts,{factId:'background_check_willing',value:true,provenance:'owner_provided',lane:'live_owner_fact'}]}};
+    let pause: Error | undefined;
+    try {
+      await prepareCurrentPage(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{});
+    } catch(error) {
+      if(!(error instanceof Error)) throw error;
+      pause=error;
+    }
+    assert.equal(await page.locator('#accuracy input').isChecked(),false);
+    assert.equal(await page.locator('#unknown input').isChecked(),false);
+    assert.equal(await page.locator('#already-checked input').isChecked(),true);
+    assert.equal(await page.locator('#already-checked').getAttribute('data-changed'),null);
+    assert.equal(await page.locator('#privacy input').isChecked(),true);
+    for(const id of ['conviction','conviction-reversed','conviction-existing','casier','accuracy-statement','accuracy-single','accuracy-question']) {
+      assert.equal(await page.locator('#'+id).getAttribute('value'),id==='conviction-existing'?'0':'');
+      assert.equal(await page.locator('#'+id).getAttribute('data-changed'),null);
+    }
+    assert.equal(await page.locator('#background').getAttribute('value'),'1');
+    assert.equal(await page.locator('select').inputValue(),'morning');
+    assert.match(pause?.message??'',/I certify.*choose your answer on the employer page/i);
+    assert.match(pause?.message??'',/had a criminal conviction\?: choose your answer on the employer page/i);
+    assert.match(pause?.message??'',/convicted.*choose your answer on the employer page/i);
+    assert.match(pause?.message??'',/Review suggested answers and unresolved fields/);
+    assert.equal(await page.locator('#submit').getAttribute('data-clicked'),null);
+    assert.equal(page.url(),url);
+  } finally { await browser.close(); }
 });
