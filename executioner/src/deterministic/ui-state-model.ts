@@ -1,4 +1,4 @@
-import { answerEquivalents, equivalentAnswer } from './answer-equivalence.ts';
+import { answerEquivalents, equivalentAnswer, matchesDegreeLevel } from './answer-equivalence.ts';
 import type {
   BrowserControl,
   BrowserMutation,
@@ -360,24 +360,7 @@ export function sharedUiKnownSemanticAliasMatches(
   }
   if (['education.degree','phone.device_type','source.how_did_you_hear'].includes(fieldId) && equivalentAnswer(actual,expected,fieldId)) return true;
   const pair = new Set([normalizeOption(actual), normalizeOption(expected)]);
-  if (fieldId === "education.degree") {
-    const observed = normalizeOption(actual), requested = normalizeOption(expected);
-    if (observed === requested) return true;
-    // A degree-level menu can represent a specific bachelor's credential without
-    // claiming a different discipline, such as Bachelor of Arts for Science.
-    const bachelorLevel = /^bachelor(?:['’]s|s)?(?:\s*\/\s*undergraduate)?(?:\s+degree)?(?:\s*\([±]?\s*\d+\s+years?\))?$/u;
-    const bachelorCredential = /^(?:bachelor of (?:science|arts|engineering|commerce|business administration)|b\.?\s?s\.?|bsc|b\.?\s?a\.?|beng)$/u;
-    const described = /^([^()]+) \([34](?:\s*[-–]\s*[45])? years? degree equivalent,? e\.g\.,? ([^()]{1,100})\)$/u.exec(observed);
-    if (described && bachelorLevel.test(described[1]!)) {
-      const examples = described[2]!.replace(/,\s*etc\.?$/u, "").split(",").map(label => label.trim());
-      // A catalog listing explicit programs is usable only for a compatible credential.
-      if (examples.every(example => /^(?:ba|bs|bsc|beng|bba|bcom|llb)$/u.test(example)) &&
-          (bachelorLevel.test(requested) || examples.some(example => equivalentAnswer(example, expected, fieldId)))) return true;
-      return undefined;
-    }
-    return bachelorLevel.test(observed) &&
-      (bachelorLevel.test(requested) || answerEquivalents(expected, fieldId).some(value => bachelorCredential.test(value))) ? true : undefined;
-  }
+  if (fieldId === "education.degree") return matchesDegreeLevel(normalizeOption(actual), normalizeOption(expected));
   if (fieldId === "phone.device_type") {
     if (pair.size === 1) return true;
     return pair.size === 2 && pair.has("mobile") && pair.has("cell") ? true : undefined;
