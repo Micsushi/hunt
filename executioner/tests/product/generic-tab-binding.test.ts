@@ -136,6 +136,8 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.deepEqual(observedPdfs,[resume.toString('base64')]);
     assert.equal((await operate('redo',9,selectedUrl.replace('abc','def'))).status,400,'navigated tab must be inspected again');
     assert.equal((await operate('inspect',9,'https://other.example.invalid/application')).status,400,'an unknown home for the same tab cannot silently switch to the default resume');
+    assert.equal((await operate('inspect',9,'https://fixture.wd5.myworkdayjobs.com/External/job/Developer_R1')).status,400,
+      'a different employer cannot inherit account access from an imported tab');
     latestDocument='d'.repeat(64);
     assert.equal((await operate('fill')).status,400,'new document cannot reuse the old binding');
     assert.equal((await operate('inspect')).status,200);

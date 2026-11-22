@@ -165,11 +165,6 @@ export async function startProductServer(options: { root?: string; port?: number
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
         const owner = await currentPageOwner(queue.jobs, body.tabId, url);
         const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
-        if (writesProfile && owner && !selected) {
-          throw new Error(productApplicationTarget(owner.url).ats === 'generic'
-            ? 'This saved draft uses an unfamiliar site. Finish it on the employer page to preserve its selected resume.'
-            : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.');
-        }
         if (prior && !selected && prior.url !== url.href &&
             queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused')) {
           throw new Error('This tab is linked to a saved application. Reopen its posting from Applications, or use a new tab for another job.');
@@ -189,11 +184,18 @@ export async function startProductServer(options: { root?: string; port?: number
           }
         }
         const accountProfile = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
-        const accountPage = selected ? undefined : await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
+        // Existing Workday drafts can still fill their own sign-in screen before returning to the queue.
+        const accountAllowed = !owner || productApplicationTarget(owner.url).ats === 'workday' && new URL(owner.url).origin === url.origin;
+        const accountPage = !accountAllowed ? undefined : await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
           accountProfile?.profilePlan?.mode === 'synthetic_test_non_submittable' ? undefined : queue.credentials,
           accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
         const priorWorkdayPage = accountPage?.priorWorkdayPage;
         if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
+        if (writesProfile && owner && !selected) {
+          throw new Error(productApplicationTarget(owner.url).ats === 'generic'
+            ? 'This saved draft uses an unfamiliar site. Finish it on the employer page to preserve its selected resume.'
+            : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.');
+        }
         const settings = selected ? queue.currentPageInput(selected) : queue.getSettings();
         const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');
