@@ -14,6 +14,7 @@ export interface PartialFillResult {
 export function fillVisibleFields(input?: {
   matchingPlans?: PageAnswerPlan[];
   matchingRunId?: string;
+  pageHandoff?: string;
   queuedScreening?: boolean;
   facts?: readonly { factId: string; value: unknown }[];
   action?: 'fill' | 'undo' | 'redo' | 'status';

@@ -5,6 +5,7 @@ import {mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {Page} from 'playwright';
+import type {ExtensionBridge} from '../../src/product/extension-bridge.ts';
 import {fillApplication} from '../../src/product/engine.ts';
 import {startProductServer} from '../../src/product/server.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
@@ -84,25 +85,64 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     }
     assert.equal(lookups,4);
     restored.selectedApplicationUrl=selectedApplicationUrl;
-    for (const newUrl of ['https://jobs.jobvite.com/fixture/job/abc/apply',
-      'https://jobs.smartrecruiters.com/Fixture/744000123456789-analyst',
-      'https://unknown.example/apply']) {
+    const bundleFor = (target:string,sourceJobId:number) => ({format:'hunt-c3-handoff',version:1,jobs:[{
+      url:target,title:'Fixture',sourceJobId,resumeVersion:'v17',resumeName:'Selected.pdf',resumeBase64:resume.toString('base64'),
+      resumeSha256:createHash('sha256').update(resume).digest('hex')}]});
+    const selectedUrl='https://jobs.jobvite.com/fixture/job/abc/apply';
+    for (const newUrl of [selectedUrl, postingUrl, 'https://unknown.example/apply']) {
       const jobs=[{url:newUrl,tabId:8}];
       for (const body of [{jobs},{jobs,documentId:'b'.repeat(64)}]) {
         const response=await post('/jobs',body);
         assert.equal(response.status,400);
         assert.match((await response.json()).error,/Fill current page/);
       }
-      const bundle={format:'hunt-c3-handoff',version:1,jobs:[{url:newUrl,title:'Fixture',sourceJobId:122,
-        resumeVersion:'v17',resumeName:'Selected.pdf',resumeBase64:resume.toString('base64'),
-        resumeSha256:createHash('sha256').update(resume).digest('hex')}]};
-      for(const operation of ['preview','import','import-paused']) {
-        const response=await post('/handoff/'+operation,bundle);
-        assert.equal(response.status,400);
-        assert.match((await response.json()).error,/Fill current page/);
+      const bundle=bundleFor(newUrl,122);
+      assert.equal((await post('/handoff/import',bundle)).status,400);
+      if (newUrl!==selectedUrl) {
+        for(const operation of ['preview','import-paused']) assert.equal((await post('/handoff/'+operation,bundle)).status,400);
       }
     }
-    assert.equal(app.queue.jobs.length,2);
+    const bundle=bundleFor(selectedUrl,122);
+    assert.equal((await (await post('/handoff/preview',bundle)).json()).jobs[0].currentPageOnly,true);
+    const [selected]=await (await post('/handoff/import-paused',bundle)).json();
+    assert.equal(selected.status,'paused');
+    assert.equal(selected.pageHandoff,true);
+    assert.equal(selected.submissionAllowed,false);
+    assert.equal((await (await post('/handoff/import-paused',bundle)).json())[0].id,selected.id);
+    const bridge=(app.queue as unknown as {bridge:ExtensionBridge}).bridge;
+    const documentId='c'.repeat(64),observedPdfs:string[]=[];
+    let latestDocument=documentId,filesInHistory=false;
+    bridge.call=async(method,params={})=>{
+      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1']};
+      if(method==='pageTabs')return [{tabId:9,url:selectedUrl}];
+      assert.equal(method,'pageAction');assert.equal(params.pageHandoff,selected.id);
+      if(params.operation==='fill') {
+        const resume=params.resume as {base64:string};
+        const facts=params.facts as {factId:string;value:unknown}[];
+        observedPdfs.push(resume.base64);
+        assert.equal(facts.find(fact=>fact.factId==='given_name')?.value,'Fixture');
+        filesInHistory=true;
+      }
+      if(params.operation==='undo')filesInHistory=false;
+      return {url:selectedUrl,tabId:params.tabId,documentId:latestDocument,filled:[],matching:[],skipped:[],canUndo:filesInHistory,canRedo:!filesInHistory};
+    };
+    const operate=(operation:string,tabId=9,url=selectedUrl,doc=latestDocument)=>post('/browser/page',{tabId,expectedUrl:url,operation,...(operation!=='inspect'&&{documentId:doc})});
+    app.queue.configure(applicantProfile({given_name:'Changed',family_name:'Tester',email_address:'changed@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
+    assert.equal((await operate('fill')).status,400,'a prior default or another tab cannot fill before inspecting its saved handoff');
+    assert.equal((await operate('inspect')).status,200);
+    assert.equal((await operate('inspect',10)).status,400,'the same posting is already bound to another tab');
+    for(const op of ['fill','undo','redo'])assert.equal((await operate(op)).status,200,op);
+    assert.deepEqual(observedPdfs,[resume.toString('base64')]);
+    assert.equal((await operate('redo',9,selectedUrl.replace('abc','def'))).status,400,'navigated tab must be inspected again');
+    latestDocument='d'.repeat(64);
+    assert.equal((await operate('fill')).status,400,'new document cannot reuse the old binding');
+    assert.equal((await operate('inspect')).status,200);
+    const selectedInput=join(root,selected.id+'.input.json');
+    const original=JSON.parse(readFileSync(selectedInput,'utf8'));
+    writeFileSync(selectedInput,JSON.stringify({...original,resume:Buffer.from('%PDF-substituted').toString('base64')}));
+    assert.equal((await operate('fill')).status,400);
+    assert.deepEqual(observedPdfs,[resume.toString('base64')]);
+    assert.equal(app.queue.jobs.length,3);
     assert.equal(app.queue.jobs[0]!.status,'paused');
     assert.equal(app.queue.jobs[0]!.resumeVersion,'v18');
     assert.equal(readFileSync(inputPath,'utf8'),input);

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { applicationTarget } from './target.ts';
+import { applicationTarget, productApplicationTarget } from './target.ts';
+import { smartRecruitersPostingForApplication, smartRecruitersPublication } from './smartrecruiters-target.ts';
 import type { ProductJob } from './queue.ts';
 
 export const handoffMaxBytes = 32 * 1024 * 1024;
@@ -9,7 +10,8 @@ export interface HandoffJob {
 }
 
 /** A file is an owner-selected snapshot, not a signed claim about current server state. */
-export function inspectHandoffBundle(value: unknown, existing: readonly ProductJob[]) {
+export function inspectHandoffBundle(value: unknown, existing: readonly ProductJob[], allowCurrentPage = false) {
+  const parseTarget = allowCurrentPage ? productApplicationTarget : applicationTarget;
   const object = (entry: unknown): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry);
   const exactKeys = (entry: Record<string, unknown>, keys: string[]) => Object.keys(entry).length === keys.length && keys.every(key=>Object.hasOwn(entry,key));
   if (!object(value) || !exactKeys(value,['format','version','jobs']) || value.format !== 'hunt-c3-handoff' || value.version !== 1 ||
@@ -24,8 +26,8 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
       throw new Error('The application bundle contains invalid job or resume details. Export it again from Hunt.');
     }
     const job = entry as unknown as HandoffJob;
-    let target: ReturnType<typeof applicationTarget>;
-    try { target = applicationTarget(job.url); }
+    let target: ReturnType<typeof productApplicationTarget>;
+    try { target = parseTarget(job.url); }
     catch { throw new Error(`Job ${job.sourceJobId} cannot be queued. Export the supported jobs again and use Fill current page for this job.`); }
     if (keys.has(target.key) || ids.has(job.sourceJobId)) throw new Error('The application bundle contains duplicate jobs. Export each application once.');
     keys.add(target.key); ids.add(job.sourceJobId);
@@ -33,6 +35,10 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
     if (pdf.length > 5 * 1024 * 1024 || pdf.subarray(0,5).toString() !== '%PDF-' || pdf.toString('base64') !== job.resumeBase64 ||
         createHash('sha256').update(pdf).digest('hex') !== job.resumeSha256) throw new Error('A bundled PDF is invalid or its checksum does not match. Export the bundle again.');
     const current = existing.find(item=>item.status !== 'removed' && item.key === target.key);
+    if (existing.some(item => item.status !== 'removed' && item.sourceJobId === job.sourceJobId && item.key !== target.key)) {
+      throw new Error('The selected Hunt job already belongs to a different application link.');
+    }
+    if (target.ats === 'generic' && current && !current.pageHandoff) throw new Error('Finish the existing saved draft manually to preserve its selected resume.');
     if (current && (current.resumeSha256 !== job.resumeSha256 ||
         current.sourceJobId !== undefined && current.sourceJobId !== job.sourceJobId ||
         current.resumeVersion !== undefined && current.resumeVersion !== job.resumeVersion)) {
@@ -41,7 +47,33 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
     return job;
   });
   const preview = jobs.map(({resumeBase64: _pdf,...job})=>({ ...job,
-    status: existing.some(item=>item.status !== 'removed' && item.key === applicationTarget(job.url).key) ? 'existing' as const : 'new' as const,
+    ...(parseTarget(job.url).ats === 'generic' && {currentPageOnly:true}),
+    status: existing.some(item=>item.status !== 'removed' && item.key === parseTarget(job.url).key) ? 'existing' as const : 'new' as const,
   }));
   return { jobs, preview };
+}
+
+export async function currentPageOwner(jobs: ProductJob[], tabId: number, url: URL) {
+  let key: string | undefined;
+  try { key = productApplicationTarget(url.href).key; } catch { /* Ordinary page fill also supports unfamiliar HTTPS pages. */ }
+  const publication = smartRecruitersPublication(new URL(url.pathname, url.origin));
+  const current = jobs.filter(job => job.status !== 'removed');
+  const owners = current.filter(job => {
+    const selected = job.selectedApplicationUrl && smartRecruitersPublication(new URL(job.selectedApplicationUrl));
+    return job.tabId === tabId || job.key === key ||
+      publication && selected && publication.base.toLowerCase() === selected.base.toLowerCase();
+  });
+  if (publication) {
+    const prefix = url.hostname + '/' + publication.company.toLowerCase() + '/';
+    const candidates = current.filter(job => !owners.includes(job) && job.key.toLowerCase().startsWith(prefix) &&
+      /^[0-9]+$/.test(job.key.slice(prefix.length)));
+    if (candidates.length) {
+      const posting = await smartRecruitersPostingForApplication(url.href);
+      if (!posting) throw new Error('C3 could not verify which saved job owns this application. Open it from Applications.');
+      const postingKey = productApplicationTarget(posting).key.toLowerCase();
+      owners.push(...candidates.filter(job => job.key.toLowerCase() === postingKey));
+    }
+  }
+  if (owners.length > 1) throw new Error('This tab and application identify different saved jobs. Reopen the selected posting.');
+  return owners[0];
 }

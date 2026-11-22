@@ -95,11 +95,19 @@ test('extension page actions verify Jobvite file history and the final SmartRecr
   try {
     const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');const page=await context.newPage();await fixture(page);
     const tabId=await worker.evaluate(async u=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===u).id,url);
-    const action=(operation:string,documentId?:string)=>worker.evaluate(p=>(globalThis as any).runAction(p),{tabId,expectedUrl:url,operation,documentId,facts,resume,expiresAt:Date.now()+10000});
+    const action=(operation:string,documentId?:string,pageHandoff?:string)=>worker.evaluate(p=>(globalThis as any).runAction(p),{tabId,expectedUrl:url,operation,documentId,pageHandoff,facts,resume,expiresAt:Date.now()+10000});
     const inspection=await action('inspect');const result=await action('fill',inspection.documentId);
     assert.equal(result.resume,'verified',JSON.stringify(result));assert.deepEqual(await counts(page),[1,0]);
     await action('undo',inspection.documentId);assert.deepEqual(await counts(page),[0,0]);
     await action('redo',inspection.documentId);assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.evaluate('submits'),0);
+    await action('undo',inspection.documentId);
+    const selected=await action('inspect',undefined,'imported-job');
+    assert.equal(selected.canRedo,false,'a selected job cannot redo an earlier default PDF');
+    assert.equal((await action('fill',selected.documentId,'imported-job')).resume,'verified');
+    assert.equal((await action('inspect')).canUndo,false,'ordinary history excludes the selected job write');
+    await action('undo',selected.documentId,'imported-job');assert.deepEqual(await counts(page),[0,0]);
+    await action('redo',selected.documentId,'imported-job');assert.deepEqual(await counts(page),[1,0]);
+
 
     const screening='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/abcd1234-1111-2222-3333-111111111111/screening';
     await page.route(screening, route=>route.fulfill({contentType:'text/html',body:`

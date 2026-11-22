@@ -180,7 +180,7 @@ export async function pageAction(params, attached) {
               (result.skipped??=[]).push({label:'Application',reason:'employer_submission_disabled'});
             }
             return {observation:current,...result}; }`,
-          arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',expectedUrl:frame.url,expiresAt}}],
+          arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,pageHandoff:params.pageHandoff,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',expectedUrl:frame.url,expiresAt}}],
           awaitPromise:true,returnByValue:true,
         });
         if (response.exceptionDetails || !response.result?.value) throw new Error('The page action failed. Inspect the draft before retrying.');

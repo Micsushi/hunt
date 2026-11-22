@@ -8,7 +8,7 @@ let token = urlToken ?? previousToken;
 if (urlToken !== null) history.replaceState(null, '', location.pathname + location.search);
 let state, busy = false, rendered = '', pendingSubmit, historyBusy = false, profileLoaded = false, polling = false, profileDirty = false;
 let stateFresh = false, refreshSequence = 0, pendingJob;
-let handoffBundle, handoffFileVersion = 0;
+let handoffBundle, handoffPaused = false, handoffFileVersion = 0;
 let savedProfile, savedResumeUrl, accountStatus, accountDraft = false, metadataCheckedAt = 0;
 const jobErrors = new Map();
 $('profile-form').addEventListener('input', updateProfileDraft);
@@ -129,6 +129,8 @@ $('preview-handoff').onclick=()=>{
       resume.textContent=`${job.resumeName} · C2 version ${job.resumeVersion}${job.status==='existing'?' · Already in your list':''}`;
       resume.className='note';row.append(title,resume);return row;
     }));
+    handoffPaused=preview.jobs.some(job=>job.currentPageOnly);
+    $('import-handoff').textContent=handoffPaused?'Add applications paused':'Add and fill applications';
     handoffBundle=bundle;$('handoff-preview').hidden=false;
     $('handoff-summary').textContent=`${preview.jobs.length} ${preview.jobs.length===1?'application':'applications'}. Nothing queued yet.`;
     }catch(e){if(version===handoffFileVersion){$('handoff-status').textContent=e.message;$('handoff-status').setAttribute('role','alert');}}
@@ -136,12 +138,12 @@ $('preview-handoff').onclick=()=>{
 };
 $('import-handoff').onclick=()=>{
   if(!handoffBundle)return;
-  const bundle=handoffBundle, version=handoffFileVersion;
+  const bundle=handoffBundle, paused=handoffPaused, version=handoffFileVersion;
   void perform(async()=>{
     handoffBundle=undefined;$('handoff-preview').hidden=true;$('notice').textContent='';
     $('handoff-status').textContent='Import requested. Check Your applications for confirmation before previewing or retrying this file.';handoffControls();
     const existing=new Set(state.jobs.map(job=>job.id));
-    const added=await api('handoff/import',bundle);
+    const added=await api(paused?'handoff/import-paused':'handoff/import',bundle);
     const reused=added.filter(job=>existing.has(job.id)).length;
     $('notice').textContent=`${added.length-reused} new applications · ${reused} already in your list. Selected resumes were kept.`;
     if(version===handoffFileVersion){$('handoff-file').value='';$('handoff-preview').hidden=true;$('handoff-status').textContent='Import confirmed. Check progress in Your applications below.';}
@@ -349,7 +351,7 @@ function renderJobs() {
     const li=document.createElement('li'); li.dataset.job=job.id;li.tabIndex=-1;
     const content=document.createElement('div'), title=document.createElement('a'); title.className='job-title';title.textContent=job.title;title.href=job.url;title.target='_blank';title.rel='noopener noreferrer'; content.append(title);
     const status=document.createElement('p');status.className='job-status';status.textContent=job.status==='paused'&&job.actionPending?'Pausing…':ownerReview(job)?'Owner review needed':({queued:'Queued',running:'Running',paused:'Paused',review:'At review',submitting:'Submitting',submitted:'Submitted',submission_uncertain:'Submission uncertain'}[job.status]||job.status);status.dataset.attention=String(needsAttention(job));content.append(status);
-    if(job.currentPageOnly && ['paused','review'].includes(job.status)){const stage=document.createElement('p');stage.className='job-stage';stage.textContent='Finish this saved draft on the employer page with its selected resume.';content.append(stage);}
+    if(job.currentPageOnly && ['paused','review'].includes(job.status)){const stage=document.createElement('p');stage.className='job-stage';stage.textContent=job.pageHandoff?'Open the job link, then choose Fill current page to use its selected resume.':'Finish this saved draft on the employer page with its selected resume.';content.append(stage);}
     else if(job.stage!==status.textContent&&!(job.stage==='Needs attention'&&job.error)){const stage=document.createElement('p');stage.className=ownerReview(job)?'job-stage owner-warning':'job-stage';stage.textContent=ownerReview(job)?job.stage.replace(/^Owner review needed: /,'').replace(/^./,c=>c.toUpperCase()):job.stage;content.append(stage);}
     if(job.resumeName){const resume=document.createElement('p');resume.className='job-stage';resume.textContent=`Resume: ${job.resumeName}${job.resumeVersion ? ' · '+job.resumeVersion : ''}`;content.append(resume);}
     if(proxied && job.sourceJobId){const source=document.createElement('a');source.href=`/jobs/${job.sourceJobId}`;source.target='_top';source.textContent='View Hunt job';content.append(source);}

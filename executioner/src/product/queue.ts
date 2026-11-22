@@ -45,7 +45,7 @@ function runFailure(error: unknown, stage: string) {
 }
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
-  selectedDocument?: string; selectedApplicationUrl?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  pageHandoff?: true; selectedDocument?: string; selectedApplicationUrl?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
   componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
   resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
@@ -122,6 +122,16 @@ export class ApplicationQueue {
     }), connected: this.bridge.connected,
     configured: !!this.settings, accountConfigured: !!this.credentials, emailConfigured: !!this.verifyEmail, concurrency: this.concurrency, storageError: this.storageError }; }
   getSettings() { return this.settings ?? null; }
+  currentPageInput(job: ProductJob): {profile: unknown; resume: string} {
+    if (!job.pageHandoff || job.status !== 'paused' || !job.sourceJobId || !job.resumeVersion || !job.resumeSha256) {
+      throw new Error('This application has no selected current-page handoff.');
+    }
+    const input = JSON.parse(readFileSync(join(this.root, job.id + '.input.json'), 'utf8'));
+    if (typeof input.resume !== 'string' || createHash('sha256').update(Buffer.from(input.resume, 'base64')).digest('hex') !== job.resumeSha256) {
+      throw new Error('The saved PDF differs from the selected Hunt resume. Check the application in Hunt.');
+    }
+    return input;
+  }
   recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
   configureApplicant(values: unknown, resumeBase64?: string) {
     this.configure(applicantProfile(values, this.settings?.profile), resumeBase64 ?? this.settings?.resume ?? "");
@@ -139,11 +149,14 @@ export class ApplicationQueue {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
     this.concurrency = value; this.save(); this.safePump();
   }
-  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean } = {}) {
+  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean; currentPageHandoff?: boolean } = {}) {
     if (!this.settings) throw new Error("Choose a profile and resume first.");
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
-      const target = applicationTarget(input.url);
+      const target = options.paused && options.currentPageHandoff ? productApplicationTarget(input.url) : applicationTarget(input.url);
+      if (target.ats === 'generic' && (!input.resumeBase64 || !input.sourceJobId || !input.resumeVersion || input.tabId !== undefined)) {
+        throw new Error('Import the complete selected Hunt job and resume for current-page filling.');
+      }
       if (input.sourceJobId !== undefined && (!Number.isSafeInteger(input.sourceJobId) || input.sourceJobId < 1)) throw new Error("Invalid Hunt job.");
       for (const value of [input.title, input.resumeName, input.resumeVersion]) if (value !== undefined && (typeof value !== "string" || value.length > 500)) throw new Error("Invalid job or resume label.");
       if (input.tabId !== undefined && (!Number.isSafeInteger(input.tabId) || input.tabId < 1)) throw new Error("Invalid browser tab.");
@@ -176,6 +189,7 @@ export class ApplicationQueue {
       const id = randomUUID();
       pendingInputs.set(id, { profile: this.settings.profile, resume });
       const job: ProductJob = { id, ...target, title: input.title?.slice(0, 200) || target.posting,
+        ...(target.ats === 'generic' && {pageHandoff:true}),
         status: options.paused ? "paused" : "queued", stage: options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
         resumeName: input.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
         resumeSha256: createHash("sha256").update(Buffer.from(resume, "base64")).digest("hex"),
@@ -257,7 +271,10 @@ export class ApplicationQueue {
             await verifySmartRecruitersApplication(job.url, selected.href)) return {url:selected.href};
         throw new Error('The saved application link could not be verified. Open the posting using its title.');
       }
-      if (!job.tabId || !this.bridge.focus) throw new Error("The original tab is unavailable. Retry this job to open its saved draft.");
+      if (!job.tabId || !this.bridge.focus) {
+        if (productApplicationTarget(job.url).ats === 'generic') throw new Error("The original tab is unavailable. Open the saved employer posting using its title.");
+        throw new Error("The original tab is unavailable. Retry this job to open its saved draft.");
+      }
       await this.bridge.focus(job.tabId, job.url); return;
     }
     if (["retry", "refresh_review", "submit"].includes(action) && productApplicationTarget(job.url).ats === "generic") {

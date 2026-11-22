@@ -6,10 +6,9 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { productApplicationTarget } from './target.ts';
-import { smartRecruitersPostingForApplication, smartRecruitersPublication } from './smartrecruiters-target.ts';
 import { ExtensionBridge } from "./extension-bridge.ts";
 import { ApplicationQueue } from "./queue.ts";
-import { inspectHandoffBundle } from './handoff.ts';
+import { currentPageOwner, inspectHandoffBundle } from './handoff.ts';
 import { saveAccount, loadAccount, accountStorageFile } from "./account-storage.ts";
 import { applicantFields, effectiveProfileFacts, productSources } from './sources.ts';
 import { disposeResumeArtifact } from '../contracts/index.ts';
@@ -40,6 +39,9 @@ export async function startProductServer(options: { root?: string; port?: number
   let accountRestoreError: string | undefined;
   let accountBusy = false;
   const pageActions=new Set<number>();
+  const activeHandoffs = new Set<string>();
+  const pageBindings = new Map<number, {jobId: string; url: string; documentId: string}>();
+
   const accountState = new ProductAccountState(root);
   let currentAccount: ProductAccount | undefined;
   async function configureAccount(value: unknown, persist: boolean) {
@@ -152,7 +154,13 @@ export async function startProductServer(options: { root?: string; port?: number
         const expiresAt = Math.min(Date.now()+15000, body.expiresAt ?? Infinity);
         if(pageActions.has(body.tabId))throw new Error('C3 is already operating this page. Wait for it to finish.');
         pageActions.add(body.tabId);
+        let lockedHandoff: string | undefined;
         try {
+        const prior = pageBindings.get(body.tabId);
+        if (prior && body.operation !== 'inspect' && (prior.url !== url.href || prior.documentId !== body.documentId ||
+            !queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused'))) {
+          throw new Error('This selected application changed. Inspect its current page again.');
+        }
         if (queue.snapshot().jobs.some(job=>job.tabId===body.tabId && (job.actionPending || ['queued','running','submitting'].includes(job.status)))) throw new Error('C3 is already operating this page. Wait for it to finish.');
         const accountProfile = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
         const accountPage = await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
@@ -161,56 +169,60 @@ export async function startProductServer(options: { root?: string; port?: number
         const priorWorkdayPage = accountPage?.priorWorkdayPage;
         if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
-        if (writesProfile) {
-          let key:string|undefined;
-          try { key=productApplicationTarget(url.href).key; } catch { /* Manual fill supports other HTTPS forms. */ }
-          const publication = smartRecruitersPublication(new URL(url.pathname,url.origin));
-          const currentJobs = () => queue.jobs.filter(job=>job.status !== 'removed');
-          const blocked = (job:typeof queue.jobs[number]) => productApplicationTarget(job.url).ats === 'generic'
+        const owner = await currentPageOwner(queue.jobs, body.tabId, url);
+        const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
+        if (writesProfile && owner && !selected) {
+          throw new Error(productApplicationTarget(owner.url).ats === 'generic'
             ? 'This saved draft uses an unfamiliar site. Finish it on the employer page to preserve its selected resume.'
-            : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.';
-          const owner = currentJobs().find(job=>{
-            const selected = job.selectedApplicationUrl && smartRecruitersPublication(new URL(job.selectedApplicationUrl));
-            return job.tabId === body.tabId || key !== undefined && job.key === key ||
-              publication && selected && publication.base.toLowerCase() === selected.base.toLowerCase();
-          });
-          if (owner) throw new Error(blocked(owner));
-          const companyPrefix = publication && `${url.hostname}/${publication.company.toLowerCase()}/`;
-          if (companyPrefix && currentJobs().some(job=>job.key.toLowerCase().startsWith(companyPrefix) &&
-              /^[0-9]+$/.test(job.key.slice(companyPrefix.length)))) {
-            const posting = await smartRecruitersPostingForApplication(url.href);
-            if (!posting) throw new Error('C3 could not verify whether this form belongs to a queued application. Open it from Applications.');
-            const postingKey = productApplicationTarget(posting).key.toLowerCase();
-            const owner = currentJobs().find(job=>job.key.toLowerCase() === postingKey);
-            if (owner) throw new Error(blocked(owner));
+            : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.');
+        }
+        if (prior && !selected && prior.url !== url.href && new URL(prior.url).origin === url.origin &&
+            queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused')) {
+          throw new Error('This page no longer identifies the selected job. Open its posting from Applications.');
+        }
+        if (selected) {
+          if (activeHandoffs.has(selected.id)) throw new Error('C3 is operating this application in another tab.');
+          lockedHandoff = selected.id;
+          activeHandoffs.add(selected.id);
+          if (body.operation !== 'inspect' && prior?.jobId !== selected.id) throw new Error('Inspect the selected application before changing it.');
+          const other = [...pageBindings].find(([id, binding]) => id !== body.tabId && binding.jobId === selected.id);
+          if (other) {
+            const tabs = await bridge.call('pageTabs');
+            const previousOrigin = new URL(other[1].url).origin;
+            if (!Array.isArray(tabs) || tabs.some(tab => tab.tabId === other[0] && URL.parse(tab.url)?.origin === previousOrigin)) {
+              throw new Error('This job is already open in another selected tab. Continue there or close that tab first.');
+            }
+            pageBindings.delete(other[0]);
           }
         }
-        const profile = queue.getSettings()?.profile as {profile?:{facts?:unknown[]}} | undefined;
+        const settings = selected ? queue.currentPageInput(selected) : queue.getSettings();
+        const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');
-        const resume = body.operation === 'fill' ? queue.getSettings()?.resume : undefined;
+        const resume = body.operation === 'fill' ? settings?.resume : undefined;
         if (writesProfile) {
-          const admitted = productSources(profile, Buffer.from(queue.getSettings()?.resume ?? '', 'base64'));
+          const admitted = productSources(profile, Buffer.from(settings?.resume ?? '', 'base64'));
           disposeResumeArtifact(admitted.resumeIntent.artifact);
           if (admitted.profilePlan.mode !== 'live') throw new Error('Choose your saved personal profile before filling a real application.');
         }
-        if (writesProfile) {
+        if (writesProfile || selected) {
           let status:{capabilities?:unknown};
           try { status=await bridge.call('agentStatus'); }
           catch { throw new Error('Reconnect and reload Hunt C3 0.1.9 or newer before filling or redoing fields.'); }
           if (!Array.isArray(status?.capabilities) || !status.capabilities.includes('pageAction-v2')) throw new Error('Reload Hunt C3 0.1.9 or newer before filling or redoing fields.');
+          if (selected && !status.capabilities.includes('selected-page-handoff-v1')) throw new Error('Reload Hunt C3 to fill this application with its selected resume.');
           if (body.operation==='fill' && !status.capabilities.includes('question-matching-v1')) throw new Error('Reload Hunt C3 before filling so this page uses shared question matching.');
         }
         if (Date.now() >= expiresAt) throw new Error('This page action expired. Inspect the page again before changing it.');
         if (body.operation==='fill') result = await fillMatchedPage({profile,resume:Buffer.from(resume??'','base64'),url:body.expectedUrl,
           root:pageMatchingRoot(root,body.expectedUrl),workflow:'C3.2',signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),
           call:async(action,matchingPlans,matchingRunId)=> {
-            const observed=await bridge.call('pageAction',{...body,operation:action==='status'?'inspect':'fill',expiresAt,
+            const observed=await bridge.call('pageAction',{...body,...(selected && {pageHandoff:selected.id}),operation:action==='status'?'inspect':'fill',expiresAt,
               facts:effectiveProfileFacts(profile),matchingPlans,matchingRunId,...(action==='fill'&&resume?{resume:{name:'Resume.pdf',base64:resume}}:{})}) as MatchedPageResult;
             if(observed.documentId!==body.documentId)throw new Error('The page changed. Inspect it again before filling.');
             return observed;
           }});
         else {
-          try { result = await bridge.call('pageAction',{...body,expiresAt,...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
+          try { result = await bridge.call('pageAction',{...body,expiresAt,...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
           catch (error) {
             if (!priorWorkdayPage || !(error instanceof Error) || error.message !== 'debugger_protected_extension') throw error;
             response.writeHead(400).end(JSON.stringify({
@@ -220,7 +232,19 @@ export async function startProductServer(options: { root?: string; port?: number
             return;
           }
         }
-        } finally {pageActions.delete(body.tabId);}
+        if (body.operation === 'inspect') {
+          if (selected) {
+            const inspected = result as {tabId?:number; url?:string; documentId?:string} | null;
+            if (!inspected || inspected.tabId !== body.tabId || inspected.url !== body.expectedUrl || !inspected.documentId || typeof inspected.documentId !== 'string') {
+              throw new Error('The selected application could not be confirmed. Inspect it again.');
+            }
+            pageBindings.set(body.tabId, {jobId:selected.id, url:url.href, documentId:inspected.documentId});
+          } else pageBindings.delete(body.tabId);
+        }
+        } finally {
+          pageActions.delete(body.tabId);
+          if (lockedHandoff) activeHandoffs.delete(lockedHandoff);
+        }
       } else if (path === "/settings") {
         const revision = (queue.getSettings()?.profile as {profile?:{revision?:number}} | undefined)?.profile?.revision ?? null;
         if (Object.hasOwn(body,'expectedRevision') && body.expectedRevision !== revision) {
@@ -251,13 +275,18 @@ export async function startProductServer(options: { root?: string; port?: number
         } catch (error) { accountState.failed(error); throw error; }
         finally { accountBusy = false; }
       } else if (path === '/handoff/preview' || path === '/handoff/import' || path === '/handoff/import-paused') {
-        const bundle = inspectHandoffBundle(body, queue.jobs);
-        result = path === '/handoff/preview' ? {jobs:bundle.preview} : queue.add(bundle.jobs, {paused:path === "/handoff/import-paused"});
+        const allowCurrentPage = path !== '/handoff/import';
+        const bundle = inspectHandoffBundle(body, queue.jobs, allowCurrentPage);
+        if (path === '/handoff/import-paused' && bundle.preview.some(job=>job.currentPageOnly) && pageActions.size) {
+          throw new Error('Wait for the current page operation to finish before importing its selected resume.');
+        }
+        result = path === '/handoff/preview' ? {jobs:bundle.preview} : queue.add(bundle.jobs, {paused:path === "/handoff/import-paused",currentPageHandoff:allowCurrentPage});
       } else if (path === "/jobs" && Object.hasOwn(body,'documentId')) {
         throw new Error('This Prepare request is from an older extension. Reload Hunt and choose Fill current page on this application.');
       } else if (path === "/jobs") result = queue.add(body.jobs);
       else if (path === "/recover-storage") queue.recoverStorage();
       else if (path === "/concurrency") queue.setConcurrency(body.value);
+      else if (/^\/jobs\/[a-f0-9-]+\/action$/.test(path) && activeHandoffs.has(path.split('/')[2]!)) throw new Error('Wait for the current page operation to finish before changing this application.');
       else if (/^\/jobs\/[a-f0-9-]+\/action$/.test(path)) result = await queue.action(path.split("/")[2]!, body.action, body.reviewDigest, body.confirmed === true, {expectedProfileRevision:body.expectedProfileRevision,expectedProfileDigest:body.expectedProfileDigest,inputDigest:body.inputDigest,refreshToken:body.refreshToken}) ?? result;
       else { response.writeHead(404).end(); return; }
       response.end(JSON.stringify(result));

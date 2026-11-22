@@ -11,7 +11,7 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false, queueHistory = false } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
@@ -31,7 +31,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   if (state.busy) throw new Error('A field fill is already running.');
   if (queueHistory && action !== 'status' && action !== 'fill') throw new Error('Queue fill does not support popup history actions.');
   // The queue can reuse the document's receipt, but popup edits have their own history.
-  const historyState = queueHistory ? (state.queuedHistory ??= {undo:[],redo:[]}) : state;
+  // An imported PDF and the default PDF must never share Undo or Redo entries.
+  if (pageHandoff && state.handoffHistory?.id !== pageHandoff) state.handoffHistory = {id:pageHandoff, undo:[], redo:[]};
+  const historyState = pageHandoff ? state.handoffHistory : queueHistory ? (state.queuedHistory ??= {undo:[],redo:[]}) : state;
   state.busy = true;
   const result = { status: 'partial', filled: [], skipped: [], canUndo: false, canRedo: false, matching: [],
     resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ (action === 'status' ? 'unverified' : 'missing') };
