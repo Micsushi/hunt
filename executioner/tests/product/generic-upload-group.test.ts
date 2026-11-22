@@ -73,6 +73,25 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     const unresolved = (report:{skipped:{label:string;reason:string}[]}) => report.skipped.filter(row=>row.reason.startsWith('required_attachment_')).map(row=>row.label);
     const status = () => page.evaluate(fillVisibleFields,{action:'status' as const,facts});
     assert.deepEqual(unresolved(await status()),['Cover Letter']);
+    const trigger=page.locator('#cover button');
+    const backing=page.locator('[name=coverLetterFileId]');
+    for (const [caption,id] of [['Upload File',''],['Attach','0'],['Select supporting document',' null ']] as const) {
+      await trigger.evaluate((button,text)=>{button.textContent=text;},caption);
+      await backing.evaluate((node:HTMLInputElement,value)=>{node.value=value;},id);
+      const report=await status();
+      assert.equal(report.incomplete,true,caption);
+      assert.ok(report.skipped.some(row=>row.label==='Cover Letter' && row.reason==='required_attachment_unconfirmed'),caption);
+    }
+    await page.locator('#cover').evaluate((node:HTMLElement)=>{node.hidden=true;});
+    assert.deepEqual(unresolved(await status()),[],'a hidden widget with a custom button is inactive');
+    await page.locator('#cover').evaluate((node:HTMLElement)=>{node.hidden=false;});
+    await trigger.evaluate((button:HTMLButtonElement)=>{button.disabled=true;});
+    assert.deepEqual(unresolved(await status()),[],'a disabled custom button is inactive');
+    await trigger.evaluate((button:HTMLButtonElement)=>{button.disabled=false;button.textContent='Choose File*';});
+    await backing.evaluate((node:HTMLInputElement)=>{node.name='fileId';node.value='0';});
+    assert.ok((await status()).skipped.some(row=>row.reason==='required_attachment_missing'),'a generic ID sentinel cannot confirm the upload');
+    await page.locator('#cover input[type=hidden]').evaluate((node:HTMLInputElement)=>{node.name='coverLetterFileId';});
+    await backing.evaluate((node:HTMLInputElement)=>{node.value='';});
     for (const [markup,reason] of [
       ['<a download href="/cover-letter-template.docx">Download cover letter template</a>','required_attachment_missing'],
       ['<button type="button">Remove</button>','required_attachment_missing'],

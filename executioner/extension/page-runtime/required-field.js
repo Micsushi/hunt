@@ -42,7 +42,7 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
   // Observe extra documents without opening a chooser or touching their files.
   const unresolvedAttachment = input => {
     if (!input.willValidate || (!input.required && input.getAttribute('aria-required')!=='true') ||
-        composedClosest(input, '[inert],[aria-disabled=true]')) return;
+        composedClosest(input, '[inert],[aria-disabled=true]') || composedClosest(composedParent(input),'[hidden],[aria-hidden=true]')) return;
     const shown = node => node.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
       !composedClosest(node,'[hidden],[inert],[aria-hidden=true]');
     const ownLabel=rawLabelFor(input);
@@ -50,7 +50,7 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     let owner=input;
     const region=regionFor(input);
     for (let group=composedParent(input); group && group!==region && !group.matches('form,body,html'); group=composedParent(group)) {
-      if (deepQuery(group,'input:not([type=hidden]),textarea,select').some(node=>node!==input)) break;
+      if (deepQuery(group,'input:not([type=hidden],[type=button]),textarea,select').some(node=>node!==input)) break;
       owner=group;
       const heading=(group.innerText ?? '').trim().split('\n')[0];
       if (!label && otherAttachment(heading)) label=heading;
@@ -66,13 +66,19 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
       return {label,reason:'required_attachment_unconfirmed'};
     }
     const completed='[data-upload-state=success]';
-    if (input.files?.length || deepQuery(owner,'input[type=hidden][name]').some(node=>names.has(compact(node.name)) && !!node.value) ||
+    const retainedId=node=>names.has(compact(node.name)) && !/^(?:|0+|-1|null|undefined|none|false)$/i.test(node.value.trim());
+    if (input.files?.length || deepQuery(owner,'input[type=hidden][name]').some(retainedId) ||
         owner.matches(completed) && shown(owner) || deepQuery(owner,completed).some(shown)) return;
     if (shown(input)) return {label,reason:'required_attachment_missing'};
-    const triggers=deepQuery(owner,'button[type=button]').filter(button=>!button.matches(':disabled,[aria-disabled=true]') &&
-      shown(button) && /^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test(button.innerText.trim()));
+    const active=node=>shown(node) && !node.matches(':disabled') && !composedClosest(node,'[aria-disabled=true]');
+    const triggers=deepQuery(owner,'button[type=button],input[type=button],[role=button]').filter(node=>
+      active(node) && (!node.hasAttribute('form') || node.form===input.form));
+    const known=triggers.filter(node=>/^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test((node.innerText || node.value || '').trim()));
     const emptyNotice=deepQuery(owner,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
-    if (triggers.length===1) return {label,reason:emptyNotice ? 'required_attachment_missing' : 'required_attachment_unconfirmed'};
+    if (known.length===1 && emptyNotice) return {label,reason:'required_attachment_missing'};
+    if (triggers.length || [...input.labels ?? []].some(node=>node.control===input && active(node))) {
+      return {label,reason:'required_attachment_unconfirmed'};
+    }
   };
   return { isRequired, unresolvedAttachment };
 }
