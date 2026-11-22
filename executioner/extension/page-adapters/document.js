@@ -123,7 +123,15 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
     }
     return true;
   };
-  return {owner, region, current, upload, writePhone, screening, personalReady};
+  const stepStatus = () => {
+    if (screening) return {smartRecruitersScreening:true};
+    if (deepQuery(owner,'oc-personal-information').length === 1 &&
+        deepQuery(owner,'oc-nav-first-page footer[data-test=footer] oc-button[data-test=footer-next]').length === 1) {
+      return {smartRecruitersFirstStep:true};
+    }
+    return {};
+  };
+  return {owner, region, current, upload, writePhone, screening, personalReady, stepStatus};
 }
 
 /** Read the OneClick screening footer without interacting with it or inferring form completeness. */

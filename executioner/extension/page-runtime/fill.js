@@ -59,12 +59,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     result.frameScope = 'document';
     if (customForm.owner) {
       checkedForm = customForm;
-      if (action === 'status' && customForm.screening) result.smartRecruitersScreening = true;
-      if (action === 'status' && !customForm.screening &&
-          deepQuery(customForm.owner,'oc-personal-information').length === 1 &&
-          deepQuery(customForm.owner,'oc-nav-first-page footer[data-test=footer] oc-button[data-test=footer-next]').length === 1) {
-        result.smartRecruitersFirstStep = true;
-      }
+      if (action === 'status') Object.assign(result, customForm.stepStatus());
     }
   }
   const regionFor = e => checkedForm?.screening ? checkedForm.region(e) ?? e.getRootNode() : verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
@@ -109,7 +104,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return false;
     };
-  const changeEditable = (e,change) => change.jobviteChoice ? e===change.element && jobviteState(change)!==null : change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
+  const changeEditable = (e,change) => change.jobviteChoice ? e===change.element && screeningGroups.historyValue(change)!==null : change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
     ? editable(e) && e===change.phoneCountry.input && regionFor(e)===change.region && phoneState(change.phoneCountry)!==null
     : provinceMenu.savedContext(change) ? editable(e) && provinceMenu.same(e,provinceMenu.savedContext(change))
       : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region : editable(e);
@@ -156,14 +151,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return [...element.getRootNode().querySelectorAll('input[type=radio]')].every(peer =>
       peer.name !== element.name || peer.form !== element.form || group.contains(peer) && step.contains(peer));
   };
-  const jobviteGroup = group => adapters.readJobviteGroup(group,screening,state,visible,insideStep);
-  const jobviteState = change => {
-    const original=change.jobviteChoice, current=original && jobviteGroup(original.group);
-    if (!current || screening!==original.panel || current.row.question!==original.question ||
-        current.inputs.length!==original.inputs.length || current.inputs.some((input,i)=>input!==original.inputs[i] ||
-          current.labels[i]!==original.labels[i] || current.row.options[i]!==original.options[i])) return null;
-    return current.row.selected;
-  };
+  const screeningGroups = adapters.createJobviteGroups(screening,state,visible,insideStep);
   const currentElement = change => {
     const element = resolveElement(change);
     const step = change.screeningStep ?? checkedStep;
@@ -209,7 +197,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (!checkedForm?.writePhone(element,value,nativeWrite)) nativeWrite(element,value);
   };
   const { phoneWidget, phoneOptions, phoneState } = createPhoneReader({ editable, norm });
-  const readChange = (e,change) => change.jobviteChoice ? jobviteState(change) : change.screeningChoice ? screeningFields.historyValue(e,change.screeningChoice) : change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
+  const readChange = (e,change) => change.jobviteChoice ? screeningGroups.historyValue(change) : change.screeningChoice ? screeningFields.historyValue(e,change.screeningChoice) : change.choiceWidget ? choiceState(boundChoice(change)) : change.fabric ? fabricState(change.fabric) : change.phoneCountry ? phoneState(change.phoneCountry) : read(e);
   const unchangedChange = (e,change,value) => change.jobviteChoice || change.screeningChoice || change.choiceWidget || change.fabric || change.phoneCountry ? readChange(e,change)===value : unchanged(e,value);
   const { selectPhone } = createCompositeControlActions({
     phoneState, phoneOptions, changeEditable, checkDeadline, visible, editable, write
@@ -257,8 +245,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           if(!e || !changeEditable(e,c) || !unchangedChange(e,c,c[previous]))throw new Error('Fields changed since C3 filled them. Your edits were preserved.');
           c.element=e;
           if (c.jobviteChoice) {
-            if (c[next]) c.jobviteChoice.labels[c.jobviteChoice.index].click();
-            else write(e,false);
+            screeningGroups.restore(e,c,c[next],write);
             written++;
             continue;
           }
@@ -452,26 +439,14 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     };
     let applicationRegions = identifyApplicationRegions(fields);
     const finalReport = () => {
-      if (screening) for (const group of screening.querySelectorAll('fieldset.jv-input-group')) {
-        const legend=group.querySelector(':scope > legend');
-        const controls=[...group.querySelectorAll('input[type=radio],input[type=checkbox]')];
-        const owner=group.closest('.jv-form-field-checkbox,.jv-form-field-radio');
-        const required=controls.some(input=>input.required || input.getAttribute('aria-required')==='true') ||
-          /[✱*]/.test(legend?.innerText??'') || !!owner?.classList.contains('ng-invalid-required');
-        if (!required || !visible(group) || !controls.length || controls.some(input=>!insideStep(input,screening))) continue;
-        if (!controls.some(input=>input.checked) || controls.some(input=>input.type==='checkbox' &&
-            (input.required || input.getAttribute('aria-required')==='true') && !input.checked)) {
-          result.incomplete=true;
-          addSkip((legend?.innerText??'Required choice').trim(), 'required_choice_unconfirmed', 'field_recognition', 'identify_option');
-        }
-      }
+      screeningGroups.reportMissing(result,addSkip);
       // Read the employer's final action after filling. Never activate it to test readiness.
       const [form] = applicationRegions;
       if (applicationRegions.length === 1 && form instanceof HTMLFormElement && form.isConnected) {
         const submitters = [...form.getRootNode().querySelectorAll('button,input')].filter(e => e.form === form && e.type === 'submit' && visible(e));
         const [button] = submitters;
-        if (submitters.length === 1 && button.closest('form') === form &&
-            /^(?:apply|submit application|send application)$/i.test((button.innerText || button.value || '').trim()) &&
+        if (submitters.length === 1 &&
+            /^(?:apply|submit(?: application)?|send application|envoyer la candidature)$/i.test((button.getAttribute('aria-label') || button.innerText || button.value || '').trim()) &&
             (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
           // The matched workflow decides completeness from its last observation.
           if (action==='status' || !matchingRunId) result.incomplete = true;
@@ -487,22 +462,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
       sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
-    const observe = (element,label) => {
-      const control = screeningFields.read(element);
-      if (!control) {
-        const checkbox = screeningFields.dynamicCheckbox(element);
-        if (!checkbox) return baseObserve(element,label);
-        const {signature:_signature,...observed} = baseObserve(element,checkbox.label || 'Unidentified screening checkbox');
-        const row = {...observed,widget:'smartrecruiters-screening-checkbox',...(!checkbox.label && {state:'ambiguous'})};
-        return {...row,signature:JSON.stringify(row)};
-      }
-      state.matchingIds ??= new WeakMap();
-      if (!state.matchingIds.has(element)) state.matchingIds.set(element,crypto.randomUUID());
-      const row = {pageId:location.href,fieldId:state.matchingIds.get(element),question:control.question,
-        control:control.control,options:control.options,required:control.required,selected:control.selected,
-        valid:control.valid,backing:control.value,...(!control.coherent && {state:'ambiguous'})};
-      return {...row,signature:JSON.stringify(row)};
-    };
+    const observe = (element,label) => screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {
@@ -510,9 +470,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (scope!=='page' && !applicationRegions.includes(f.region)) continue;
         const row=observe(f.element,f.label); rows.set(row.fieldId,row);
       }
-      if (screening) for (const group of screening.querySelectorAll('fieldset.jv-input-group')) {
-        const choice=jobviteGroup(group); if (choice) { state.jobviteGroups??=new WeakMap(); state.jobviteGroups.set(group,choice); rows.set(choice.row.fieldId,choice.row); }
-      }
+      screeningGroups.observe(rows);
       return [...rows.values()];
     };
     if (action==='status') {
@@ -697,45 +655,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return match && Number.isFinite(date.getTime()) && date.toISOString().slice(0,10)===value
         ? `${match[2]}/${match[3]}/${match[1]}` : undefined;
     };
-    if (screening && checkedStep===screening && queuedScreening && matchingPlans) for (const group of screening.querySelectorAll('fieldset.jv-input-group')) {
-      const choice=jobviteGroup(group); if (!choice) continue;
-      const row=choice.row, plan=matchingPlans.find(plan=>plan.fieldId===row.fieldId), original=state.jobviteGroups?.get(group);
-      if (!plan || plan.signature!==row.signature || !original || original.row.signature!==row.signature ||
-          choice.inputs.some((input,i)=>input!==original.inputs[i] || choice.labels[i]!==original.labels[i])) continue;
-      if (plan.reason==='protected_answer_denied') {
-        addSkip(row.question,plan.reason,'answer_matching','match_field',row.fieldId);
-        reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;
-      }
-      if (row.selected) { reportMatch(row,plan,'unconfirmed','existing_value_preserved',row.selected); continue; }
-      if (/\b(?:attest|certify|declare|consent|agree|acknowledge|signature)\b/i.test([row.question,...row.options].join(' '))) {
-        addSkip(row.question,'protected_answer_denied','answer_matching','match_field',row.fieldId);reportMatch(row,plan,'unconfirmed','protected_answer_denied',row.selected);continue;
-      }
-      const index=row.options.indexOf(plan.answer);
-      if (index<0) {addSkip(row.question,plan.reason??'choice_requires_mapping','answer_matching','match_field',row.fieldId);reportMatch(row,plan,'unconfirmed',plan.reason??'choice_requires_mapping',row.selected);continue;}
-      checkDeadline();
-      const before=jobviteGroup(group);
-      if (!before || before.row.signature!==row.signature || before.inputs[index]!==choice.inputs[index] || before.labels[index]!==choice.labels[index]) {
-        addSkip(row.question,'field_changed_before_fill','field_recognition','rebind_field',row.fieldId);continue;
-      }
-      choice.labels[index].click();
-      await new Promise(resolve=>setTimeout(resolve,100));
-      checkDeadline();
-      const after=jobviteGroup(group);
-      if (after && after.inputs[index]===choice.inputs[index] && after.labels[index]===choice.labels[index] && after.row.selected===row.options[index]) {
-        changes.push({element:choice.inputs[index],region:choice.inputs[index].form,label:row.question,
-          before:'',after:row.options[index],jobviteChoice:{group,panel:screening,question:row.question,
-            inputs:choice.inputs,labels:choice.labels,options:row.options,index}});
-        result.filled.push(row.question);
-        if (after.row.valid) reportMatch(after.row,plan,'verified','product_readback_confirmed',after.row.selected);
-        else {
-          result.incomplete=true;
-          addSkip(row.question,'required_choice_unconfirmed','field_recognition','identify_option',row.fieldId);
-          reportMatch(after.row,plan,'unconfirmed','required_choice_unconfirmed',after.row.selected);
-        }
-      } else {
-        addSkip(row.question,'choice_commit_unconfirmed','browser_interaction','verify_selection',row.fieldId);
-        reportMatch(row,plan,'unconfirmed','choice_commit_unconfirmed',after?.row.selected??'');
-      }
+    if (screening && checkedStep===screening && queuedScreening && matchingPlans) {
+      await screeningGroups.fill({matchingPlans, changes, result, addSkip, reportMatch, checkDeadline});
     }
     const radiosHandled = new Set();
     for (const f of fields) {

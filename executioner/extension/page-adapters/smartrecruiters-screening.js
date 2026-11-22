@@ -177,5 +177,21 @@ export function createSmartRecruitersScreening(form, deepQuery, composedClosest,
     }
     throw new Error('The employer did not confirm the restored screening choice.');
   };
-  return {label,read,select,reversibleChoice,historyValue,restore,dynamicCheckbox};
+  const observe = (element,baseObserve,state) => {
+    const control = read(element);
+    if (!control) {
+      const checkbox = dynamicCheckbox(element);
+      if (!checkbox) return;
+      const {signature:_signature,...observed} = baseObserve(element,checkbox.label || 'Unidentified screening checkbox');
+      const row = {...observed,widget:'smartrecruiters-screening-checkbox',...(!checkbox.label && {state:'ambiguous'})};
+      return {...row,signature:JSON.stringify(row)};
+    }
+    state.matchingIds ??= new WeakMap();
+    if (!state.matchingIds.has(element)) state.matchingIds.set(element,crypto.randomUUID());
+    const row = {pageId:location.href,fieldId:state.matchingIds.get(element),question:control.question,
+      control:control.control,options:control.options,required:control.required,selected:control.selected,
+      valid:control.valid,backing:control.value,...(!control.coherent && {state:'ambiguous'})};
+    return {...row,signature:JSON.stringify(row)};
+  };
+  return {label,read,observe,select,reversibleChoice,historyValue,restore};
 }

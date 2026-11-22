@@ -176,7 +176,7 @@ export async function pageAction(params, attached) {
             if (result.componentFailure?.component==='page_state') return {observation,...result};
             const current=observation.screeningSubmissionControl?observe(input.expectedUrl):observation;
             if (current.screeningSubmissionControl==='disabled') {
-              result.incomplete=true;
+              if (input.action==='status' || !input.matchingRunId) result.incomplete=true;
               (result.skipped??=[]).push({label:'Application',reason:'employer_submission_disabled'});
             }
             return {observation:current,...result}; }`,

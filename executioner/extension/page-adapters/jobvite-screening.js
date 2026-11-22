@@ -234,3 +234,82 @@ export function readJobviteGroup(group, screening, state, visible, insideStep) {
   };
   return {row:{...row, signature:JSON.stringify(row)}, inputs, labels};
 }
+
+export function createJobviteGroups(screening,state,visible,insideStep) {
+  const jobviteGroup = group => readJobviteGroup(group,screening,state,visible,insideStep);
+  const historyValue = change => {
+    const original=change.jobviteChoice, current=original && jobviteGroup(original.group);
+    if (!current || screening!==original.panel || current.row.question!==original.question ||
+        current.inputs.length!==original.inputs.length || current.inputs.some((input,i)=>input!==original.inputs[i] ||
+          current.labels[i]!==original.labels[i] || current.row.options[i]!==original.options[i])) return null;
+    return current.row.selected;
+  };
+  const groups = () => screening?.querySelectorAll('fieldset.jv-input-group') ?? [];
+  const reportMissing = (result,addSkip) => {
+    for (const group of groups()) {
+      const legend=group.querySelector(':scope > legend');
+      const controls=[...group.querySelectorAll('input[type=radio],input[type=checkbox]')];
+      const owner=group.closest('.jv-form-field-checkbox,.jv-form-field-radio');
+      const required=controls.some(input=>input.required || input.getAttribute('aria-required')==='true') ||
+        /[✱*]/.test(legend?.innerText??'') || !!owner?.classList.contains('ng-invalid-required');
+      if (!required || !visible(group) || !controls.length || controls.some(input=>!insideStep(input,screening))) continue;
+      if (!controls.some(input=>input.checked) || controls.some(input=>input.type==='checkbox' &&
+          (input.required || input.getAttribute('aria-required')==='true') && !input.checked)) {
+        result.incomplete=true;
+        addSkip((legend?.innerText??'Required choice').trim(), 'required_choice_unconfirmed', 'field_recognition', 'identify_option');
+      }
+    }
+  };
+  const observe = rows => {
+    for (const group of groups()) {
+      const choice=jobviteGroup(group); if (choice) { state.jobviteGroups??=new WeakMap(); state.jobviteGroups.set(group,choice); rows.set(choice.row.fieldId,choice.row); }
+    }
+  };
+  const fill = async ({matchingPlans,changes,result,addSkip,reportMatch,checkDeadline}) => {
+    for (const group of groups()) {
+      const choice=jobviteGroup(group); if (!choice) continue;
+      const row=choice.row, plan=matchingPlans.find(plan=>plan.fieldId===row.fieldId), original=state.jobviteGroups?.get(group);
+      if (!plan || plan.signature!==row.signature || !original || original.row.signature!==row.signature ||
+          choice.inputs.some((input,i)=>input!==original.inputs[i] || choice.labels[i]!==original.labels[i])) continue;
+      if (plan.reason==='protected_answer_denied') {
+        addSkip(row.question,plan.reason,'answer_matching','match_field',row.fieldId);
+        reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;
+      }
+      if (row.selected) { reportMatch(row,plan,'unconfirmed','existing_value_preserved',row.selected); continue; }
+      if (/\b(?:attest|certify|declare|consent|agree|acknowledge|signature)\b/i.test([row.question,...row.options].join(' '))) {
+        addSkip(row.question,'protected_answer_denied','answer_matching','match_field',row.fieldId);reportMatch(row,plan,'unconfirmed','protected_answer_denied',row.selected);continue;
+      }
+      const index=row.options.indexOf(plan.answer);
+      if (index<0) {addSkip(row.question,plan.reason??'choice_requires_mapping','answer_matching','match_field',row.fieldId);reportMatch(row,plan,'unconfirmed',plan.reason??'choice_requires_mapping',row.selected);continue;}
+      checkDeadline();
+      const before=jobviteGroup(group);
+      if (!before || before.row.signature!==row.signature || before.inputs[index]!==choice.inputs[index] || before.labels[index]!==choice.labels[index]) {
+        addSkip(row.question,'field_changed_before_fill','field_recognition','rebind_field',row.fieldId);continue;
+      }
+      choice.labels[index].click();
+      await new Promise(resolve=>setTimeout(resolve,100));
+      checkDeadline();
+      const after=jobviteGroup(group);
+      if (after && after.inputs[index]===choice.inputs[index] && after.labels[index]===choice.labels[index] && after.row.selected===row.options[index]) {
+        changes.push({element:choice.inputs[index],region:choice.inputs[index].form,label:row.question,
+          before:'',after:row.options[index],jobviteChoice:{group,panel:screening,question:row.question,
+            inputs:choice.inputs,labels:choice.labels,options:row.options,index}});
+        result.filled.push(row.question);
+        if (after.row.valid) reportMatch(after.row,plan,'verified','product_readback_confirmed',after.row.selected);
+        else {
+          result.incomplete=true;
+          addSkip(row.question,'required_choice_unconfirmed','field_recognition','identify_option',row.fieldId);
+          reportMatch(after.row,plan,'unconfirmed','required_choice_unconfirmed',after.row.selected);
+        }
+      } else {
+        addSkip(row.question,'choice_commit_unconfirmed','browser_interaction','verify_selection',row.fieldId);
+        reportMatch(row,plan,'unconfirmed','choice_commit_unconfirmed',after?.row.selected??'');
+      }
+    }
+  };
+  const restore = (input,change,value,write) => {
+    if (value) change.jobviteChoice.labels[change.jobviteChoice.index].click();
+    else write(input,false);
+  };
+  return {historyValue,reportMissing,observe,fill,restore};
+}

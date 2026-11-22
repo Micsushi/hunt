@@ -24,14 +24,14 @@ import { createSmartRecruitersScreening } from '../page-adapters/smartrecruiters
 import { smartRecruitersCityChoices, smartRecruitersOptions } from '../page-adapters/smartrecruiters-city.js';
 import { createSearchChoiceReader } from '../page-adapters/workday-choice.js';
 import { isPortalResumeBinding } from '../jobvite-resume.js';
-import { jobviteResumeAcknowledgment, jobviteRetainedResume, jobviteScreeningPanel, watchJobviteScreening, readJobviteGroup } from '../page-adapters/jobvite-screening.js';
+import { jobviteResumeAcknowledgment, jobviteRetainedResume, jobviteScreeningPanel, watchJobviteScreening, readJobviteGroup, createJobviteGroups } from '../page-adapters/jobvite-screening.js';
 import { createUploadStatusReader } from '../page-adapters/upload-status.js';
 import { runPageFill } from './fill.js';
 
 // Bind site-owned readers here, before serializing into the selected browser document.
 export function fillPageDocument(input) {
   return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices, createSmartRecruitersScreening,
-    createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, jobviteRetainedResume, watchJobviteScreening, readJobviteGroup, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
+    createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, jobviteRetainedResume, watchJobviteScreening, createJobviteGroups, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
     ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, noticeMarkers:workdayNoticeMarkers});
 }
 
@@ -78,6 +78,7 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   jobviteScreeningPanel,
   watchJobviteScreening,
   readJobviteGroup,
+  createJobviteGroups,
   createUploadStatusReader,
   createSearchChoiceReader,
   smartRecruitersCityChoices,
