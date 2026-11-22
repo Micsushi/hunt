@@ -33,7 +33,7 @@ export function isRecruitmentTermsConsent(label: string, requiredEmployerNames: 
   return requestsConsent;
 }
 
-// The owner authorizes affirmative answers to required application-screening consent.
+// Recognize consent to evaluating this application, independently of the owner’s decision.
 export function isAiEvaluationConsent(label: string): boolean {
   if (!/\b(?:ai|artificial intelligence|automated)\b/iu.test(label)) return false;
   const technology = '(?:ai|artificial intelligence(?: ai)?|automated)(?: (?:tools?|systems?|screening|evaluation))?';

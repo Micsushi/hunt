@@ -113,7 +113,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     const documentId='c'.repeat(64),observedPdfs:string[]=[];
     let latestDocument=documentId,filesInHistory=false;
     bridge.call=async(method,params={})=>{
-      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1']};
+      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1','consent-redo-v1']};
       if(method==='pageTabs')return [{tabId:9,url:selectedUrl}];
       assert.equal(method,'pageAction');assert.equal(params.pageHandoff,selected.id);
       if(params.operation==='fill') {
@@ -157,7 +157,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal((await operate('fill',11,amazon)).status,400);
     let selectedBytes:string|undefined;
     bridge.call=async(method,params={})=>{
-      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1']};
+      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1','consent-redo-v1']};
       assert.equal(params.pageHandoff,imported.id);
       if(params.operation==='fill')selectedBytes=(params.resume as {base64:string}).base64;
       return {url:params.expectedUrl,tabId:params.tabId,documentId:latestDocument,filled:[],matching:[],skipped:[],canUndo:false,canRedo:false};

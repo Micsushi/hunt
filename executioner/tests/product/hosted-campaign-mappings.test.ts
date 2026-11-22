@@ -105,7 +105,7 @@ test('bilingual screening uses Canadian eligibility, separates background consen
 
   for (const [granted, willing] of [[true, false], [false, true], [true, undefined]] as const) {
     const base = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
-      work_authorization_canada:String(granted)}) as {profile:ReturnType<typeof parseApplicationProfile>;profilePlan:ProfilePagePlan};
+      work_authorization_canada:String(granted),ai_evaluation_consent:willing === undefined ? '' : String(!granted)}) as {profile:ReturnType<typeof parseApplicationProfile>;profilePlan:ProfilePagePlan};
     const profile = {...base,profile:{...base.profile,unsetFactIds:base.profile.unsetFactIds.filter(id => id !== 'terms_consent' && (willing === undefined || id !== 'background_check_willing')),facts:[...base.profile.facts,
       {factId:'terms_consent',value:granted,provenance:'owner_provided',lane:'live_owner_fact'},
       ...(willing === undefined ? [] : [{factId:'background_check_willing',value:willing,provenance:'owner_provided',lane:'live_owner_fact'}])]}};
@@ -130,7 +130,9 @@ test('bilingual screening uses Canadian eligibility, separates background consen
         selected:'No',required:true,control:'radio' as const,valid:true};
       assert.equal((await plan(existingDecline,[existingDecline],AbortSignal.timeout(3000))).answer,null);
       assert.equal((await answer(screeningQuestion,'radio',['Yes','No'],false)).answer,null);
-      assert.equal((await answer(screeningQuestion,'radio',['Yes','No'])).answer,'Yes');
+      const ai = await answer(screeningQuestion,'radio',['Yes','No']);
+      assert.equal(ai.answer,willing === undefined ? null : granted ? 'No' : 'Yes');
+      assert.equal(ai.provisional,willing === undefined);
       const expectedBackground = willing === undefined ? null : willing ? 'Yes' : 'No';
       assert.equal((await answer(background.replaceAll('RCL','ABC'),'radio',['Yes','No'])).answer,expectedBackground);
       assert.equal((await answer(background.replace('de RCL','de XYZ'),'radio',['Yes','No'])).answer,null);

@@ -203,7 +203,7 @@ async function loadProfile(saved) {
   if (!$('answer-fields').children.length) {
     const schema = await api('profile-fields');
     $('storage-path').textContent = `Saved on this device: ${schema.storage}`;
-    const labels = {configured_narrative:'Reusable interest statement', work_authorization:'Authorized to work in the application country', sponsorship_required:'Need employer sponsorship', work_authorization_canada:'Authorized to work in Canada', sponsorship_required_canada:'Need employer sponsorship in Canada', age_requirement_met:'At least 18 years old', essential_functions_ability:'Able to perform essential job functions', employment_agreement_prevents_employment:'An existing agreement prevents new employment', highest_education:'Highest education level', current_company:'Current employer', current_title:'Current job title', salary_expectations:'Salary expectations (include currency and period)', desired_salary:'Desired salary amount', weekly_hours:'Available hours per week', notice_period_days:'Notice period in days', travel_percentage:'Willingness to travel (%)', application_source:'How you find job opportunities'};
+    const labels = {ai_evaluation_consent:'Allow AI screening of my application when an employer requires an answer', configured_narrative:'Reusable interest statement', work_authorization:'Authorized to work in the application country', sponsorship_required:'Need employer sponsorship', work_authorization_canada:'Authorized to work in Canada', sponsorship_required_canada:'Need employer sponsorship in Canada', age_requirement_met:'At least 18 years old', essential_functions_ability:'Able to perform essential job functions', employment_agreement_prevents_employment:'An existing agreement prevents new employment', highest_education:'Highest education level', current_company:'Current employer', current_title:'Current job title', salary_expectations:'Salary expectations (include currency and period)', desired_salary:'Desired salary amount', weekly_hours:'Available hours per week', notice_period_days:'Notice period in days', travel_percentage:'Willingness to travel (%)', application_source:'How you find job opportunities'};
     const groups=[
       ['work','Work & education'],
       ['availability','Availability & pay'],
@@ -222,7 +222,7 @@ async function loadProfile(saved) {
       else if (field.type === 'number') { input.type='number'; input.min='0'; input.step='any'; }
       else { input.maxLength=4000; if(field.id==='earliest_start_date'||field.id==='self_identification_date')input.type='date'; }
       if (field.id === 'configured_narrative') { input.rows=4; label.className='wide'; }
-      const group=/disclosure|self_identification/.test(field.id)?'disclosures':field.type==='boolean'?'eligibility':/salary|start_date|weekly_hours|notice_period|travel_percentage/.test(field.id)?'availability':'work';
+      const group=field.id==='ai_evaluation_consent'||/disclosure|self_identification/.test(field.id)?'disclosures':field.type==='boolean'?'eligibility':/salary|start_date|weekly_hours|notice_period|travel_percentage/.test(field.id)?'availability':'work';
       label.append(input); containers[group].append(label);
     }
   }

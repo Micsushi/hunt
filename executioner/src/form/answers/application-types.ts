@@ -109,6 +109,7 @@ export const applicationBooleanProfileFactIds = [
   "essential_functions_ability",
   "employment_agreement_prevents_employment",
   "terms_consent",
+  "ai_evaluation_consent",
 ] as const;
 
 export const applicationNumberProfileFactIds = [...numberProfileFactIds, "weekly_hours", "notice_period_days", "travel_percentage"] as const;

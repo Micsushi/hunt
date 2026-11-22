@@ -83,6 +83,17 @@ test('Use saved profile updates a paused draft through the normal UI and support
     service.queue.configureApplicant({...values,city:'After'});
     const page=await browser.newPage({viewport:{width:390,height:844}});
     await page.goto(service.origin+'/#token='+encodeURIComponent(readFileSync(service.tokenPath,'utf8').trim()));
+    const consent = page.getByLabel('Allow AI screening of my application when an employer requires an answer',{exact:true});
+    await consent.waitFor();
+    assert.equal(await consent.inputValue(),'');
+    for(const choice of ['true','false','']) {
+      await consent.selectOption(choice);
+      await page.getByRole('button',{name:'Save profile',exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector('#profile-status')?.textContent==='Saved on this device');
+      const facts = (service.queue.getSettings()!.profile as any).profile.facts;
+      assert.equal(facts.find((fact:any)=>fact.factId==='ai_evaluation_consent')?.value,choice===''?undefined:choice==='true');
+      assert.equal(readFileSync(path,'utf8'),before);
+    }
     await page.getByRole('button',{name:'Applications',exact:true}).click();
     await page.getByRole('button',{name:'Use saved profile',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#notice')?.textContent?.includes('Saved profile applied'));

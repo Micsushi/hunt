@@ -2,7 +2,7 @@ import { boundedText, browserTargetToken, fieldId, optionId, MAX_BROWSER_READBAC
 import { createApplicationAnswerResolver } from '../form/answers/resolver.ts';
 import type { ApplicationFieldObservation } from '../form/answers/application-types.ts';
 import { inspectQuestionMatch, resolveQuestion } from '../form/questions/catalog.ts';
-import { contractApprovedPrivacyChoices, isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
+import { contractApprovedPrivacyChoices, isAiEvaluationConsent, isRecruitmentTermsConsent, protectedQuestionCategory } from '../form/questions/protected.ts';
 import { normalizeCatalogText } from '../form/questions/normalize.ts';
 import { sameEmployer } from '../form/questions/matching.ts';
 import { equivalentAnswer, phoneCountryName } from '../deterministic/answer-equivalence.ts';
@@ -32,6 +32,7 @@ export interface PageQuestion extends MatchingObservation {
 }
 type PeerQuestion = Pick<PageQuestion, 'question' | 'selected' | 'frameId' | 'formId'>;
 export interface PageAnswerPlan {
+  aiConsentDecision?: boolean;
   fieldId:string; frameId?:string; signature:string; answer:string|boolean|null; query?:string; phoneCountry?:string; phoneDial?:string; provisional:boolean; reason:string; answerKind?:string; lane?:string;
 }
 
@@ -187,7 +188,9 @@ export function createPageAnswerPlanner(
       const answer = intent?.kind === 'choice'
         ? row.options[field.options.findIndex(option => option.id === intent.optionId)] ?? null
         : intent ? intentAnswer(intent) : null;
-      return {...binding, answer, provisional: !resolved || resolved.lane === 'synthetic_test_default',
+      const aiDecision = resolved && isAiEvaluationConsent(row.question) ? ownerFact('ai_evaluation_consent') : undefined;
+      return {...binding, answer, ...(typeof aiDecision === 'boolean' && {aiConsentDecision:aiDecision}),
+        provisional: !resolved || resolved.lane === 'synthetic_test_default',
         reason: resolved ? 'answer_resolved' : resolution.ok ? resolution.value.kind : resolution.error.code,
         answerKind: intent?.kind, lane: resolved?.lane};
     }

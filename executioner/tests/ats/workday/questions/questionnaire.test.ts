@@ -227,12 +227,31 @@ test("an injected owner answer can resolve an observed unknown question", async 
 
 
 test("preserved consent skips mutations and unknown consent cannot become an injected owner fact", async () => {
-  const {handler,calls} = dependencies();
+  const queried: string[] = [];
+  const approved = dependencies({profile:{async query(input) {
+    queried.push(input.factId);
+    return {ok:true,value:{kind:"answered",value:true,provenance:"owner_provided",lane:"live_owner_fact"}};
+  }}});
   const aiConsent = field("ai-screening","I consent to automated screening of my application.","checkbox");
-  const granted = await handler.complete(request([aiConsent]),new AbortController().signal);
+  const optional = {...aiConsent,required:false};
+  const priorDecision = {...aiConsent,state:"populated" as const};
+  await approved.handler.complete(request([optional,priorDecision]),new AbortController().signal);
+  assert.deepEqual(queried,[]);
+  assert.equal(approved.calls.driven,0);
+  const granted = await approved.handler.complete(request([aiConsent]),new AbortController().signal);
   assert.equal(granted.ok && granted.value.kind,"verified");
-  assert.equal(calls.driven,1);
-  assert.equal(calls.verified,1);
+  assert.deepEqual(new Set(queried),new Set(["ai_evaluation_consent"]));
+  assert.equal(approved.calls.driven,1);
+  assert.equal(approved.calls.verified,1);
+  for (const choice of [undefined, false] as const) {
+    const withheld = dependencies({profile:{async query() {
+      return choice === undefined ? {ok:true,value:{kind:"profile_answer_missing"}} :
+        {ok:true,value:{kind:"answered",value:choice,provenance:"owner_provided",lane:"live_owner_fact"}};
+    }}});
+    const result = await withheld.handler.complete(request([aiConsent]),new AbortController().signal);
+    assert.ok(result.ok && result.value.kind === "blocked" && result.value.code === "protected_answer_denied");
+    assert.equal(withheld.calls.driven,0);
+  }
 
   for (const label of ["Yes, I have read and consent to the terms and conditions*",
     "Applicant Privacy Notice", "Privacy Policy", "I have read and understood",

@@ -306,13 +306,21 @@ test("only scoped recruitment terms use saved consent across controls and fallba
   const signal = new AbortController().signal;
   const aiNotice = "To support an efficient recruitment process, ADI may use artificial intelligence (AI) tools to assess how your candidate information aligns with the role requirements. These tools do not make decisions about a candidate\u2019s status \u2014 every decision that leads ADI to select a candidate for this role involves human review or intervention. You have the right to choose whether your data is processed using AI tools: By selecting \u201cYes,\u201d you consent to the use of AI tools to evaluate your candidate information. By selecting \u201cNo,\u201d you decline consent. Your application will be manually reviewed by ADI recruiters in accordance with ADI policy. For more information about how Company processes your personal data, please review the Candidate Privacy Notice.*";
   const binary = ["Yes","No"].map(label => ({id:optionId(label.toLowerCase()),label:boundedText(label)}));
-  const ai = resolverWith({kind:"profile_answer_missing"}).resolver;
+  const ai = ownerConsent(true);
+  const missingAi = resolverWith({kind:"profile_answer_missing"});
   for (const label of [aiNotice, "AI evaluation consent", "Do you consent to automated screening of your application?",
     "I agree to using AI to evaluate my resume."]) {
     const observed = {...field("Application screening", "radio", binary),rawQuestion:label};
     const answer = await ai.resolve(request(observed),signal);
     assert.ok(answer.ok && answer.value.kind === "resolved" && answer.value.intent.kind === "choice" &&
       answer.value.intent.expectedOption === "Yes",label);
+    const decline = await ownerConsent(false).resolve(request(observed),signal);
+    assert.ok(decline.ok && decline.value.kind === "resolved" && decline.value.intent.kind === "choice" &&
+      decline.value.intent.expectedOption === "No",label);
+    for (const answerFallbackPolicy of ["deterministic_site_valid_editable","owner_facts_only"] as const) {
+      const absent = await missingAi.resolver.resolve({...request(observed),answerFallbackPolicy},signal);
+      assert.ok(!absent.ok && absent.error.code === "protected_answer_denied");
+    }
     const optional = await ai.resolve(request({...observed,required:false}),signal);
     assert.ok(optional.ok && optional.value.kind === "readback_only");
     const committed = await ai.resolve(request({...observed,state:"populated"}),signal);
@@ -325,6 +333,11 @@ test("only scoped recruitment terms use saved consent across controls and fallba
   }
   const checkbox = await ai.resolve(request(field("I consent to AI screening of my application.","checkbox")),signal);
   assert.ok(checkbox.ok && checkbox.value.kind==="resolved" && checkbox.value.intent.kind==="toggle" && checkbox.value.intent.checked);
+  for (const provenance of ["resume_verified","configured_template"] as const) {
+    const inferred = resolverWith({kind:"answered",value:true,provenance,lane:"live_owner_fact"}).resolver;
+    const protectedReply = await inferred.resolve(syntheticRequest(field("AI evaluation consent","radio",binary)),signal);
+    assert.ok(!protectedReply.ok && protectedReply.error.code === "protected_answer_denied");
+  }
   const negativeCheckbox = field("AI evaluation consent","checkbox",[{id:optionId("decline"),label:boundedText("I decline")}]);
   const withheld = await ai.resolve(request(negativeCheckbox),signal);
   assert.ok(!withheld.ok && withheld.error.code==="protected_answer_denied");

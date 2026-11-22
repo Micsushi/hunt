@@ -11,7 +11,7 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, aiConsentDecision, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
@@ -232,6 +232,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (action === 'undo' || action === 'redo') {
       const from = historyState[action], to = historyState[action === 'undo' ? 'redo' : 'undo'], entry = from.at(-1);
       if (!entry) return result;
+      if (action === 'redo' && entry.some(change => change.aiConsentDecision === undefined
+          ? /\b(?:ai|artificial intelligence|automated)\b/i.test(change.label)
+          : change.aiConsentDecision !== null && change.aiConsentDecision !== aiConsentDecision)) {
+        throw new Error('AI screening consent needs a fresh check. Use Fill current page.');
+      }
       const changes=action==='undo'?[...entry].reverse():entry;
       const chronological=items=>action==='undo'?[...items].reverse():items;
       const previous = action === 'undo' ? 'after' : 'before', next = action === 'undo' ? 'before' : 'after';
@@ -1058,6 +1063,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     return finalReport();
   } finally {
     if (checkedStep) for (const change of changes) change.screeningStep = checkedStep;
+    if (action === 'fill' && changes.length) {
+      const consent = matchingPlans?.find(plan => typeof plan.aiConsentDecision === 'boolean');
+      for (const change of changes) change.aiConsentDecision = consent?.aiConsentDecision ?? null;
+    }
     if (action === 'fill' && changes.length) { if (matchingRunId && historyState.matchingRunId===matchingRunId && historyState.undo.length) historyState.undo.at(-1).push(...changes); else historyState.undo.push(changes); historyState.matchingRunId=matchingRunId; historyState.undo = historyState.undo.slice(-10); historyState.redo = []; }
     const failed = result.skipped.find(row => row.componentFailure);
     if (failed) result.componentFailure = failed.componentFailure;

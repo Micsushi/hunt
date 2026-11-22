@@ -139,6 +139,22 @@ test("saved Workday drafts preserve uploads and continue without rewinding", { t
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {
     await verifySavedQuestionnaireUploads(browser);
+    const consentPage = await browser.newPage();
+    const consentUrl = "https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R2";
+    await consentPage.route("**/*", route => route.fulfill({contentType:"text/html",body:applicationFixture.replace("profile();", `questions();
+      root.querySelector('select').closest('div').outerHTML = ['optional','required'].map(kind =>
+        '<div data-automation-id="formField-'+kind+'"><label for="'+kind+'">I consent to automated screening of my application.</label>' +
+        '<input type="checkbox" id="'+kind+'" '+(kind==='required'?'required':'')+'></div>').join('');
+      window.changedControls=[];
+      root.onchange=e=>window.changedControls.push(e.target.id);
+      root.querySelector('button').onclick=review;`)}));
+    try {
+      await consentPage.goto(consentUrl);
+      const consentProfile = fixtureApplicantProfile({given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid",ai_evaluation_consent:"true"});
+      await fillApplication(consentPage,{url:consentUrl,profile:consentProfile,resume:Buffer.from("%PDF-fixture")},AbortSignal.timeout(15000),()=>{});
+      assert.deepEqual(await consentPage.evaluate("window.changedControls"),["required"]);
+      assert.equal(await consentPage.locator('[data-automation-id="applyFlowReviewPage"]').count(),1);
+    } finally {await consentPage.close();}
     for (const scenario of ["review", "experience", "missing-back", "bad-summary"]) {
       const canGoBack = scenario !== "missing-back";
       const page = await browser.newPage();

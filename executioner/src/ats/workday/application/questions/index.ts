@@ -276,16 +276,6 @@ export function createQuestionnairePageHandler(
         if (field.state === "hidden") continue;
         if (await dependencies.fieldPresent?.(field, signal) === false) continue;
         const question = resolveQuestion(field.label);
-        const fullQuestion = field.rawQuestion ?? field.label;
-        const category = protectedQuestionCategory(
-          fullQuestion,
-          question.kind === "resolved" ? question.id : undefined,
-          field.rawOptions ?? field.options.map(option => option.label),
-        );
-        const definition = question.kind === "resolved" &&
-            field.behavior !== "unsupported"
-          ? questionForField(field.label, field.behavior)
-          : undefined;
         const resolvedQuestionId = question.kind === "resolved"
           ? question.id as QuestionId
           : observedQuestionId(field.label);
@@ -302,16 +292,29 @@ export function createQuestionnairePageHandler(
           semanticQuestionType: testingQuestionSemanticType(field.label),
         });
         if (!field.required) continue;
+        const fullQuestion = field.rawQuestion ?? field.label;
+        const category = protectedQuestionCategory(
+          fullQuestion,
+          question.kind === "resolved" ? question.id : undefined,
+          field.rawOptions ?? field.options.map(option => option.label),
+        );
+        const definition = question.kind === "resolved" &&
+            field.behavior !== "unsupported"
+          ? questionForField(field.label, field.behavior)
+          : undefined;
         // Keep the page's existing decision, including with an injected resolver.
         let consentDecision: boolean | undefined;
         if (category === "consent") {
           if (field.state === 'populated') continue;
-          const decision = isRecruitmentTermsConsent(fullQuestion)
-            ? await (dependencies.profileQuery as ApplicationProfileQuery).query({profileId:request.profileId,profileRevision:request.profileRevision,factId:'terms_consent'},signal)
-            : undefined;
-          if (isAiEvaluationConsent(fullQuestion) && isAiConsentControl(field.behavior,field.rawOptions ?? field.options.map(option => option.label))) {
-            consentDecision = true;
-          } else if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' && decision.value.lane === 'live_owner_fact' && typeof decision.value.value === 'boolean') {
+          const aiScreening = isAiEvaluationConsent(fullQuestion);
+          const factId = aiScreening && isAiConsentControl(field.behavior, field.rawOptions ?? field.options.map(option => option.label))
+            ? 'ai_evaluation_consent' : isRecruitmentTermsConsent(fullQuestion) ? 'terms_consent' : undefined;
+          const decision = factId && await (dependencies.profileQuery as ApplicationProfileQuery).query({
+            profileId:request.profileId, profileRevision:request.profileRevision, factId,
+          }, signal);
+          if (decision?.ok && decision.value.kind === 'answered' && decision.value.provenance === 'owner_provided' &&
+              decision.value.lane === 'live_owner_fact' && typeof decision.value.value === 'boolean' &&
+              !(aiScreening && field.behavior === 'checkbox' && !decision.value.value)) {
             consentDecision = decision.value.value;
           } else {
             recordUnset();
@@ -499,6 +502,7 @@ export function createQuestionnairePageHandler(
               ? {}
               : { syntheticReplacementReason: answer.value.syntheticReplacementReason }),
           });
+          signal.throwIfAborted();
           const driven = await dependencies.driver.drive({
             journeyId: request.journeyId,
             sessionId: request.sessionId,

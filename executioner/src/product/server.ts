@@ -10,7 +10,7 @@ import { ExtensionBridge } from "./extension-bridge.ts";
 import { ApplicationQueue } from "./queue.ts";
 import { currentPageOwner, inspectHandoffBundle } from './handoff.ts';
 import { saveAccount, loadAccount, accountStorageFile } from "./account-storage.ts";
-import { applicantFields, effectiveProfileFacts, productSources } from './sources.ts';
+import { aiConsentAuthority, applicantFields, effectiveProfileFacts, productSources } from './sources.ts';
 import { disposeResumeArtifact } from '../contracts/index.ts';
 import { GmailImapClient } from "../mailbox/providers/gmail/private/imap-client.ts";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
@@ -211,6 +211,7 @@ export async function startProductServer(options: { root?: string; port?: number
           try { status=await bridge.call('agentStatus'); }
           catch { throw new Error('Reconnect and reload Hunt C3 0.1.9 or newer before filling or redoing fields.'); }
           if (!Array.isArray(status?.capabilities) || !status.capabilities.includes('pageAction-v2')) throw new Error('Reload Hunt C3 0.1.9 or newer before filling or redoing fields.');
+          if (body.operation==='redo' && !status.capabilities.includes('consent-redo-v1')) throw new Error('Reload Hunt C3 before redoing fields so it can verify your current consent.');
           if (selected && !status.capabilities.includes('selected-page-handoff-v1')) throw new Error('Reload Hunt C3 to fill this application with its selected resume.');
           if (body.operation==='fill' && !status.capabilities.includes('question-matching-v1')) throw new Error('Reload Hunt C3 before filling so this page uses shared question matching.');
         }
@@ -218,13 +219,19 @@ export async function startProductServer(options: { root?: string; port?: number
         if (body.operation==='fill') result = await fillMatchedPage({profile,resume:Buffer.from(resume??'','base64'),url:body.expectedUrl,
           root:pageMatchingRoot(root,body.expectedUrl),workflow:'C3.2',signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),
           call:async(action,matchingPlans,matchingRunId)=> {
+            if (action === 'fill' && matchingPlans?.some(plan => plan.aiConsentDecision !== undefined)) {
+              const planned = aiConsentAuthority(profile), current = aiConsentAuthority(queue.getSettings()?.profile);
+              if (!planned?.fact || current?.owner !== planned.owner || current.fact?.value !== planned.fact.value) {
+                throw new Error('AI screening consent changed. Fill this page again with the current preference.');
+              }
+            }
             const observed=await bridge.call('pageAction',{...body,...(selected && {pageHandoff:selected.id}),operation:action==='status'?'inspect':'fill',expiresAt,
               facts:effectiveProfileFacts(profile),matchingPlans,matchingRunId,...(action==='fill'&&resume?{resume:{name:'Resume.pdf',base64:resume}}:{})}) as MatchedPageResult;
             if(observed.documentId!==body.documentId)throw new Error('The page changed. Inspect it again before filling.');
             return observed;
           }});
         else {
-          try { result = await bridge.call('pageAction',{...body,expiresAt,...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
+          try { result = await bridge.call('pageAction',{...body,expiresAt,...(body.operation==='redo' && {aiConsentDecision:aiConsentAuthority((selected ? queue.currentPageInput(selected) : queue.getSettings())?.profile)?.fact?.value ?? null}),...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
           catch (error) {
             if (!priorWorkdayPage || !(error instanceof Error) || error.message !== 'debugger_protected_extension') throw error;
             response.writeHead(400).end(JSON.stringify({

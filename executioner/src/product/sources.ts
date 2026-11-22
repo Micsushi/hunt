@@ -33,6 +33,15 @@ function websiteUrl(value: unknown): value is string {
   }
 }
 
+/** Consent only belongs to the applicant who explicitly saved it. */
+export function aiConsentAuthority(manifest: unknown) {
+  if (!manifest) return undefined;
+  const profile = parseApplicationProfile((manifest as {profile:unknown}).profile);
+  const owner = profile.facts.find(fact => fact.factId === 'email_address')?.value ?? profile.profileId;
+  const fact = profile.facts.find(fact => fact.factId === 'ai_evaluation_consent' && fact.provenance === 'owner_provided');
+  return {owner, fact};
+}
+
 /** Product projections never change persisted facts or reattribute saved website answers. */
 export function effectiveProfileFacts(value: unknown) {
   const manifest = value as {profile?:unknown;profilePlan?:unknown} | undefined;

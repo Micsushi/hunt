@@ -500,19 +500,18 @@ export function createApplicationAnswerResolver(
         const backgroundCheck = questionResolution.kind === "resolved" && questionResolution.id === "owner-question-background-check-willing" &&
           field.required && field.behavior === "radio" && field.options.length === 2 &&
           ["yes", "no"].every(answer => field.options.some(option => normalizeCatalogText(option.label) === answer));
-        let value: boolean;
-        if (isAiEvaluationConsent(questionText)) {
-          if (!isAiConsentControl(field.behavior,field.rawOptions ?? field.options.map(option => option.label))) return failure("protected_answer_denied");
-          value = true;
-        } else {
-          if (!backgroundCheck && !isRecruitmentTermsConsent(questionText, field.required ? request.employerNames : undefined)) return failure("protected_answer_denied");
-          const factId = backgroundCheck ? "background_check_willing" : "terms_consent";
-          const consent = await query({profileId:request.profileId, profileRevision:request.profileRevision, factId}, signal);
-          if (!consent.ok) return consent;
-          if (consent.value.kind !== "answered" || consent.value.provenance !== "owner_provided" ||
-              consent.value.lane !== "live_owner_fact" || typeof consent.value.value !== "boolean") return failure("protected_answer_denied");
-          value = consent.value.value;
+        const aiScreening = isAiEvaluationConsent(questionText);
+        if (aiScreening ? !isAiConsentControl(field.behavior, field.rawOptions ?? field.options.map(option => option.label)) :
+            !backgroundCheck && !isRecruitmentTermsConsent(questionText, field.required ? request.employerNames : undefined)) {
+          return failure("protected_answer_denied");
         }
+        const factId = aiScreening ? "ai_evaluation_consent" : backgroundCheck ? "background_check_willing" : "terms_consent";
+        const consent = await query({profileId:request.profileId, profileRevision:request.profileRevision, factId}, signal);
+        if (!consent.ok) return consent;
+        if (consent.value.kind !== "answered" || consent.value.provenance !== "owner_provided" ||
+            consent.value.lane !== "live_owner_fact" || typeof consent.value.value !== "boolean") return failure("protected_answer_denied");
+        const value = consent.value.value;
+        if (aiScreening && !value && field.behavior === "checkbox") return failure("protected_answer_denied");
         if (field.behavior === "select" || field.behavior === "radio" || field.behavior === "listbox") {
           const choice = consentOption(value, field.options, field.rawOptions);
           if (!choice) return failure("protected_answer_denied");

@@ -6,7 +6,8 @@ import { writePrivateFileAtomic } from "../composition/private/s2-application-so
 import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
-import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
+import { aiConsentAuthority, applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
+import { parseApplicationProfile } from "../profile/application-profile.ts";
 import { disposeResumeArtifact } from "../contracts/index.ts";
 import { AttachmentFailure } from './extension-bridge.ts';
 import { viewportCleanupPending } from '../../extension/page-viewport.js';
@@ -152,11 +153,23 @@ export class ApplicationQueue {
       throw new Error('A saved application with an unreadable link needs recovery before using this posting.');
     }
   }
+  // A queued draft pins its facts and PDF. Permission for a new consent action follows the current owner.
+  private jobInput(job: ProductJob) {
+    const input = JSON.parse(readFileSync(join(this.root, job.id + '.input.json'), 'utf8'));
+    const saved = parseApplicationProfile(input.profile.profile);
+    const current = aiConsentAuthority(this.settings?.profile);
+    const savedOwner = saved.facts.find(fact => fact.factId === 'email_address')?.value ?? saved.profileId;
+    const consent = current?.owner === savedOwner ? current.fact : undefined;
+    const facts = saved.facts.filter(fact => fact.factId !== 'ai_evaluation_consent');
+    if (consent) facts.push(consent);
+    return {...input, profile:{...input.profile, profile:parseApplicationProfile({...saved, facts,
+      unsetFactIds:saved.unsetFactIds.filter(id => id !== 'ai_evaluation_consent')})}};
+  }
   currentPageInput(job: ProductJob): {profile: unknown; resume: string} {
     if (!job.pageHandoff || job.status !== 'paused' || !job.sourceJobId || !job.resumeVersion || !job.resumeSha256) {
       throw new Error('This application has no selected current-page handoff.');
     }
-    const input = JSON.parse(readFileSync(join(this.root, job.id + '.input.json'), 'utf8'));
+    const input = this.jobInput(job);
     if (typeof input.resume !== 'string' || createHash('sha256').update(Buffer.from(input.resume, 'base64')).digest('hex') !== job.resumeSha256) {
       throw new Error('The saved PDF differs from the selected Hunt resume. Check the application in Hunt.');
     }
@@ -171,9 +184,19 @@ export class ApplicationQueue {
     const sources = productSources(profile, resume);
     disposeResumeArtifact(sources.resumeIntent.artifact);
     const settings = { profile, resume: resume.toString("base64") };
+    const before = this.running.size ? aiConsentAuthority(this.settings?.profile) : undefined;
     if (this.settings) this.persist(join(this.root, 'settings.previous.json'), this.settings);
     this.persist(join(this.root, "settings.json"), settings);
     this.settings = settings;
+    if (before?.fact) {
+      const next = aiConsentAuthority(profile);
+      if (next?.owner !== before.owner || next.fact?.value !== before.fact.value) {
+        for (const [id, controller] of this.running) {
+          controller.abort(new ApplicationPause('AI screening consent changed. Retry with the current preference.'));
+          void this.release(id).catch(() => {});
+        }
+      }
+    }
   }
   setConcurrency(value: number) {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
@@ -405,7 +428,7 @@ export class ApplicationQueue {
     try {
       const target = applicationTarget(job.url);
       await this.release(job.id);
-      const input = JSON.parse(readFileSync(join(this.root, `${job.id}.input.json`), "utf8"));
+      const input = this.jobInput(job);
       const journal = accountJournal(this.root, job.id, runId);
       if (target.ats === 'workday' && this.bridge.prepareAccount) {
         if (input.profile?.profilePlan?.mode === 'synthetic_test_non_submittable') throw new ApplicationPause('This is a synthetic test profile. Choose your saved personal profile before running a real application.');

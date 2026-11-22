@@ -191,9 +191,16 @@ test('explicit paused import keeps the exact portable contract and never schedul
 
 test('manual fill and redo require the new paired extension capability and retain the caller deadline',async()=>{
   const root=mkdtempSync(join(tmpdir(),'hunt-page-capability-'));const service=await startProductServer({root,port:0});
-  const original=ExtensionBridge.prototype.call;let modern=false,effects=0,slow=false;
+  const original=ExtensionBridge.prototype.call;let modern=false,redoCapable=false,effects=0,slow=false,revoke=false;
   ExtensionBridge.prototype.call=async function(method,params){
-    if(method==='agentStatus') {if(slow)await new Promise(resolve=>setTimeout(resolve,40));return {capabilities:modern?['pageAction-v2','question-matching-v1']:['pageAction-v1']};}
+    if(method==='agentStatus') {if(slow)await new Promise(resolve=>setTimeout(resolve,40));return {capabilities:modern?['pageAction-v2','question-matching-v1',...(redoCapable?['consent-redo-v1']:[])]:['pageAction-v1']};}
+    if(method==='pageAction' && params?.operation==='inspect' && revoke) {
+      revoke=false;
+      service.queue.configureApplicant({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'false'});
+      return {documentId:params.documentId,status:'partial',filled:[],skipped:[],matching:[{
+        fieldId:'screening',frameId:'frame',signature:'fixture',question:'AI evaluation consent',control:'radio',options:['Yes','No'],required:true,valid:false,selected:'',
+      }],canUndo:false,canRedo:false};
+    }
     if(method==='pageAction'){if(params?.operation==='fill') effects++;return {documentId:params?.documentId,status:'partial',filled:[],skipped:[],matching:[],canUndo:false,canRedo:false};}
     throw new Error('Unexpected bridge action');
   };
@@ -207,6 +214,13 @@ test('manual fill and redo require the new paired extension capability and retai
     }
     assert.equal(effects,0);modern=true;
     assert.equal((await post('browser/page',{operation:'fill',tabId:1,expectedUrl:job(1).url,documentId:'fixture'})).status,200);
+    const oldRedo=await post('browser/page',{operation:'redo',tabId:1,expectedUrl:job(1).url,documentId:'fixture'});
+    assert.match((await oldRedo.json()).error,/current consent/);
+    redoCapable=true;
+    service.queue.configureApplicant({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'true'});
+    revoke=true;
+    const revoked=await post('browser/page',{operation:'fill',tabId:1,expectedUrl:job(1).url,documentId:'fixture'});
+    assert.equal(revoked.status,400);assert.match((await revoked.json()).error,/consent changed/);
     assert.equal(effects,1);slow=true;
     const expired=await post('browser/page',{operation:'fill',tabId:1,expectedUrl:job(1).url,documentId:'fixture',expiresAt:Date.now()+20});
     assert.equal(expired.status,400);assert.match((await expired.json() as {error:string}).error,/expired/);assert.equal(effects,1);

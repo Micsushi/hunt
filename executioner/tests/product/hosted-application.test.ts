@@ -342,6 +342,17 @@ test('Ashby nested optional consent stays separate from required Phone and legal
     assert.equal(await p.locator('[name=consent0]:checked').count(),0);
     assert.equal(await p.locator('[name=consent1][value=no]').isChecked(),true);
     assert.equal(await p.evaluate('submits'),0);
+    await p.locator('.ashby-application-form-texting-consent-description').evaluate(group => {
+      group.innerHTML = '<label>I consent to automated screening of my application.<select required><option value="">Select one</option><option>Yes</option><option>No</option></select></label>';
+    });
+    await assert.rejects(fillApplication(p,input,AbortSignal.timeout(15000),()=>{}), /AI evaluation consent decision/);
+    assert.equal(await p.locator('select').inputValue(),'');
+    for (const choice of ['false','true']) {
+      const saved = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:choice},input.profile);
+      await fillApplication(p,{...input,profile:saved},AbortSignal.timeout(15000),()=>{});
+      assert.equal(await p.locator('select').inputValue(),'No'); // Preserve the committed decline after the preference changes.
+    }
+    assert.equal(await p.evaluate('submits'),0);
   } finally { await b.close(); }
 });
 

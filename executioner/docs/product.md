@@ -7,6 +7,16 @@ saved profile answers are available. Existing optional values are preserved. Fie
 become required are reconsidered from the current page. Optional attachments are
 not uploaded automatically. When an employer asks for a transcript, cover letter, or other supporting document, supply that file yourself. C3 uses the selected résumé only in a field identified as a résumé or CV.
 
+To set or revoke AI screening consent, open **Profile**, go to **Disclosures**, and find
+**Allow AI screening of my application when an employer requires an answer**. Choose
+**Yes** to consent, **No** to decline, or **Not answered** to decide on each employer
+page, then choose **Save profile**. The next fill or retry uses your current preference,
+including for saved drafts. C3 preserves existing employer-page decisions and skips
+optional prompts. For an employer that only offers a required agreement checkbox,
+choosing **No** leaves the checkbox empty for you to review. Changing a saved decision
+pauses active queue runs so you can retry them with the new choice. If a previous fill
+included AI consent and you undo that fill, use **Fill current page** to apply the new preference.
+
 ## Diagnosing a paused draft
 
 A paused job can show the component and operation that observed the failure. For example, an upload failure during preview verification means C3 could not confirm the attachment. An employer error reported by the workflow means C3 recognized the page and stopped. Compare the recorded operation with the employer page before changing the reader, matcher, or browser action.

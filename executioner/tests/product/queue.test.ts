@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { ApplicationQueue, type BrowserConnection } from "../../src/product/queue.ts";
 import { startProductServer } from "../../src/product/server.ts";
 import { applicantProfile, productSources } from "../../src/product/sources.ts";
+import { parseApplicationProfile } from "../../src/profile/application-profile.ts";
+import type { ProductInput } from "../../src/product/application-contract.ts";
 import { disposeResumeArtifact } from '../../src/contracts/index.ts';
 
 test("queue snapshots inputs, supports remove/restore, and never retries uncertain submissions after restart", async () => {
@@ -147,32 +149,66 @@ test("observed resume requirement survives a failed fill and service restart", a
   const bridge: BrowserConnection = { connected: true,
     open: async () => ({tabId: 46, page: {url: () => url} as any, browser: {close: async () => {}} as any}),
     release: async () => {} };
-  const observed = deferred<void>();
+  const observed = deferred<void>(), finishGrant = deferred<void>();
+  let pendingGrantSignal: AbortSignal | undefined;
   let receipt: {token:string;selectedSha256:string;filename:string;applicationKey:string};
-  const queue = new ApplicationQueue(root, bridge, async (_page, input) => {
+  const queue = new ApplicationQueue(root, bridge, async (_page, input, signal) => {
+    pendingGrantSignal = signal;
     input.onResumeObserved!();
     receipt={token:'11111111-1111-4111-8111-111111111111',selectedSha256:'a'.repeat(64),filename:'Resume.pdf',applicationKey:queue.jobs[0]!.key};
     input.onResumeUpload!(receipt);
     assert.equal(JSON.parse(readFileSync(join(root, "jobs.json"), "utf8")).jobs[0].resumeExpected, true);
     assert.deepEqual(JSON.parse(readFileSync(join(root, "jobs.json"), "utf8")).jobs[0].resumeUpload, receipt);
     observed.resolve();
+    await finishGrant.promise;
+    signal.throwIfAborted();
     throw new Error("upload removed its input");
   });
-  queue.configure(applicantProfile({given_name: "Fixture", family_name: "Applicant", email_address: "fixture@example.invalid"}), Buffer.from("%PDF-fixture").toString("base64"));
+  const owner = {given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid",city:"Pinned"};
+  const facts = (manifest: unknown) => parseApplicationProfile((manifest as {profile:unknown}).profile).facts;
+  const consent = (manifest: unknown) => facts(manifest).find(fact => fact.factId === "ai_evaluation_consent")?.value;
+  const pdf = Buffer.from("%PDF-fixture").toString("base64");
+  queue.configure(applicantProfile({...owner,ai_evaluation_consent:"true"}), pdf);
   const [job] = queue.add([{url}]);
+  const selected = queue.add([{url:"https://jobs.jobvite.com/fixture/job/abc/apply",sourceJobId:52,
+    resumeVersion:"v2",resumeBase64:pdf}],{paused:true,currentPageHandoff:true})[0]!;
+  const savedInputs = [job!,selected].map(draft => readFileSync(join(root,draft.id+".input.json"),"utf8"));
+  assert.equal(consent(queue.currentPageInput(selected).profile),true);
   await observed.promise;
+  queue.configureApplicant({...owner,ai_evaluation_consent:"false"});
+  assert.equal(pendingGrantSignal?.aborted,true);
+  assert.match(pendingGrantSignal?.reason.message,/consent changed/);
+  finishGrant.resolve();
   await queue.close();
-  const retried = deferred<{resumeExpected?:boolean;resumeUpload?:unknown}>();
-  const restored = new ApplicationQueue(root, bridge, async (_page, input) => {
+  const retried = deferred<ProductInput>(), pendingConsent = deferred<void>();
+  let staleWrite = false;
+  const restored = new ApplicationQueue(root, bridge, async (_page, input, signal) => {
     retried.resolve(input);
+    await pendingConsent.promise;
+    signal.throwIfAborted();
+    staleWrite = true;
     throw new Error("resume input still missing");
   });
   try {
+    restored.configureApplicant({...owner,city:"Changed",ai_evaluation_consent:"false"});
     await restored.action(job!.id, "retry");
     const input=await retried.promise;
     assert.equal(input.resumeExpected, true);assert.deepEqual(input.resumeUpload,receipt!);
-  } finally { await restored.close(); }
+    assert.equal(consent(input.profile),false);
+    assert.equal(input.resume.toString("base64"),pdf);
+    const pinnedFacts = facts(JSON.parse(savedInputs[0]!).profile).filter(f => f.factId !== "ai_evaluation_consent");
+    assert.deepEqual(facts(input.profile).filter(f => f.factId !== "ai_evaluation_consent"),pinnedFacts);
+    assert.equal(consent(restored.currentPageInput(selected).profile),false);
+    restored.configureApplicant({...owner,ai_evaluation_consent:""});
+    const cleared = restored.currentPageInput(selected);
+    assert.equal(consent(cleared.profile),undefined);
+    assert.equal(cleared.resume,pdf);
+    assert.deepEqual(facts(cleared.profile),pinnedFacts);
+    assert.deepEqual([job!,selected].map(draft => readFileSync(join(root,draft.id+".input.json"),"utf8")),savedInputs);
+  } finally { pendingConsent.resolve(); await restored.close(); }
+  assert.equal(staleWrite,false);
   assert.equal(restored.jobs[0]!.status, "paused");
+  assert.match(restored.jobs[0]!.error!,/consent changed/);
 });
 
 test("shutdown drains or bounds pending runner and Review opens and releases late sessions", async () => {

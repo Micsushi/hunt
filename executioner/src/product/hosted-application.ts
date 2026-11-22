@@ -151,12 +151,12 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           options:f.options,required:f.required,outcome:'observed',constraints:{inputType:f.inputType,
             min:f.min,max:f.max,step:f.step,minLength:f.minLength,maxLength:f.maxLength,pattern:f.pattern,readOnly:f.readOnly}};
         matching.record(matchObservation);
+        if (!f.required) { known.set(identity,'optional'); continue; }
         if (protectedQuestionCategory(f.label, undefined, f.options) === 'consent' && !isRecruitmentTermsConsent(f.label) && !isAiEvaluationConsent(f.label)) {
           const answered = f.kind==='checkbox' ? f.checked : !!f.value.trim();
-          if(answered || !f.required){known.set(identity,answered?'existing':'optional');continue;}
+          if(answered){known.set(identity,'existing');continue;}
           throw new ApplicationPause('This application requires a consent decision. Choose it yourself on the employer page, then retry.');
         }
-        if (!f.required) { known.set(identity,'optional'); continue; }
         if (f.buttonConflict) throw new ApplicationPause('The employer shows an inconsistent choice. Inspect it before retrying.');
         if (f.kind === 'file') {
           if (f.resumeTarget && currentFields.filter(field=>field.resumeTarget).length!==1) {
@@ -338,6 +338,9 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           answerKind:plan.answerKind,lane:plan.lane,result:expected === null ? plan.reason : 'resolved'});
         if (expected === null) {
           if (f.kind === 'combobox') await loc.press('Escape');
+          if (plan.reason === 'protected_answer_denied' && isAiEvaluationConsent(f.label)) {
+            throw new ApplicationPause('This application requires an AI evaluation consent decision. Review your saved preference or choose on the employer page, then retry.');
+          }
           known.set(identity, f.value && f.valid ? `existing:${f.value}` : 'unanswered');
           continue;
         }
@@ -359,6 +362,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
           throw new ApplicationPause('This selection differs from your saved answer. Review the checked choices before retrying.');
         }
         matching.record(pendingMatch);
+        signal.throwIfAborted();
         if(f.kind==='radio') {const radios=page.locator(`input[type=radio][name=${JSON.stringify(f.name)}]`);const index=options.indexOf(String(expected));if(index<0||options.lastIndexOf(String(expected))!==index)throw new ApplicationPause('Radio choice is ambiguous.');const radio=radios.nth(index);if(await radio.getAttribute('aria-hidden')==='true')await radio.locator('xpath=ancestor::label[1]').click();else await radio.check();if(!await radios.nth(index).evaluate((e:HTMLInputElement)=>e.closest('[role=radio]')?e.closest('[role=radio]')!.getAttribute('aria-checked')==='true':e.checked))throw new ApplicationPause('The radio answer did not persist.');}
         else if(f.kind==='multicheck'){const index=options.indexOf(String(expected));if(index<0)throw new ApplicationPause('Checkbox group answer is missing.');const boxes=loc.locator('input[type=checkbox]');const box=boxes.nth(index);if(await box.getAttribute('aria-hidden')==='true')await box.locator('xpath=ancestor::*[@role="checkbox"][1]').click();else await box.setChecked(true);if(!await box.evaluate((e:HTMLInputElement)=>e.closest('[role=checkbox]')?e.closest('[role=checkbox]')!.getAttribute('aria-checked')==='true':e.checked))throw new ApplicationPause('Checkbox group answer did not persist.');}
         else if(f.kind==='buttons') { await loc.getByRole('button',{name:String(expected),exact:true}).click(); if((await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label)?.value!==expected)throw new ApplicationPause('The selected answer did not persist.'); }

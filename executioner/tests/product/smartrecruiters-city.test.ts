@@ -335,6 +335,27 @@ test('direct screening fills reversible listboxes and leaves radios to the queue
         assert.equal(await page.evaluate(()=>(globalThis as any).consentUpdates),0);
       } finally {disposeResumeArtifact(sources.resumeIntent.artifact);}
     }
+    await page.locator('spl-checkbox').evaluate(host=>{
+      host.querySelector('[slot=label-content]')!.textContent='I consent to automated screening of my application.';
+    });
+    await page.locator('input[type=checkbox]').uncheck();
+    const aiRow=(await snapshot()).find(row=>row.control==='checkbox')!;
+    const grantedProfile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'true'});
+    const aiSources=productSources(grantedProfile,Buffer.from('%PDF-fixture'));
+    try {
+      const planner=createPageAnswerPlanner(aiSources,effectiveProfileFacts(grantedProfile),'Fixture');
+      const grant=await planner(aiRow,[aiRow],AbortSignal.timeout(5000));
+      assert.equal(grant.aiConsentDecision,true);
+      await page.evaluate(fillVisibleFields,{matchingPlans:[grant]});
+      assert.equal(await page.locator('input[type=checkbox]').isChecked(),true);
+      await page.evaluate(fillVisibleFields,{action:'undo' as const});
+      for(const decision of [false,null]) {
+        await assert.rejects(page.evaluate(fillVisibleFields,{action:'redo' as const,aiConsentDecision:decision}),/fresh check/);
+        assert.equal(await page.locator('input[type=checkbox]').isChecked(),false);
+      }
+      await page.evaluate(fillVisibleFields,{action:'redo' as const,aiConsentDecision:true});
+      assert.equal(await page.locator('input[type=checkbox]').isChecked(),true);
+    } finally {disposeResumeArtifact(aiSources.resumeIntent.artifact);}
     const untouched=await page.evaluate(fillVisibleFields,{matchingPlans:[]});
     const observation=untouched.matching?.find(row=>row.fieldId===checked.fieldId);
     assert.ok(observation);
