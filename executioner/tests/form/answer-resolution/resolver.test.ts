@@ -150,7 +150,18 @@ test("valid committed values are preserved instead of overwritten", async () => 
   assert.equal(profile.calls.length, 0);
 });
 
-test("draft fallbacks select visible options and preserve other required attachments", async () => {
+test("draft choices respect a named country and preserve other required attachments", async () => {
+  const country = resolverWith({kind: 'answered', value: 'Canada', provenance: 'owner_provided', lane: 'live_owner_fact'});
+  const countryOptions = (labels: string[]) => field('Country', 'listbox',
+    labels.map((label, index) => ({id: optionId(String(index)), label: boundedText(label)})));
+  const resolveCountry = (labels: string[]) => country.resolver.resolve(
+    {...request(countryOptions(labels)), answerFallbackPolicy: 'deterministic_site_valid_editable'}, new AbortController().signal);
+  const matched = await resolveCountry(['United States +1', 'Canada +1', 'United Kingdom +44']);
+  assert.ok(matched.ok && matched.value.kind === 'resolved' && matched.value.intent.kind === 'choice');
+  assert.equal(matched.value.lane, 'live_owner_fact');
+  assert.equal(matched.value.intent.expectedOption, 'Canada +1');
+  const duplicate = await resolveCountry(['United States +1', 'Canada +1', 'Canada (+1)']);
+  assert.ok(duplicate.ok && duplicate.value.kind === 'option_ambiguous');
   const profile = createProfileQueryFake({
     query: { ok: true, value: { kind: "profile_answer_missing" } },
   });
