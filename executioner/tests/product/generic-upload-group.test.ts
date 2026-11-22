@@ -70,9 +70,20 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
       unrelated.innerHTML = '<label>Portfolio<input required type="file"></label>';
       document.body.append(unrelated);
     });
-    const missing = (report:{skipped:{label:string;reason:string}[]}) => report.skipped.filter(row=>row.reason==='required_attachment_missing').map(row=>row.label);
+    const unresolved = (report:{skipped:{label:string;reason:string}[]}) => report.skipped.filter(row=>row.reason.startsWith('required_attachment_')).map(row=>row.label);
     const status = () => page.evaluate(fillVisibleFields,{action:'status' as const,facts});
-    assert.deepEqual(missing(await status()),['Cover Letter']);
+    assert.deepEqual(unresolved(await status()),['Cover Letter']);
+    for (const [markup,reason] of [
+      ['<a download href="/cover-letter-template.docx">Download cover letter template</a>','required_attachment_missing'],
+      ['<button type="button">Remove</button>','required_attachment_missing'],
+      ['<span role="progressbar">Uploading</span>','required_attachment_unconfirmed'],
+    ] as const) {
+      await page.locator('#cover').evaluate((owner,html)=>owner.insertAdjacentHTML('beforeend',html),markup);
+      const report=await status();
+      assert.equal(report.incomplete,true);
+      assert.ok(report.skipped.some(row=>row.label==='Cover Letter' && row.reason===reason),markup);
+      await page.locator('#cover > :last-child').evaluate(node=>node.remove());
+    }
     const partial = await fillMatchedPage({
       profile:applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),
       resume:pdf,url:page.url(),workflow:'C3.2',signal:AbortSignal.timeout(10000),
@@ -81,36 +92,39 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
       })}),
     });
     assert.equal(partial.incomplete,true);
-    assert.deepEqual(missing(partial),['Cover Letter']);
+    assert.deepEqual(unresolved(partial),['Cover Letter']);
     assert.deepEqual(await bytes(page,'extra'),[]);
     assert.deepEqual(await bytes(page,'resume'),[...pdf]);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.deepEqual(await bytes(page,'resume'),[]);
     const extra=page.locator('#extra');
     await extra.evaluate((e:HTMLInputElement)=>{e.required=false;});
-    assert.deepEqual(missing(await status()),[]);
+    assert.deepEqual(unresolved(await status()),[]);
     await extra.evaluate((e:HTMLInputElement)=>{e.required=true;});
     await page.locator('#cover button').evaluate((e:HTMLButtonElement)=>{e.disabled=true;});
-    assert.deepEqual(missing(await status()),[]);
+    assert.deepEqual(unresolved(await status()),[]);
     await page.locator('#cover button').evaluate((e:HTMLButtonElement)=>{e.disabled=false;});
     await page.locator('[name=coverLetterFileId]').evaluate((e:HTMLInputElement)=>{e.value='uploaded-file';});
-    assert.deepEqual(missing(await status()),[]);
+    assert.deepEqual(unresolved(await status()),[]);
+    await page.locator('#cover').evaluate(owner=>owner.insertAdjacentHTML('beforeend','<progress>Uploading</progress>'));
+    assert.ok((await status()).skipped.some(row=>row.label==='Cover Letter' && row.reason==='required_attachment_unconfirmed'));
+    await page.locator('#cover progress').evaluate(node=>node.remove());
     await page.locator('[name=coverLetterFileId]').evaluate((e:HTMLInputElement)=>{e.value='';});
     await extra.setInputFiles({name:'Letter.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-existing-letter')});
-    assert.deepEqual(missing(await status()),[]);
+    assert.deepEqual(unresolved(await status()),[]);
     await extra.setInputFiles([]);
     await extra.evaluate(e=>e.insertAdjacentHTML('afterend','<input type="hidden" name="documentType" value="coverLetter">'));
-    assert.deepEqual(missing(await status()),['Cover Letter'],'unrelated metadata cannot complete the upload');
+    assert.deepEqual(unresolved(await status()),['Cover Letter'],'unrelated metadata cannot complete the upload');
     await page.evaluate(()=> {
       document.querySelector('#cover')!.innerHTML='<div><label>Cover Letter<input required type="file"></label></div><input type="hidden" name="coverLetterFileId" value="fixture-file">';
     });
-    assert.deepEqual(missing(await status()),[],'the outer widget owns the completed attachment');
+    assert.deepEqual(unresolved(await status()),[],'the outer widget owns the completed attachment');
     await page.locator('#cover input[type=hidden]').evaluate(e=>e.outerHTML='<span data-upload-state="success">Uploaded</span>');
-    assert.deepEqual(missing(await status()),[],'the outer widget shows a completed attachment');
+    assert.deepEqual(unresolved(await status()),[],'the outer widget shows a completed attachment');
     await page.locator('#cover [data-upload-state]').evaluate((e:HTMLElement)=>{e.hidden=true;});
-    assert.deepEqual(missing(await status()),['Cover Letter'],'a hidden success template cannot complete the upload');
+    assert.deepEqual(unresolved(await status()),['Cover Letter'],'a hidden success template cannot complete the upload');
     await page.locator('#cover').evaluate(e=>e.outerHTML='<label for="direct-file">Cover Letter</label><input id="direct-file" required type="file">');
-    assert.deepEqual(missing(await status()),['Cover Letter'],'the form can directly own a labelled picker');
+    assert.deepEqual(unresolved(await status()),['Cover Letter'],'the form can directly own a labelled picker');
     assert.equal(await page.evaluate('submits'),0);
 
   }finally{await browser.close();}

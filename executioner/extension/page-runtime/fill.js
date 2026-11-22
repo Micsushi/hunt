@@ -445,10 +445,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if (applicationRegions.length===1 && applicationRegions[0] instanceof Element) {
         for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
           if (regionFor(input)!==applicationRegions[0] || !scopedControl(input)) continue;
-          const label=missingAttachmentLabel(input);
-          if (label) {
+          const attachment=unresolvedAttachment(input);
+          if (attachment) {
             if (action==='status' || !matchingRunId) result.incomplete=true;
-            addSkip(label,'required_attachment_missing');
+            addSkip(attachment.label,attachment.reason);
           }
         }
       }
@@ -468,7 +468,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return result;
     };
-    const { isRequired, missingAttachmentLabel } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
+    const { isRequired, unresolvedAttachment } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
     });
     const { observe:baseObserve } = createFieldObserver({

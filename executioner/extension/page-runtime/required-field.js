@@ -40,8 +40,8 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     return markedRequired(e, composedClosest, deepQuery);
   };
   // Observe extra documents without opening a chooser or touching their files.
-  const missingAttachmentLabel = input => {
-    if (!input.willValidate || (!input.validity.valueMissing && input.getAttribute('aria-required')!=='true') || input.files?.length ||
+  const unresolvedAttachment = input => {
+    if (!input.willValidate || (!input.required && input.getAttribute('aria-required')!=='true') ||
         composedClosest(input, '[inert],[aria-disabled=true]')) return;
     const shown = node => node.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
       !composedClosest(node,'[hidden],[inert],[aria-hidden=true]');
@@ -57,18 +57,22 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     }
     if (!label) return;
     label=label.replace(/[✱*]/g,'').trim();
-    // Only an attachment ID belonging to this picker can outweigh an empty native control.
+    // While an upload is pending, even a retained file or ID can belong to the previous selection.
     const compact=text=>text.toLowerCase().replace(/[^\p{L}\d]/gu,'');
     const attachmentIds=['fileid','uploadid','attachmentid'];
     const names=new Set([...attachmentIds,...attachmentIds.map(suffix=>compact(label)+suffix)]);
-    if (deepQuery(owner,'input[type=hidden][name]').some(node=>names.has(compact(node.name)) && !!node.value) ||
-        deepQuery(owner,'a[download],[data-upload-state=success],[role=progressbar],[aria-busy=true]').some(shown) ||
-        deepQuery(owner,'button').some(node=>shown(node) && /^(remove|delete)(?: file| attachment)?$/i.test((node.getAttribute('aria-label') || node.innerText).trim()))) return;
-    if (shown(input)) return label;
+    const pending='[role=progressbar],progress,[aria-busy=true],[data-upload-state=pending],[data-upload-state=uploading]';
+    if (owner.matches(pending) && shown(owner) || deepQuery(owner,pending).some(shown)) {
+      return {label,reason:'required_attachment_unconfirmed'};
+    }
+    const completed='[data-upload-state=success]';
+    if (input.files?.length || deepQuery(owner,'input[type=hidden][name]').some(node=>names.has(compact(node.name)) && !!node.value) ||
+        owner.matches(completed) && shown(owner) || deepQuery(owner,completed).some(shown)) return;
+    if (shown(input)) return {label,reason:'required_attachment_missing'};
     const triggers=deepQuery(owner,'button[type=button]').filter(button=>!button.matches(':disabled,[aria-disabled=true]') &&
       shown(button) && /^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test(button.innerText.trim()));
     const emptyNotice=deepQuery(owner,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
-    if (triggers.length===1 && emptyNotice) return label;
+    if (triggers.length===1) return {label,reason:emptyNotice ? 'required_attachment_missing' : 'required_attachment_unconfirmed'};
   };
-  return { isRequired, missingAttachmentLabel };
+  return { isRequired, unresolvedAttachment };
 }
