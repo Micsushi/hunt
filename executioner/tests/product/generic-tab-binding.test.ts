@@ -34,9 +34,9 @@ test('unfamiliar applications stay on the current page and old selected inputs r
   let verifiedUuid=uuid, lookups=0;
   globalThis.fetch=async(input,options)=>{
     if(String(input).startsWith(app.origin+'/'))return fetchLocal(input,options);
-    assert.equal(String(input),'https://api.smartrecruiters.com/v1/companies/'+company+'/postings/'+postingId);
+    assert.ok([postingId,uuid].some(key=>String(input)==='https://api.smartrecruiters.com/v1/companies/'+company+'/postings/'+key));
     lookups++;
-    return Response.json({id:postingId,uuid:verifiedUuid,company:{identifier:company},active:true});
+    return Response.json({id:postingId,uuid:verifiedUuid,postingUrl,company:{identifier:company},active:true});
   };
   try {
     app.queue.configure(profile,Buffer.from('%PDF-default').toString('base64'));
@@ -65,6 +65,15 @@ test('unfamiliar applications stay on the current page and old selected inputs r
       }
     }
     assert.equal(lookups,0);
+    // Older imports can retain only the numeric posting and the tailored PDF.
+    delete restored.selectedApplicationUrl;
+    for(const operation of ['fill','redo']) {
+      const response=await post('/browser/page',{tabId:8,expectedUrl:selectedApplicationUrl,documentId:'b'.repeat(64),operation});
+      assert.equal(response.status,400);
+      assert.match((await response.json()).error,/selected resume/);
+    }
+    assert.equal(lookups,2);
+    restored.selectedApplicationUrl=selectedApplicationUrl;
     const open=()=>post('/jobs/'+smartId+'/action',{action:'open'});
     assert.deepEqual(await (await open()).json(),{url:selectedApplicationUrl});
     verifiedUuid=randomUUID();
@@ -73,7 +82,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
       restored.selectedApplicationUrl=unsafe;
       assert.equal((await open()).status,400);
     }
-    assert.equal(lookups,2);
+    assert.equal(lookups,4);
     restored.selectedApplicationUrl=selectedApplicationUrl;
     for (const newUrl of ['https://jobs.jobvite.com/fixture/job/abc/apply',
       'https://jobs.smartrecruiters.com/Fixture/744000123456789-analyst',
