@@ -446,7 +446,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const submitters = [...form.getRootNode().querySelectorAll('button,input')].filter(e => e.form === form && e.type === 'submit' && visible(e));
         const [button] = submitters;
         if (submitters.length === 1 &&
-            /^(?:apply|submit(?: application)?|send application|envoyer la candidature)$/i.test((button.getAttribute('aria-label') || button.innerText || button.value || '').trim()) &&
+            [button.innerText, button.value, button.getAttribute('aria-label')].some(label =>
+              /^(?:apply|submit(?: application)?|send application|envoyer la candidature)$/i.test(label?.trim() ?? '')) &&
             (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
           // The matched workflow decides completeness from its last observation.
           if (action==='status' || !matchingRunId) result.incomplete = true;

@@ -15,7 +15,7 @@ test('Rippling final submission availability is read after the last fill across 
     const facts=effectiveProfileFacts(profile), resume=Buffer.from('%PDF-fixture');
     await page.route(url, route=>route.fulfill({contentType:'text/html',body:`
       <form><label>First name<input required value="Test"></label><label>Email<input type="email" required value="test@example.invalid"></label>
-        <label>Resume<input type="file"></label><button type="submit" aria-disabled="true">Apply</button></form>
+        <label>Resume<input type="file"></label><button type="submit" aria-label="Apply for this position" aria-disabled="true">Apply</button></form>
       <script>window.submits=0;document.querySelector('form').onsubmit=e=>{e.preventDefault();window.submits++;};</script>`}));
     await page.goto(url);
     const raw=await page.evaluate(fillVisibleFields,{action:'fill' as const,facts});
