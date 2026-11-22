@@ -19,7 +19,7 @@ import {
   type OperationId,
   type ProfileQuery,
 } from "../../../../src/contracts/index.ts";
-import type { ApplicationAnswerResolver } from
+import type { ApplicationAnswerResolver, ApplicationProfileQuery } from
   "../../../../src/form/answers/application-types.ts";
 import type {
   ClassificationLayer,
@@ -200,7 +200,7 @@ test("an injected owner answer can resolve an observed unknown question", async 
     ["populated", "65000", "CAD $65,000 per year", 65000, "Desired salary in USD per hour", "blocked"],
   ] as const) {
     const amounts: string[] = [];
-    const savedProfile: import("../../../../src/form/answers/application-types.ts").ApplicationProfileQuery = {
+    const savedProfile: ApplicationProfileQuery = {
       async query({factId}) {return {ok:true,value:{kind:"answered",provenance:"owner_provided",
         lane:"live_owner_fact",value:factId === "desired_salary" ? numeric : formatted}};},
     };
@@ -268,7 +268,7 @@ test("preserved consent skips mutations and unknown consent cannot become an inj
   const approved = dependencies({profile:{async query(input) {
     queried.push(input.factId);
     return {ok:true,value:{kind:"answered",value:true,provenance:"owner_provided",lane:"live_owner_fact"}};
-  }}});
+  }} satisfies ApplicationProfileQuery});
   const aiConsent = field("ai-screening","I consent to automated screening of my application.","checkbox");
   const optional = {...aiConsent,required:false};
   const priorDecision = {...aiConsent,state:"populated" as const};
@@ -284,7 +284,7 @@ test("preserved consent skips mutations and unknown consent cannot become an inj
     const withheld = dependencies({profile:{async query() {
       return choice === undefined ? {ok:true,value:{kind:"profile_answer_missing"}} :
         {ok:true,value:{kind:"answered",value:choice,provenance:"owner_provided",lane:"live_owner_fact"}};
-    }}});
+    }} satisfies ApplicationProfileQuery});
     const result = await withheld.handler.complete(request([aiConsent]),new AbortController().signal);
     assert.ok(result.ok && result.value.kind === "blocked" && result.value.code === "protected_answer_denied");
     assert.equal(withheld.calls.driven,0);
