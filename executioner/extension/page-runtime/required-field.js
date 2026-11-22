@@ -45,23 +45,30 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
         composedClosest(input, '[inert],[aria-disabled=true]')) return;
     const shown = node => node.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
       !composedClosest(node,'[hidden],[inert],[aria-hidden=true]');
-    const ownLabel = rawLabelFor(input);
-    for (let group=composedParent(input); group && group!==regionFor(input); group=composedParent(group)) {
+    const ownLabel=rawLabelFor(input);
+    let label=otherAttachment(ownLabel) ? ownLabel : '';
+    let owner=input;
+    const region=regionFor(input);
+    for (let group=composedParent(input); group && group!==region && !group.matches('form,body,html'); group=composedParent(group)) {
       if (deepQuery(group,'input:not([type=hidden]),textarea,select').some(node=>node!==input)) break;
-      if (deepQuery(group,'input[type=hidden]').some(node=>node.value) ||
-          deepQuery(group,'a[download],[data-upload-state=success],[role=progressbar],[aria-busy=true]').length ||
-          deepQuery(group,'button').some(node=>/^(remove|delete)(?: file| attachment)?$/i.test((node.getAttribute('aria-label') || node.innerText).trim()))) return;
-      const lines=(group.innerText ?? '').split(/\n/).map(text=>text.trim()).filter(Boolean);
-      const label=[ownLabel,lines[0]].find(text=>text && otherAttachment(text));
-      if (!label) continue;
-      const pickerShown=shown(input);
-      const triggers=deepQuery(group,'button[type=button]').filter(button=>!button.matches(':disabled,[aria-disabled=true]') &&
-        shown(button) && /^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test(button.innerText.trim()));
-      const emptyNotice=deepQuery(group,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
-      if (pickerShown || triggers.length===1 && emptyNotice) {
-        return label.replace(/[✱*]/g,'').trim();
-      }
+      owner=group;
+      const heading=(group.innerText ?? '').trim().split('\n')[0];
+      if (!label && otherAttachment(heading)) label=heading;
     }
+    if (!label) return;
+    label=label.replace(/[✱*]/g,'').trim();
+    // Only an attachment ID belonging to this picker can outweigh an empty native control.
+    const compact=text=>text.toLowerCase().replace(/[^\p{L}\d]/gu,'');
+    const attachmentIds=['fileid','uploadid','attachmentid'];
+    const names=new Set([...attachmentIds,...attachmentIds.map(suffix=>compact(label)+suffix)]);
+    if (deepQuery(owner,'input[type=hidden][name]').some(node=>names.has(compact(node.name)) && !!node.value) ||
+        deepQuery(owner,'a[download],[data-upload-state=success],[role=progressbar],[aria-busy=true]').some(shown) ||
+        deepQuery(owner,'button').some(node=>shown(node) && /^(remove|delete)(?: file| attachment)?$/i.test((node.getAttribute('aria-label') || node.innerText).trim()))) return;
+    if (shown(input)) return label;
+    const triggers=deepQuery(owner,'button[type=button]').filter(button=>!button.matches(':disabled,[aria-disabled=true]') &&
+      shown(button) && /^(?:choose|select|browse)(?: a)? files?[✱*]?$/i.test(button.innerText.trim()));
+    const emptyNotice=deepQuery(owner,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
+    if (triggers.length===1 && emptyNotice) return label;
   };
   return { isRequired, missingAttachmentLabel };
 }

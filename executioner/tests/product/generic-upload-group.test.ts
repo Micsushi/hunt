@@ -98,6 +98,19 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     await page.locator('[name=coverLetterFileId]').evaluate((e:HTMLInputElement)=>{e.value='';});
     await extra.setInputFiles({name:'Letter.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-existing-letter')});
     assert.deepEqual(missing(await status()),[]);
+    await extra.setInputFiles([]);
+    await extra.evaluate(e=>e.insertAdjacentHTML('afterend','<input type="hidden" name="documentType" value="coverLetter">'));
+    assert.deepEqual(missing(await status()),['Cover Letter'],'unrelated metadata cannot complete the upload');
+    await page.evaluate(()=> {
+      document.querySelector('#cover')!.innerHTML='<div><label>Cover Letter<input required type="file"></label></div><input type="hidden" name="coverLetterFileId" value="fixture-file">';
+    });
+    assert.deepEqual(missing(await status()),[],'the outer widget owns the completed attachment');
+    await page.locator('#cover input[type=hidden]').evaluate(e=>e.outerHTML='<span data-upload-state="success">Uploaded</span>');
+    assert.deepEqual(missing(await status()),[],'the outer widget shows a completed attachment');
+    await page.locator('#cover [data-upload-state]').evaluate((e:HTMLElement)=>{e.hidden=true;});
+    assert.deepEqual(missing(await status()),['Cover Letter'],'a hidden success template cannot complete the upload');
+    await page.locator('#cover').evaluate(e=>e.outerHTML='<label for="direct-file">Cover Letter</label><input id="direct-file" required type="file">');
+    assert.deepEqual(missing(await status()),['Cover Letter'],'the form can directly own a labelled picker');
     assert.equal(await page.evaluate('submits'),0);
 
   }finally{await browser.close();}
