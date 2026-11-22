@@ -70,7 +70,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
   const profile = fixtureApplicantProfile({given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid"});
   const fill = () => fillApplication(page, {url, profile, resume:pdf}, AbortSignal.timeout(15000), () => {});
   await page.route(url, route => {
-    const item = `<div data-automation-id="file-upload-item" data-upload-state="success"><a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a></div>`;
+    const item = `<div data-automation-id="file-upload-item" ${restored ? '' : 'data-upload-state="success"'}><a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a>${restored ? '<span data-automation-id="file-upload-successful">Uploaded</span>' : ''}</div>`;
     const fixture = applicationFixture.replace("profile();", `questions();
       root.querySelector('section').innerHTML = '<div role="group" aria-label="Other application documents"><label>Other details<input></label>' +
         '<div data-automation-id="formField-attachment"><label id="file-title" for="picker">${label}</label>' +

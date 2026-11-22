@@ -58,18 +58,23 @@ export function readUploadOwnerLabels(inputs) {
         for (const child of children(node)) visit(child);
       };
       visit(group);
+      const preceding = group.matches('.application-field') && group.previousElementSibling?.matches('.application-label') ? group.previousElementSibling : null;
+      if (preceding) headings.push(preceding);
       if (controls.length!==1 || controls[0]!==input) {
         // A file group may also own a notes input. Its explicit title can veto a
         // contradictory picker, but cannot establish a positive resume binding.
-        if (group.matches('[role=group][aria-labelledby]') && controls.filter(node=>node.matches('input[type=file]')).length===1) {
+        if (controls.filter(node=>node.matches('input[type=file]')).length===1) {
           names(group);
+          for (const title of headings.filter(node=>node.parentElement===group || node===preceding)) {
+            names(title);
+            labels.push(title.textContent || '');
+          }
         }
         break;
       }
       names(group);
       if (group.getClientRects().length && group.checkVisibility({visibilityProperty:true,opacityProperty:true}) &&
           !group.closest('[hidden],[inert],[aria-hidden=true]')) visibleHeadings.push(group.getAttribute('aria-label') || '');
-      if (group.matches('.application-field') && group.previousElementSibling?.matches('.application-label')) headings.push(group.previousElementSibling);
       for (const title of headings) {
         names(title);
         const text=title.textContent || '';

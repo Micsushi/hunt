@@ -5,6 +5,11 @@ export type AtsFamily = "workday" | "greenhouse" | "lever" | "ashby" | "workable
 // Persisted rows can retain either public Amazon hostname after an upgrade.
 export const canonicalPostingKey = (key: string) => key.replace(/^www\.amazon\.jobs(?=\/jobs\/\d+$)/u, 'amazon.jobs');
 
+// Do not send a default PDF where an ambiguous spelling could identify a saved draft.
+export function possiblePostingAlias(key: string): string {
+  return canonicalPostingKey(key).toLowerCase().replace(/^ats\.us1\.rippling\.com\//u, 'ats.rippling.com/');
+}
+
 /** Explicit unfamiliar application targets. These never use the hosted Review or Submit path. */
 export function genericApplicationTarget(input: string): {
   url: string; key: string; host: string; posting: string; ats: "generic";

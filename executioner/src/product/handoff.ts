@@ -1,14 +1,9 @@
 import { createHash } from 'node:crypto';
-import { applicationTarget, canonicalPostingKey, productApplicationTarget } from './target.ts';
+import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget } from './target.ts';
 import { smartRecruitersPostingForApplication, smartRecruitersPublication } from './smartrecruiters-target.ts';
 import type { ProductJob } from './queue.ts';
 
 export const handoffMaxBytes = 32 * 1024 * 1024;
-// Do not send a default PDF where an ambiguous spelling could identify a saved draft.
-function possiblePostingAlias(key: string): string {
-  return canonicalPostingKey(key).toLowerCase().replace(/^ats\.us1\.rippling\.com\//u, 'ats.rippling.com/');
-}
-
 export interface HandoffJob {
   url: string; title: string; sourceJobId: number; resumeName: string;
   resumeVersion: string; resumeBase64: string; resumeSha256: string;

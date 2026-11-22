@@ -163,6 +163,10 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal((await operate('inspect',11,amazon)).status,200);
     assert.equal((await operate('fill',11,amazon)).status,200);
     assert.equal(selectedBytes,resume.toString('base64'));
+    await app.queue.action(selected.id,'remove');
+    const [variant] = await (await post('/handoff/import-paused',bundleFor(selectedUrl.replace('/fixture/','/Fixture/'),131))).json();
+    assert.ok(variant.pageHandoff);
+    await assert.rejects(app.queue.action(selected.id,'restore'),/already been added/);
 
     assert.equal(app.queue.jobs[0]!.status,'paused');
     assert.equal(app.queue.jobs[0]!.resumeVersion,'v18');

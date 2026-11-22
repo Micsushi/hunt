@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
-import { applicationTarget, canonicalPostingKey, productApplicationTarget } from "./target.ts";
+import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { applicantProfile, productSources, effectiveProfileFacts } from "./sources.ts";
@@ -323,7 +323,7 @@ export class ApplicationQueue {
       job.status = "queued"; job.stage = "Queued"; delete job.error; delete job.componentFailure; delete job.reviewDigest; this.changed(job); this.safePump(); return;
     }
     if (action === "remove" || action === "restore") {
-      if (action === "restore" && this.jobs.some(other => other.id !== id && canonicalPostingKey(other.key) === canonicalPostingKey(job.key) && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
+      if (action === "restore" && this.jobs.some(other => other.id !== id && possiblePostingAlias(other.key) === possiblePostingAlias(job.key) && other.status !== "removed")) throw new Error("This job has already been added again. Remove the newer entry before restoring this one.");
       if (action === "remove" && !["paused", "queued", "review"].includes(job.status) || action === "restore" && job.status !== "removed" || this.running.has(id) || this.reviewActions.has(id)) throw new Error("Wait for the job to pause and its review to finish before removing it.");
       job.status = action === "remove" ? "removed" : "paused"; job.stage = action === "remove" ? "Removed" : "Restored. Retry when ready"; this.changed(job); return;
     }

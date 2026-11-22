@@ -172,7 +172,7 @@ export async function startProductServer(options: { root?: string; port?: number
         }
         if (prior && !selected && prior.url !== url.href &&
             queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused')) {
-          throw new Error('This page no longer identifies the selected job. Open its posting from Applications.');
+          throw new Error('This tab is linked to a saved application. Reopen its posting from Applications, or use a new tab for another job.');
         }
         if (selected) {
           if (activeHandoffs.has(selected.id)) throw new Error('C3 is operating this application in another tab.');
