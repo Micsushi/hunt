@@ -27,7 +27,7 @@ import { get, post } from '@/api/client'
 import {
   downloadApplicationHandoff,
   sendApplicationsToBrowser,
-  isGenericApplicationUrl,
+  supportsQueuedApplication,
 } from '@/api/c3'
 import { browserC3, usesBrowserC3, type BrowserC3Status } from '@/api/browserC3'
 
@@ -352,9 +352,7 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     }
   }, [])
   // Match the handoff gateway's families; it also validates the posting URL and resume.
-  const generic = isGenericApplicationUrl(job.apply_url)
-  const supported =
-    generic || ['workday', 'greenhouse', 'lever', 'ashby', 'workable'].includes(job.ats_type ?? '')
+  const supported = supportsQueuedApplication(job.ats_type, job.apply_url)
   const connection = useQuery({
     queryKey: ['c3-job', job.id],
     queryFn: () =>
@@ -384,7 +382,7 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     : job.discovery_suppressed_reason
       ? 'This job is excluded from discovery.'
       : !supported
-        ? 'This application link is not supported. Open the employer page to review it.'
+        ? 'Open the employer application and choose Fill current page in the Hunt extension.'
         : job.apply_type !== 'external_apply'
           ? 'An external application is required.'
           : !['done', 'done_verified'].includes(job.enrichment_status ?? '')

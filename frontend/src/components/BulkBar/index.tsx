@@ -10,7 +10,7 @@ import { Link, useNavigate } from 'react-router-dom'
 
 type HandoffOutcome = {
   sourceJobId: number
-  status: 'confirmed' | 'unconfirmed' | 'not_sent' | 'rejected'
+  status: 'confirmed' | 'unconfirmed' | 'not_sent' | 'rejected' | 'current_page'
 }
 type HandoffResult = { selection: Set<number>; outcomes: HandoffOutcome[]; message: string }
 
@@ -80,10 +80,13 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
     if (action === 'apply') setResult(null)
     try {
       if (action === 'download-applications') {
-        await downloadApplicationHandoff(ids)
+        const exported = await downloadApplicationHandoff(ids)
+        const skipped = ids.filter((id) => !exported.includes(id))
         if (active.current)
           showToast(
-            'Download started. In your local C3 workspace, open Applications and import this file.',
+            skipped.length
+              ? `Download started for ${exported.length} of ${ids.length} selected jobs. Use Fill current page for jobs ${skipped.join(', ')}.`
+              : 'Download started. In your local C3 workspace, open Applications and import this file.',
           )
         return
       }
@@ -93,7 +96,12 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
           if (active.current) {
             setResult({
               selection: selectedIds,
-              outcomes: ids.map((sourceJobId) => ({ sourceJobId, status: 'confirmed' })),
+              outcomes: ids.map((sourceJobId) => ({
+                sourceJobId,
+                status: transferred.jobs.some((job) => job.sourceJobId === sourceJobId)
+                  ? 'confirmed'
+                  : 'current_page',
+              })),
               message: transferred.workspaceOpened
                 ? 'Applications added paused. Continue in the local C3 workspace.'
                 : 'Applications added paused. In Hunt C3, choose Open workspace.',
@@ -235,6 +243,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
                       confirmed: 'Confirmed in Applications',
                       unconfirmed: 'Not confirmed. Check Applications.',
                       not_sent: 'Not sent',
+                      current_page: 'Use Fill current page on the employer site.',
                       rejected: 'Rejected. Open the job to resolve the issue.',
                     }[item.status]
                   }

@@ -82,33 +82,7 @@ async def forward(method: str, path: str, content: bytes = b"") -> Response:
     )
 
 
-def generic_posting(host: str, route: str) -> bool:
-    """Keep explicit unfamiliar targets aligned with C3's product target validator."""
-    patterns = {
-        "ats.rippling.com": r"(?i:/[\w-]+/jobs/[a-f0-9-]{36}(?:/apply)?)",
-        "ats.us1.rippling.com": r"(?i:/[\w-]+/jobs/[a-f0-9-]{36}(?:/apply)?)",
-        "jobs.jobvite.com": r"/[\w-]+/job/[\w-]+(?:/apply)?",
-        "job-boards.anz.greenhouse.io": r"/[\w-]+/jobs/\d+",
-        "forms-formulaires.alpha.canada.ca": r"/(?:en|fr)/id/[\w-]+",
-        "canonical.com": r"/careers/\d+(?:/[\w-]+(?:/application)?)?",
-        "jobs.smartrecruiters.com": (
-            r"/(?:[\w-]+/\d+(?:-[\w-]+)?|(?i:oneclick-ui/company/[\w-]+/publication/[a-f0-9-]{36}))"
-        ),
-        "www.amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
-        "amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
-    }
-    if host.endswith(".bamboohr.com"):
-        pattern = r"/careers/\d+"
-    elif host.endswith(".applytojob.com"):
-        pattern = r"/apply/[\w-]+(?:/[\w-]+)?"
-    elif host.endswith(".recruitee.com"):
-        pattern = r"/o/[\w-]+(?:/c/new)?"
-    else:
-        pattern = patterns.get(host)
-    return bool(pattern and re.fullmatch(pattern + r"/?", route, re.ASCII))
-
-
-def prepared_jobs(job_ids: list[int]) -> list[dict]:
+def prepared_jobs(job_ids: list[int], *, export: bool = False) -> list[dict]:
     from fletcher.resume.review_store import read_selected_resume_pdf
     from hunter.db import get_connection, get_job_by_id
 
@@ -117,6 +91,13 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
         job = get_job_by_id(job_id)
         if not job:
             raise HTTPException(404, f"Job {job_id} was not found.")
+        family = job.get("ats_type")
+        if family not in ("workday", "workable", "greenhouse", "lever", "ashby"):
+            if export:
+                continue
+            raise HTTPException(
+                409, f"Open job {job_id} on the employer site and choose Fill current page."
+            )
         if str(job.get("status") or "").strip().lower() in (
             "applied",
             "canceled",
@@ -172,7 +153,6 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
                 409, f"Job {job_id} needs a verified supported posting link."
             ) from None
         host, route = target.hostname or "", target.path
-        family = job.get("ats_type")
         supported = (
             family == "workday"
             and re.fullmatch(
@@ -200,7 +180,7 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
             or target.username
             or target.password
             or target.netloc != host
-            or not (supported or generic_posting(host, route))
+            or not supported
             or re.search(r"%2f|%5c", route, re.I)
         ):
             raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.")
@@ -224,6 +204,10 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
                 "resumeBase64": base64.b64encode(pdf).decode("ascii"),
             }
         )
+    if not result:
+        raise HTTPException(
+            409, "Open these applications on their employer sites and choose Fill current page."
+        )
     return result
 
 
@@ -241,7 +225,9 @@ def selected_job_ids(body: object) -> list[int]:
 @router.post("/handoff/export")
 async def export_handoff(request: Request):
     require_same_origin(request)
-    jobs = await run_in_threadpool(prepared_jobs, selected_job_ids(await request.json()))
+    jobs = await run_in_threadpool(
+        prepared_jobs, selected_job_ids(await request.json()), export=True
+    )
     for job in jobs:
         job["title"] = job["title"][:500]
         if any(

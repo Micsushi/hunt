@@ -107,6 +107,25 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
 
     monkeypatch.setattr(c3, "forward", forward)
     browser = client()
+    if ats not in ("workday", "greenhouse", "lever", "ashby", "workable"):
+        for route in ("/api/c3/handoff", "/api/c3/handoff/export"):
+            declined = browser.post(route, json={"job_ids": [1, 2]})
+            assert declined.status_code == 409
+            assert "Fill current page" in declined.json()["detail"]
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "UPDATE jobs SET ats_type='greenhouse',apply_url=? WHERE id=2",
+                (urls["greenhouse"],),
+            )
+        mixed = browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]})
+        assert mixed.status_code == 200
+        assert [j["sourceJobId"] for j in mixed.json()["jobs"]] == [2]
+        assert (
+            base64.b64decode(mixed.json()["jobs"][0]["resumeBase64"])
+            == b"%PDF-1.4 selected resume 2"
+        )
+        assert not calls
+        return
     response = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
     assert response.status_code == 200
     assert [base64.b64decode(j["resumeBase64"]) for j in calls] == [
@@ -235,7 +254,7 @@ def test_handoff_export_rejects_oversize_bundle_before_returning_file(monkeypatc
     monkeypatch.setattr(
         c3,
         "prepared_jobs",
-        lambda ids: [
+        lambda ids, **options: [
             {
                 "title": "Fixture",
                 "resumeName": "resume.pdf",
