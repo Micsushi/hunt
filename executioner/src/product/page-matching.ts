@@ -108,8 +108,11 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
     const {componentFailure: lastFailure, ...report} = result;
     const failure = lastFailure?.component === 'page_state' ? lastFailure :
       firstFailure ?? (result.skipped.some(skip => skip.componentFailure) ? undefined : lastFailure);
-    return {...report, filled: [...filled], skipped: remaining, ...(failure ? {componentFailure: failure} : {}),
-      needsOwnerReview: backlog.needsReview || result.incomplete === true};
+    // A form with no observed fields and no identifiable upload target cannot confirm a fill.
+    const emptyForm = !seen.size && !filled.size && remaining.some(skip => skip.reason === 'resume_control_not_identified');
+    const incomplete = result.incomplete === true || emptyForm;
+    return {...report, incomplete, filled: [...filled], skipped: remaining, ...(failure ? {componentFailure: failure} : {}),
+      needsOwnerReview: backlog.needsReview || incomplete};
   } finally {disposeResumeArtifact(sources.resumeIntent.artifact);}
 }
 
