@@ -175,6 +175,23 @@ fields: [
     assert.equal(snapshot.rows.filter(({ section }) => section === "skills").length, 1);
     assert.equal(snapshot.rows.find(({ section }) => section === "skills")
       ?.controls[0]?.readback, "TypeScript");
+    const employerDegree = "Bachelor’s / Undergraduate Degree (3-4 year degree equivalent e.g., BA, BS, LLB, etc.)";
+    for (const duplicate of [false, true]) {
+      await page.goto("about:blank");
+      await page.setContent(fixture.replace("Mathematics", employerDegree));
+      if (duplicate) await page.locator("#education-0-degree-options").evaluate(node =>
+        node.insertAdjacentHTML("beforeend", '<div role="option">Bachelor’s Degree</div>'));
+      const fresh = new PlaywrightWorkdayProfilePage(page, {pageType:"profile"});
+      const degree = (await fresh.inspect(AbortSignal.any([]))).rows.flatMap(row => row.controls)
+        .find(control => control.fieldId === "education.degree")!;
+      const commit = fresh.commit({controlId:degree.controlId, uiBehavior:degree.uiBehavior, value:"Bachelor of Science"}, AbortSignal.any([]));
+      if (duplicate) await assert.rejects(commit, /selectable leaf is ambiguous/u);
+      else {
+        await commit;
+        assert.equal(fresh.interaction(degree.controlId)?.backingValueCommitted, true);
+      }
+      assert.equal(await page.locator('[data-automation-id="education-0--degree"]').getAttribute("data-selected-label"), duplicate ? "" : employerDegree);
+    }
   } finally {
     await browser.close();
   }
