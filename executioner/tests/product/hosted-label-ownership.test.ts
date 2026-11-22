@@ -14,13 +14,15 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
     await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:`
       <form><label>Name<input required></label><label>Email<input type="email" required></label>
       <li class="application-question resume"><label>
-        <div class="application-label">Resume/CV<span class="required">*</span></div>
+        <div class="application-label">Resume/CV<span class="required" role="img" aria-label="Required">*</span></div>
+        <span class="help-icon" role="img" aria-label="PDF, DOCX"></span>
         <div class="application-field"><a class="visible-resume-upload" href="#"><span class="filename"></span><span class="default-label">Attach Resume/CV</span>
-          <input type="file" id="resume-upload-input" name="resume" data-qa="input-resume" style="opacity:0"></a>
+          <input type="file" id="resume-upload-input" name="resume" data-qa="input-resume" aria-describedby="resume-format parse-status" style="opacity:0"></a>
           <span class="resume-upload-failure" style="display:none">Couldn't auto-read resume.</span>
-          <span class="resume-upload-working" style="display:none">Analyzing resume...</span>
+          <span id="parse-status" class="resume-upload-working" style="display:none">Analyzing resume...</span>
           <span class="resume-upload-success" style="display:none">Success!</span></div>
-      </label></li>
+      </label><p id="resume-format">Accepted file types: PDF, DOCX. Maximum size: 10 MB.</p>
+      <span class="resume-upload-oversize" hidden>File exceeds the maximum upload size of <b>100MB</b>. Please try a smaller size.</span></li>
       <span hidden id="other-document">Cover Letter</span>
       <div class="application-question">
         <label id="demographic" for="survey">Disability status</label>
@@ -113,6 +115,10 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
       ['.filename','text','Upload your transcript'],
       ['.filename','aria-label','Cover letter'],
       ['.resume-upload-success','text','Attach your academic transcript'],
+      ['.application-label .required','aria-label','Cover letter only'],
+      ['.help-icon','aria-label','Cover letter only'],
+      ['input[name=resume]','aria-describedby','resume-format other-document'],
+      ['li.resume','text','Attach your cover letter here'],
     ] as const) {
       await page.reload();
       await page.locator(selector).evaluate((node,[attribute,value])=>{
@@ -121,9 +127,17 @@ test('hosted labels exclude survey descriptions and requiredness stays with each
       },[attribute,value] as const);
       const conflict=selector+' '+attribute;
       assert.equal((await inspectHostedFields(page)).find(field=>field.kind==='file')?.resumeTarget,false,conflict);
+      if (selector==='.application-label .required' || selector==='.help-icon' || attribute==='aria-describedby' || selector==='li.resume') {
+        await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),/additional attachment/);
+        assert.equal(await resumeControl.evaluate((e:HTMLInputElement)=>e.files!.length),0,conflict);
+      }
       assert.notEqual((await fillPage()).resume,'verified',conflict);
       assert.equal(await resumeControl.evaluate((e:HTMLInputElement)=>e.files!.length),0,conflict);
     }
+    await resumeControl.setInputFiles({name:'Existing.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-existing')});
+    assert.notEqual((await fillPage()).resume,'verified');
+    await assert.rejects(fillApplication(page,{url,profile,resume:Buffer.from('%PDF-fixture')},AbortSignal.timeout(12000),()=>{}),/additional attachment/);
+    assert.equal(await resumeControl.evaluate(async(e:HTMLInputElement)=>e.files?.[0]?.text()),'%PDF-existing');
     assert.equal(await page.evaluate('window.submitted'),undefined);
   } finally { await browser.close(); }
 });

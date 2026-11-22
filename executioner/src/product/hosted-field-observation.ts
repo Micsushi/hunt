@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { uploadLabelKind, readUploadOwnerLabels } from '../../extension/page-runtime/upload-label.js';
-import { leverResumeTitle } from '../../extension/page-adapters/lever-resume.js';
+import { createLeverResumeTitleReader } from '../../extension/page-adapters/lever-resume.js';
 import { annotateQuestionContext } from '../../extension/question-context.js';
 import { ApplicationPause } from './application-contract.ts';
 
@@ -8,8 +8,8 @@ const controls = 'input:not([type=hidden]):not([type=submit]):not([type=button])
 
 export async function inspectHostedFields(page: Page) {
   await page.evaluate(annotateQuestionContext);
-  const wrappedTitle = await page.evaluateHandle(leverResumeTitle, undefined);
-  const fields = await page.locator(controls).evaluateAll((elements, wrappedTitle) => {
+  const titleReader = await page.evaluateHandle(createLeverResumeTitleReader);
+  const fields = await page.locator(controls).evaluateAll((elements, wrappedUploadTitle) => {
     const visible = (e: Element) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).display !== 'none';
     const clean = (s: string) => s.replace(/[✱*]/g, '').replace(/\s+/g, ' ').trim();
     const labelContent = (e: Element, includeAsterisk = false) => {
@@ -56,6 +56,7 @@ export async function inspectHostedFields(page: Page) {
       const referenceMatches=referenceIds.map(id=>[...(e.getRootNode() as Document|ShadowRoot).querySelectorAll(`[id="${CSS.escape(id)}"]`)]);
       const referenced=referenceMatches.every((matches,index)=>matches.length===1 || e.type==='file' && index>0 && !matches.length)?referenceMatches.flat():[];
       const ownLabels = [...e.labels ?? []];
+      const wrappedTitle = e.type === 'file' ? wrappedUploadTitle(e) : null;
       const nativeLabels = ownLabels.map(owner => wrappedTitle?.parentElement === owner && owner.control === e ? wrappedTitle : owner);
       const descriptiveIds = new Set((e.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean));
       const labelsOnly = referenced.filter(label => !descriptiveIds.has(label.id));
@@ -192,7 +193,7 @@ export async function inspectHostedFields(page: Page) {
         inputType: e.type, min: e.min === '' ? null : Number(e.min), max: e.max === '' ? null : Number(e.max), step: e.step === 'any' ? null : Number(e.step || '1'), minLength: e.minLength, maxLength: e.maxLength, pattern: e.pattern ?? '', readOnly: e.readOnly ?? false });
     }
     return out;
-  }, wrappedTitle).finally(() => wrappedTitle.dispose());
+  }, titleReader).finally(() => titleReader.dispose());
   if (fields === null) throw new ApplicationPause('A required choice has ambiguous controls. Inspect the application before retrying.');
   const owners = fields.some(field=>field.kind==='file')
     ? await page.locator('input[type=file][data-c3-hosted]').evaluateAll(readUploadOwnerLabels) : [];
