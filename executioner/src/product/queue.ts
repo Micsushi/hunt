@@ -15,7 +15,8 @@ import { componentFailure, recordComponentFailure, type ComponentFailure } from 
 
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
 
-const safeFailureStages = new Set(["Opening application", "Opening existing account sign-in", "Signing in",
+const workdayApplicationConnection = "Connecting to the Workday application";
+const safeFailureStages = new Set(["Opening application", "Opening employer account", workdayApplicationConnection, "Opening existing account sign-in", "Signing in",
   "Waiting for account page", "Continuing opened application", "Filling application", "Verifying application",
   "Checking application page", "Moving to the next page", "Checking application review",
   "Filling profile", "Uploading resume", "Answering questions"]);
@@ -356,6 +357,7 @@ export class ApplicationQueue {
           recordComponentFailure(error, "authentication", "prepare_account");
           throw error;
         });
+        job.stage = workdayApplicationConnection;
       }
       if (job.selectedDocument && !job.tabId) throw new ApplicationPause('Reopen Prepare on the selected Jobvite application before retrying.');
       const session = await this.bridge.open(job.url, job.tabId, !!job.selectedDocument || productApplicationTarget(job.url).ats === 'workday' && !!this.bridge.prepareAccount, job.selectedDocument).catch(error => {
@@ -392,12 +394,13 @@ export class ApplicationQueue {
             Buffer.from(JSON.stringify({schemaVersion:1,...runFailure(error,job.stage),componentFailure:job.componentFailure})));
         } catch { /* Diagnostics do not affect the paused job or release its tab. */ }
       }
+      const reachedWorkdayApplication = job.stage === workdayApplicationConnection;
       job.status = "paused"; job.stage = controller.signal.aborted ? "Paused" : "Needs attention";
       // Never retain Playwright errors containing DOM snippets or typed values.
       job.error = controller.signal.aborted
         ? controller.signal.reason instanceof ApplicationPause ? controller.signal.reason.message : "Paused. Your draft is preserved."
         : error instanceof ApplicationPause ? error.message
-        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? 'Chrome is protecting another extension on this tab. Complete employer sign-in manually in the same tab, then retry when C3 can access it.'
+        : error instanceof AttachmentFailure && error.code==='debugger_protected_extension' ? (reachedWorkdayApplication ? 'Workday opened the application. ' : '') + 'Chrome is protecting another extension on this tab. Retry when C3 can access the application.'
         : error instanceof AttachmentFailure && error.code==='attachment_viewport_unavailable' ? 'This tab has no usable page area. Resize or restore its browser window, then retry.'
         : error instanceof AttachmentFailure && error.code==='attachment_viewport_cleanup_pending' || error instanceof Error && error.message===viewportCleanupPending ? viewportCleanupPending
         : "C3 could not finish this page. Inspect the tab, then retry.";

@@ -577,7 +577,10 @@ manager frames. Reload the extension after updating it.
 The selected job, tab and document are checked before credential writes. Both fields
 are verified again before a single Sign In click. A lost response, changed form,
 security challenge or rejected sign-in pauses the draft rather than repeating account
-access. Account creation, password recovery and email verification remain manual.
+access. For a new account, C3 can create it and check the configured mailbox for
+employer verification. Password recovery requires the owner. If Workday opens
+the application and Chrome then protects another extension on that tab, C3
+reports the browser connection problem and preserves the draft.
 Application filling still stops for review before submission. Compatibility with a
 particular password manager requires a live check; fixture coverage alone is not proof.
 

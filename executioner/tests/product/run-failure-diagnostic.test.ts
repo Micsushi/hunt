@@ -24,9 +24,14 @@ test('failed viewport cleanup remains visible on the paused draft',async()=>{
 });
 
 test('attachment failures retain only fixed categories before opening any application',async()=>{
-  for(const [message,category] of [['Another debugger is already attached to the tab with id: 123.','debugger_already_attached'],['This tab is already running.','c3_attachment_busy'],['fixture secret unexpected value','attachment_unknown']]){
+  const protectedTab = 'Cannot access a chrome-extension:// URL of different extension';
+  for(const [message,category,accountOpened] of [
+    ['Another debugger is already attached to the tab with id: 123.','debugger_already_attached',false],
+    ['This tab is already running.','c3_attachment_busy',false],['fixture secret unexpected value','attachment_unknown',false],
+    [protectedTab,'debugger_protected_extension',true],[protectedTab,'debugger_protected_extension',false],
+  ] as const){
     const root=await mkdtemp(join(tmpdir(),'hunt-attach-failure-'));
-    const queue=new ApplicationQueue(root,{connected:true,open:async()=>{throw new AttachmentFailure(new Error(message));},release:async()=>{}},async()=>{assert.fail('No filling after attachment failure');});
+    const queue=new ApplicationQueue(root,{connected:true,...(accountOpened && {prepareAccount:async()=>{}}),open:async()=>{throw new AttachmentFailure(new Error(message));},release:async()=>{}},async()=>{assert.fail('No filling after attachment failure');});
     try{
       queue.configure(applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),Buffer.from('%PDF-fixture').toString('base64'));
       const [job]=queue.add([{url:'https://fixture.wd1.myworkdayjobs.com/Test/job/City/Job_R1'}]);
@@ -36,7 +41,12 @@ test('attachment failures retain only fixed categories before opening any applic
       const receipt=await readFile(join(dir,run!,'run-failure.json'),'utf8'),report=JSON.parse(receipt);
       assert.deepEqual(report.componentFailure,{component:'browser_interaction',operation:'open_tab'});
       assert.deepEqual(job!.componentFailure,report.componentFailure);
-      assert.equal(report.stage,'Opening application');assert.equal(report.operation,'browser.attach');assert.equal(report.category,category);
+      assert.equal(report.stage,accountOpened ? 'Connecting to the Workday application' : 'Opening application');assert.equal(report.operation,'browser.attach');assert.equal(report.category,category);
+      if (message===protectedTab) {
+        assert.equal(job!.error!.includes('Workday opened the application.'),accountOpened);
+        assert.match(job!.error!,/Chrome is protecting another extension/);
+        assert.doesNotMatch(job!.error!,/sign.in manually/i);
+      }
       assert.doesNotMatch(receipt,/fixture secret|tab with id|fixture@example/);
     }finally{await queue.close();await rm(root,{recursive:true,force:true});}
   }
