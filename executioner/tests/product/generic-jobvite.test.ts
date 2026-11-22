@@ -111,7 +111,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
   const profile = applicantProfile({given_name:'Fixture', family_name:'Applicant', email_address:'fixture@example.invalid'});
   const input = {url, profile, resume:Buffer.from(resume.base64,'base64')};
   try {
-    for (const mode of ['advance','slow','invalid','submit','stall','conflict','rejected','expanded-conflict','twice','ambiguous-disclosure','foreign-disclosure']) {
+    for (const mode of ['advance','slow','invalid','submit','stall','conflict','rejected','expanded-conflict','twice','ambiguous-disclosure','foreign-disclosure','retained-match','retained-other']) {
       const page = await browser.newPage();
       await fixture(page,true);
       await page.evaluate(mode => {
@@ -130,7 +130,7 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
         trigger.setAttribute('on-success','sendResume(type, res)');
         const file=document.querySelector<HTMLInputElement>('#file-input-0')!;
         file.addEventListener('change',()=>owner.insertAdjacentHTML('beforeend',
-          '<ul><li ng-if="resumeName"><span jv-focus-on="resumeName" ng-click="editOrPreviewResume()">Resume.pdf</span> <a href="" ng-click="removeResume()">Remove</a></li></ul>'));
+          '<ul><li ng-if="resumeName"><span jv-focus-on="resumeName" ng-click="editOrPreviewResume()">'+(mode==='retained-other'?'Previous.pdf':'Resume.pdf')+'</span> <a href="" ng-click="removeResume()">Remove</a></li></ul>'));
         if (mode==='invalid') first.insertAdjacentHTML('beforeend','<input required value="" aria-invalid=true>');
         if (mode==='conflict') first.querySelector<HTMLInputElement>('[name=first]')!.value='Other';
         const next=document.createElement('button');
@@ -161,10 +161,26 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
           if(mode==='slow') setTimeout(showScreening,4100); else showScreening();
         };
       },mode);
+      if (mode.startsWith('retained-')) {
+        const cdp=await page.context().newCDPSession(page);
+        try {
+          const {frameTree}=await cdp.send('Page.getFrameTree');
+          const {executionContextId}=await cdp.send('Page.createIsolatedWorld',{frameId:frameTree.frame.id,worldName:'prior-page-fill'});
+          const prior=mode==='retained-other'?{...resume,name:'Previous.pdf'}:resume;
+          const response=await cdp.send('Runtime.evaluate',{contextId:executionContextId,awaitPromise:true,returnByValue:true,
+            expression:'(async()=>{await ('+proveJobviteResumeInput.toString()+')('+JSON.stringify({expectedUrl:url})+');return ('+
+              fillVisibleFields.toString()+')('+JSON.stringify({facts,resume:prior,expectedUrl:url})+');})()'});
+          assert.equal(response.exceptionDetails,undefined);
+          assert.equal(response.result.value.resume,'unverified');
+          assert.equal(await page.evaluate('Boolean(globalThis.__huntC3PartialFill?.resumeAttempt)'),false);
+        } finally { await cdp.detach(); }
+      }
       const inspection=await page.evaluate(fillVisibleFields,{facts,action:'status' as const});
       assert.equal((inspection as {jobviteFirstStep?:boolean}).jobviteFirstStep===true,mode!=='submit');
       const attempt=()=>fillApplication(page,input,AbortSignal.timeout(25_000),()=>{});
       const stop = ['advance','slow','rejected'].includes(mode) ? /Jobvite acknowledged the selected resume\. The employer PDF contents remain unverified\. Review the screening step\. C3 stopped before submission\./ :
+        mode==='retained-match' ? /employer shows the matching filename\. PDF contents unverified/ :
+        mode==='retained-other' ? /existing attachment needs review/ :
         mode==='expanded-conflict' ? /saved profile differs.*C3 clicked Next and opened the full Jobvite form\. Review the first step/ :
         ['stall','ambiguous-disclosure','foreign-disclosure'].includes(mode) ? /clicked Next once/ :
         mode==='conflict' ? /saved profile differs/ : mode==='twice' ? /clicked Next, opened the full Jobvite form, checked the required fields and clicked Next again\. Jobvite still requests more information\. Review the first step\. The attached PDF contents remain unverified\./ : /has not advanced/;
@@ -174,6 +190,10 @@ test('queued Jobvite advances once from the acknowledged first step and stops be
       if (mode==='twice') await assert.rejects(attempt(),/has not advanced|stayed on the first step/);
       const count=['rejected','twice'].includes(mode)?2:['advance','slow','stall','expanded-conflict','ambiguous-disclosure','foreign-disclosure'].includes(mode)?1:0;
       assert.deepEqual(await page.evaluate('([advances,expands,submits,uploads])'),[count,['rejected','twice','expanded-conflict'].includes(mode)?1:0,0,1]);
+      if (mode.startsWith('retained-')) {
+        assert.equal(await page.evaluate('opens'),1);
+        assert.equal(await page.locator('li[ng-if="resumeName"] span').textContent(),mode==='retained-match'?'Resume.pdf':'Previous.pdf');
+      }
       await page.close();
     }
   } finally { await browser.close(); }

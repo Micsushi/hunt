@@ -11,10 +11,11 @@ export async function proveJobviteResumeInput({expectedUrl,expiresAt}={}) {
   const candidates=triggers().filter(e=>e.type==='button' && e.getAttribute('attachment-label')==='Resume' && visible(e) && !e.disabled);
   if (candidates.length!==1) return false;
   const trigger=candidates[0],triggerParent=trigger.parentElement,id=trigger.getAttribute('aria-labelledby');
+  const occupied=()=>!!trigger.closest('#attachResume[ng-controller="JVApplyWith"]')?.querySelector('li[ng-if="resumeName"]');
   const headings=id && !/\s/.test(id)?[...document.querySelectorAll(`[id="${CSS.escape(id)}"]`)]:[];
   if (headings.length!==1 || norm(headings[0].textContent)!=='add resume' || trigger.getAttribute('aria-haspopup')!=='true') return false;
   const heading=headings[0],region=trigger.form || trigger.closest('form,[role=form]') || trigger.getRootNode();
-  const context=()=>document===doc && location.href===url && trigger.isConnected && trigger.parentElement===triggerParent && heading.isConnected &&
+  const context=()=>document===doc && location.href===url && !occupied() && trigger.isConnected && trigger.parentElement===triggerParent && heading.isConnected &&
     trigger.type==='button' && !trigger.disabled && visible(trigger) && trigger.hasAttribute('jv-add-attachment') &&
     trigger.getAttribute('attachment-label')==='Resume' && trigger.getAttribute('aria-labelledby')===id &&
     trigger.getAttribute('aria-haspopup')==='true' && norm(heading.textContent)==='add resume' &&

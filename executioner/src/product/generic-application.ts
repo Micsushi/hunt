@@ -1,5 +1,5 @@
 import type { currentPageInterruption } from '../../extension/form-page.js';
-import { observePageSource, checkPageSource } from '../../extension/page-runtime/serialize.js';
+import { observePageSource, checkPageSource, oneClickPersonalReadySource } from '../../extension/page-runtime/serialize.js';
 import { inspectChoiceWidget } from '../../extension/shared-choice-widget.js';
 import type { Page, Frame, FileChooser, JSHandle } from 'playwright';
 import { parseApplicationProfile } from '../profile/application-profile.ts';
@@ -11,9 +11,13 @@ import { genericApplicationTarget } from './target.ts';
 import { fillMatchedPage } from './page-matching.ts';
 import { openBambooApplication } from './bamboo-application-entry.ts';
 import { effectiveProfileFacts } from './sources.ts';
+import { ApplicationPause } from './application-contract.ts';
+import { pause } from './application-wait.ts';
+import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 
 interface ChooserProbes {
   blocked(): ReturnType<typeof currentPageInterruption>;
+  personalReady(): boolean;
   bamboo: typeof bambooResumeControl;
   jobvite: typeof proveJobviteResumeInput;
 }
@@ -22,6 +26,7 @@ interface ChooserProbes {
 function chooserProbes(page: Page): Promise<JSHandle<ChooserProbes>> {
   return page.evaluateHandle<ChooserProbes>(`({
     blocked: () => (${checkPageSource})((${observePageSource})()),
+    personalReady: ${oneClickPersonalReadySource},
     bamboo: (${bambooResumeControl.toString()}),
     jobvite: (${proveJobviteResumeInput.toString()})
   })`);
@@ -127,9 +132,22 @@ export async function fillGenericApplication(
   if (current.key !== expected.key) throw new Error('Open the application form for this exact posting before filling.');
   const boundUrl=page.url();
   await openBambooApplication(page, boundUrl, signal);
-  const expiresAt=Date.now()+15_000;
   const probes = await chooserProbes(page);
+  let expiresAt:number;
   try {
+    if (smartRecruitersPublication(new URL(boundUrl))?.screening === false) {
+      const deadline = Date.now()+10_000;
+      for (;;) {
+        signal.throwIfAborted();
+        if (page.url() !== boundUrl) throw new ApplicationPause('The employer page changed before its application form was ready.');
+        const state = await probes.evaluate(driver => driver.blocked() ?? driver.personalReady());
+        if (state === true) break;
+        if (state && state.observation.kind !== 'loading') return {...state, needsOwnerReview:true, resume:undefined};
+        if (Date.now() >= deadline) throw new ApplicationPause('The employer personal-information form and résumé control did not finish loading. Reopen the form and retry.');
+        await pause(signal);
+      }
+    }
+    expiresAt=Date.now()+15_000;
     const interruption = await probes.evaluate(async (driver, request) => {
       const blocked = driver.blocked();
       if (blocked) return blocked;

@@ -31,7 +31,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   if (state.busy) throw new Error('A field fill is already running.');
   state.busy = true;
   const result = { status: 'partial', filled: [], skipped: [], canUndo: false, canRedo: false, matching: [],
-    resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ ('missing') };
+    resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ (action === 'status' ? 'unverified' : 'missing') };
   const screening = adapters.jobviteScreeningPanel(), firstStep = adapters.jobviteScreeningPanel(1);
   const applicationStep = screening ?? firstStep;
   if (action === 'status' && firstStep && screening === undefined && adapters.jobviteScreeningPanel(1,true) === firstStep) result.jobviteFirstStep = true;
@@ -410,7 +410,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     // A newsletter or account form must not receive application data.
     const identifyApplicationRegions = fields => {
       if (applicationStep) return [applicationStep.closest('form')];
-      if (checkedForm?.screening && checkedForm.current()) return [checkedForm.owner];
+      if (checkedForm && (checkedForm.screening ? checkedForm.current() : checkedForm.personalReady())) return [checkedForm.owner];
       const regions = new Set(fields.filter(f => /name|prénom|nom de famille/i.test(f.label) && f.expected !== undefined).map(f => f.region));
       return [...regions].filter(region => {
       if (customForm && region !== customForm.owner) return false;
@@ -469,6 +469,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     };
     if (action==='status') {
       result.navigationDiagnostics = readNavigationDiagnostics({noticeMarkers:adapters.noticeMarkers, deepQuery, composedClosest, composedParent, visible, norm});
+      // Inspect has no selected PDF to compare. Only an empty required native control can establish absence here.
+      if (observed.kind === 'application' && document.forms.length === 1 && !state.resumeAttempt) {
+        const controls = deepQuery(document,'input[type=file]').filter(e => e.form === document.forms[0] && fileBinding(e));
+        const [input] = controls;
+        if (controls.length === 1 && visible(input) && input.willValidate && input.validity.valueMissing &&
+            !externalAttachment(input) && !customForm?.upload?.(input)?.occupied) result.resume = 'missing';
+      }
       state.fabricOptions??=new WeakMap();state.committedChoices??=new WeakMap();
       for(const field of fields) {
         if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !screeningFields.read(field.element) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
@@ -494,7 +501,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const acknowledged = receipt => !!receipt?.customUpload && checkedForm?.owner===receipt.region && receipt.selectedFileAccepted &&
       !!receipt.fileSha256 && state.fileEvents?.get(receipt.element)===receipt.file &&
       !parserBusy() && receipt.customUpload.acknowledged(receipt.file.name);
-    if (checkedForm?.screening) result.resume = 'unverified';
+    const retainedJobvite = !uploadReceipt && validResume && adapters.jobviteRetainedResume(firstStep, resume.name);
+    if (retainedJobvite) {
+      result.resume = 'unverified';
+      addSkip('Resume', retainedJobvite, 'uploads', 'verify_attachment');
+    } else if (checkedForm?.screening) result.resume = 'unverified';
     else if (validResume) {
       const resumeFields = deepQuery(document, 'input[type=file]').filter(e =>
         applicationRegions.includes(regionFor(e)) && fileBinding(e));

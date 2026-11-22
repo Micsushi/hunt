@@ -17,6 +17,19 @@ export function jobviteScreeningPanel(number = 2, forPreparation = false) {
   return panels[0];
 }
 
+// A retained employer row can identify a displayed name without proving who uploaded it or which bytes it holds.
+export function jobviteRetainedResume(panel, fileName) {
+  const rows = panel?.querySelectorAll('#attachResume[ng-controller="JVApplyWith"] li[ng-if="resumeName"]');
+  if (!rows?.length) return;
+  const names = rows[0].querySelectorAll('span[jv-focus-on="resumeName"][ng-click="editOrPreviewResume()"]');
+  const name = names[0];
+  const visibleMatch = panel.querySelectorAll('#attachResume[ng-controller="JVApplyWith"]').length === 1 &&
+    rows.length === 1 && names.length === 1 && name.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) &&
+    !name.closest('[hidden],[inert],[aria-hidden=true]') &&
+    name.innerText.trim() === fileName;
+  return visibleMatch ? 'resume_filename_visible_contents_unverified' : 'existing_attachment_preserved';
+}
+
 export function jobviteResumeAcknowledgment(panel, fileName, detached = false) {
   if (panel.matches('[aria-busy=true],[aria-invalid=true]') ||
       panel.querySelector('[aria-busy=true],[aria-invalid=true],[role=progressbar]') ||

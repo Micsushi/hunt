@@ -3,9 +3,9 @@
 import { resolve } from 'node:path';
 import { Script } from 'node:vm';
 import ts from 'typescript';
-import { pageFillSource, observePageSource, checkPageSource } from '../extension/page-runtime/serialize.js';
+import { pageFillSource, observePageSource, checkPageSource, oneClickPersonalReadySource } from '../extension/page-runtime/serialize.js';
 
-const programs = [pageFillSource, observePageSource, checkPageSource];
+const programs = [pageFillSource, observePageSource, checkPageSource, oneClickPersonalReadySource];
 for (const source of programs) new Script(source);
 
 const input = resolve('standalone-browser-payload.js');

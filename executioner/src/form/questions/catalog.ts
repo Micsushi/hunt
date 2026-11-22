@@ -107,7 +107,7 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry("owner-question-phone-country-code", ["Phone country code", "Country phone code", "Phone country"], ["select", "listbox", "text"], { kind: "profile", factId: "phone_country_code" }),
   aliasEntry("owner-question-current-location", ["Location", "Current location"], ["text", "textarea"], { kind: "profile", factId: "current_location" }),
   aliasEntry("owner-question-city", ["city","ville"], ["text", "textarea"], { kind: "profile", factId: "city" }),
-  aliasEntry("owner-question-postal-code", ["postal code","zip code","zip","code postal"], ["text", "textarea"], { kind: "profile", factId: "postal_code" }),
+  aliasEntry("owner-question-postal-code", ["postal code","zip code","postal code / zip code","zip","code postal"], ["text", "textarea", "listbox"], { kind: "profile", factId: "postal_code" }),
   aliasEntry("owner-question-current-company", ["current company"], ["text", "textarea"], { kind: "profile", factId: "current_company" }),
   aliasEntry("owner-question-current-title", ["current title"], ["text", "textarea"], { kind: "profile", factId: "current_title" }),
   aliasEntry("owner-question-linkedin-url", ["linkedin link","linkedin","linkedin profile","linkedin profile url","linkedin url"], ["text", "textarea"], { kind: "profile", factId: "linkedin_url" }),

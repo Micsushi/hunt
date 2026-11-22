@@ -6,6 +6,39 @@ import { fillGenericApplication, fillGenericIdentityFields } from '../../src/pro
 import { genericApplicationTarget, productApplicationTarget } from '../../src/product/target.ts';
 import { applicantProfile, effectiveProfileFacts } from '../../src/product/sources.ts';
 
+test('fresh OneClick personal forms wait for employer-owned fields and can be inspected without answers', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    const url = 'https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/12345678-1111-2222-3333-111111111111';
+    await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:
+      '<main><oc-oneclick-form><oc-personal-information></oc-personal-information><oc-apply-with-resume><input type=file></oc-apply-with-resume>' +
+      '<oc-resume-upload><spl-dropzone data-test=resume-upload></spl-dropzone></oc-resume-upload><button>Next</button></oc-oneclick-form></main>'}));
+    await page.goto(url);
+    await page.evaluate(() => {
+      const form = document.querySelector('oc-oneclick-form')!;
+      const box = form.querySelector('oc-personal-information')!.attachShadow({mode:'open'});
+      const zone = form.querySelector('spl-dropzone')!.attachShadow({mode:'open'});
+      form.addEventListener('click', () => form.setAttribute('clicked','yes'));
+      zone.addEventListener('change', () => form.setAttribute('uploads', String(Number(form.getAttribute('uploads'))+1)));
+      setTimeout(() => { box.innerHTML = '<label>First name*<input required></label><label>Email*<input type=email required></label>'; }, 600);
+      setTimeout(() => { zone.innerHTML = '<label>Resume<input required type=file></label>'; }, 1200);
+    });
+    const profile = applicantProfile({given_name:'Test',family_name:'Applicant',email_address:'test@example.invalid'});
+    await fillGenericApplication(page,url,profile,Buffer.from('%PDF-fixture'),AbortSignal.timeout(8000));
+    assert.equal(await page.getByLabel('First name*').inputValue(),'Test');
+    assert.equal(await page.locator('spl-dropzone input').evaluate((e:HTMLInputElement)=>e.files?.length),1);
+    assert.equal(await page.locator('oc-apply-with-resume input').evaluate((e:HTMLInputElement)=>e.files?.length),0);
+    assert.equal(await page.locator('oc-oneclick-form').getAttribute('clicked'),null);
+    assert.equal(await page.locator('oc-oneclick-form').getAttribute('uploads'),'1');
+    const observed = await page.evaluate(fillVisibleFields,{action:'status' as const});
+    assert.deepEqual(observed.matching?.map(field=>field.question),['First name*','Email*']);
+    await page.goto(url);
+    await assert.rejects(fillGenericApplication(page,url,profile,Buffer.from('%PDF-fixture'),AbortSignal.timeout(200)),/timeout/i);
+    assert.equal(await page.locator('oc-apply-with-resume input').evaluate((e:HTMLInputElement)=>e.files?.length),0);
+  } finally { await browser.close(); }
+});
+
 test('validated website rows appear as saved URL answers without rewriting provenance', async () => {
   const input = {given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'};
   const saved = applicantProfile(input) as {profilePlan:{repeatables:unknown[]}};

@@ -137,6 +137,20 @@ export function createPageAnswerPlanner(
         addressCountryConflict=true;
       }
     }
+    if (!unbounded && !consent && questionFact === 'postal_code' && row.control === 'listbox') {
+      const postal = facts.find(fact => fact.factId === 'postal_code' && fact.lane === 'live_owner_fact')?.value;
+      if (addressCountryConflict || typeof postal !== 'string' || !postal.trim() || isLong(postal)) {
+        return {...binding, answer:null, provisional:true, reason:addressCountryConflict ? 'address_country_conflict' : 'postal_code_requires_review'};
+      }
+      // Canadian postal codes may omit the internal space. A city or partial code does not establish the postal selection.
+      const postalKey = (value:string) => value.trim().toUpperCase().replace(/^([A-Z]\d[A-Z]) (\d[A-Z]\d)$/, '$1$2');
+      const matching = row.options.filter(option => postalKey(option) === postalKey(postal));
+      if (matching.length === 1) return {...binding, answer:matching[0]!, provisional:false, reason:'profile_answer', lane:'profile_fact'};
+      if (row.queryable && !populated && !row.searchQuery && !matching.length) {
+        return {...binding, answer:null, query:postal, provisional:false, reason:'choice_options_query', lane:'profile_fact'};
+      }
+      return {...binding, answer:null, provisional:true, reason:'postal_code_requires_review'};
+    }
     // Opaque structural labels never match a truncated question. The resolver receives the full wording.
     const field:ApplicationFieldObservation={fieldId:fieldId(row.fieldId),target:browserTargetToken(row.fieldId),
       label:boundedText(longQuestion ? 'Unclassified question' : row.question), ...(longQuestion && {rawQuestion:row.question}),

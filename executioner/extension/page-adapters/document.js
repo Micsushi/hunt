@@ -34,6 +34,18 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
     }
     return owner;
   };
+  const personalReady = () => {
+    if (screening || !current()) return false;
+    const personal = deepQuery(owner,'oc-personal-information');
+    if (personal.length > 1) return false;
+    const owned = e => !e.form && !composedClosest(e,'form,[role=form],[inert]') && region(e)===owner;
+    const fields = deepQuery(personal[0] ?? owner,'input').filter(e => owned(e) && visible(e) && !composedClosest(e,'[hidden],[aria-hidden=true]'));
+    const uploads = deepQuery(owner,'input[type=file]').filter(owned);
+    const email = e => e.matches('[type=email],[autocomplete=email]');
+    return fields.some(e => !email(e) && (personal.length ? e.type==='text' : e.matches('[autocomplete=given-name],[autocomplete=family-name]'))) &&
+      fields.some(email) && uploads.length===1 &&
+      !composedClosest(composedClosest(uploads[0],'spl-dropzone[data-test=resume-upload]'),'[hidden],[aria-hidden=true]');
+  };
   const upload = element => {
     const zone=composedClosest(element,'spl-dropzone[data-test=resume-upload]');
     if (!zone?.shadowRoot || region(element)!==owner) return null;
@@ -81,7 +93,7 @@ export function smartRecruitersForm(deepQuery, composedClosest, visible) {
     }
     return true;
   };
-  return {owner, region, current, upload, writePhone, screening};
+  return {owner, region, current, upload, writePhone, screening, personalReady};
 }
 
 export function observeCurrentDocument() {

@@ -26,11 +26,12 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     for(let i=0;i<100&&!service.queue.snapshot().connected;i++)await new Promise(r=>setTimeout(r,50));
     assert.equal(service.queue.snapshot().connected,true);
     const url='https://job-boards.greenhouse.io/fixture/jobs/123';
-    await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label><label>Resume<input required type="file" accept=".pdf"></label></form>'}));
+    await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label><label>Resume<input required type="file" accept=".pdf"></label><button type="submit">Submit application</button></form>'}));
     const page=await context.newPage();await page.goto(url);
     const tabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===url).id,url);
     const send=(operation:string,documentId?:string,expectedUrl=url)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage({action:'pageAction',...args,expiresAt:Date.now()+12000}),{operation,documentId,tabId,expectedUrl});
     const inspect=await send('inspect');assert.equal(inspect.ok,true);
+    assert.equal(inspect.result.resume,'missing','the required native résumé input is visibly empty');
     const resume=Buffer.from('%PDF-1.4\nDefault fixture').toString('base64');
     const personal=fixtureApplicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'});
     const syntheticProfile=structuredClone(personal) as any;
@@ -42,6 +43,11 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     service.queue.configure(personal,resume);
     const selected=Buffer.from('%PDF-1.4\nSelected version fixture').toString('base64');
     const queued=service.queue.add([{url,tabId,resumeBase64:selected,resumeName:'Selected.pdf',resumeVersion:'v8',sourceJobId:123}],{paused:true})[0]!;
+    const nativeFile=page.locator('input[type=file]');
+    await nativeFile.setInputFiles({name:'Resume.pdf',mimeType:'application/pdf',buffer:Buffer.from(selected,'base64')});
+    assert.equal((await send('inspect')).result.resume,'unverified','page inspection has no selected queue PDF to compare');
+    assert.equal(await nativeFile.evaluate((e:HTMLInputElement)=>e.files!.length),1);
+    await nativeFile.setInputFiles([]);
     const before=readFileSync(join(root,'service',queued.id+'.input.json'),'utf8');
     for(const operation of ['fill','redo']){
       const result=await send(operation,inspect.result.documentId);assert.equal(result.ok,false);assert.match(result.error,/queued|Applications/i);
@@ -60,6 +66,7 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.equal(await page.locator('input').first().inputValue(),'');
     const allowed=await send('fill',inspect.result.documentId);assert.equal(allowed.ok,true,JSON.stringify(allowed));
+    assert.equal(allowed.result.resume,'verified');
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
     assert.equal(await page.locator('input[type=file]').evaluate((el:any)=>el.files.length),1);
     assert.equal(allowed.result.canUndo,true);

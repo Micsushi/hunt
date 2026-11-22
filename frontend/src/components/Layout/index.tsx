@@ -1,4 +1,3 @@
-import { useUiStore } from '@/store/ui'
 import { Link, NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { LoadingBar } from '@/components/LoadingBar'
@@ -50,7 +49,6 @@ interface Props {
 
 export function Layout({ children, username, onLogout, loggingOut }: Props) {
   const [logoutError, setLogoutError] = useState<string | null>(null)
-  const showToast = useUiStore((s) => s.showToast)
   const submitting = useRef(false)
   const mounted = useRef(false)
   const brand = useRef<HTMLAnchorElement>(null)
@@ -84,13 +82,6 @@ export function Layout({ children, username, onLogout, loggingOut }: Props) {
     try {
       await onLogout()
     } catch (error) {
-      if (mounted.current)
-        showToast(
-          error instanceof Error
-            ? 'Sign out failed: ' + error.message
-            : 'Sign out failed. Try again.',
-          'error',
-        )
       if (mounted.current)
         setLogoutError(error instanceof Error ? error.message : 'Please try again.')
     } finally {
