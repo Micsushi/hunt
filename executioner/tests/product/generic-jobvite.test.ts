@@ -45,6 +45,8 @@ test('Jobvite portal transition binds Resume despite duplicate dialog IDs, with 
     await proof(page);await fill(page);assert.equal(await page.evaluate('uploads'),1);assert.equal(await page.evaluate('opens'),1);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});assert.deepEqual(await counts(page),[0,0]);
     await page.evaluate(fillVisibleFields,{action:'redo' as const});assert.deepEqual(await counts(page),[1,0]);
+    await page.reload();
+    assert.equal(await proof(page),true);
     await page.locator('#file-input-0').setInputFiles({name:'Manual.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-manual')});
     const manual=await fill(page);assert.equal(manual.resume,'unverified');assert.ok(manual.skipped.some(item=>item.reason==='existing_attachment_preserved'));
     assert.equal(await page.locator('#file-input-0').evaluate((e:HTMLInputElement)=>e.files![0]!.name),'Manual.pdf');

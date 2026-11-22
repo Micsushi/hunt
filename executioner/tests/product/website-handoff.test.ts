@@ -35,6 +35,7 @@ test('imports use paused endpoint only, serialize, preserve keys and never echo 
   });
   assert.equal((await f.call({...message('import'),expiresAt:Date.now()-1})).code,'expired');
   assert.deepEqual(paths, []);
+  await new Promise<void>(resolve => setImmediate(resolve)); // The next browser message arrives on another task.
   const first=f.call(message('import'));
   assert.equal((await f.call(message('import'))).code,'busy');
   release();
