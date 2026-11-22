@@ -3,8 +3,7 @@ import { observeWorkdayPage, workdayObservationMessage } from '../ats/workday/pa
 import { fillHostedApplication } from "./hosted-application.ts";
 import type { Page } from "playwright";
 import { WORKDAY_APPLICATION_PAGE_SELECTORS } from "../ats/workday/application/page-walk-contract.ts";
-import { applicationTarget, productApplicationTarget } from "./target.ts";
-import { prepareCurrentPage } from "./current-page-workflow.ts";
+import { applicationTarget } from "./target.ts";
 import { ApplicationPause, type ProductInput } from './application-contract.ts';
 import { pause } from './application-wait.ts';
 import { AccountAccessPause } from './application-authentication.ts';
@@ -18,10 +17,7 @@ export async function fillApplication(page: Page, input: ProductInput, signal: A
   if ((input.profile as {profilePlan?:{mode?:unknown}} | null)?.profilePlan?.mode === 'synthetic_test_non_submittable') {
     throw new ApplicationPause('This is a synthetic test profile. Choose your saved personal profile before running a real application.');
   }
-  const target = productApplicationTarget(input.url);
-  if (target.ats === "generic") {
-    return prepareCurrentPage(page, input, signal, progress);
-  }
+  const target = applicationTarget(input.url);
   if (target.ats !== "workday") return fillHostedApplication(page, input, signal, progress);
   const assertTarget = () => {
     signal.throwIfAborted();

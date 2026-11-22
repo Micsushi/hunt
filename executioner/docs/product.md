@@ -1,6 +1,6 @@
 # C3 Applications
 
-**C3.1** is full application preparation. **C3.2** is the extension's current-page fill.
+**C3.1** prepares queued applications on Workday, Greenhouse, Workable, Lever and Ashby. **C3.2** is the extension's current-page fill.
 
 Application filling skips optional fields by default in C3.1 and C3.2, even when
 saved profile answers are available. Existing optional values are preserved. Fields that
@@ -216,35 +216,11 @@ verified without uploading again. If Workable is still processing a selected fil
 C3 waits for its preview. The failure details distinguish a pending upload, an
 unavailable preview and a file that differs from the selected PDF.
 
-On a recognized two-step Jobvite form, **Prepare this job** adds the selected application
-to Applications with the saved default résumé. Choose **Run** there. Once Jobvite
-acknowledges the selected file and the first step is valid, C3 clicks **Next**.
-If Jobvite requests more information in a collapsed form, C3 can open **View Full
-Application Form**, recheck the newly visible required fields and retry **Next** once.
-C3 fills the screening step and stops before submission. Use the existing queue entry
-for a job imported from C1 to preserve its selected résumé.
-Review suggested screening answers, including availability and work-term preferences,
-on the employer page. C3 leaves personal accuracy declarations for the applicant.
-
-On a recognized SmartRecruiters personal-information step, **Prepare this job**
-checks the employer's posting and adds the selected application with the saved
-default résumé. Choose **Run** in Applications to continue through screening when
-the first step is ready. After C3 opens screening, use **Run** to continue there.
-If the service restarted or the tab reloaded, reopen **Prepare this job** on that
-same screening page before running the saved draft. If C3 could not confirm the
-move to screening, use the employer's **Back** control to return to the personal
-step and choose **Prepare this job** again. **Fill current page** stays on the
-selected step.
-
-SmartRecruiters can continue a prepared application from a résumé already uploaded
-by C3 on the same loaded page if the selected PDF and upload receipt still match.
-The employer's stored PDF contents remain unverified. If C3 cannot confirm the
-attachment and you want to replace it, delete it on the employer page. Reopen
-**Prepare this job** after any page reload before choosing **Run**.
-
-**Fill current page** stays on the current Jobvite step. To continue manually, choose
-**Next** on the employer form and then **Fill current page** again. A displayed filename
-still needs your review when Jobvite does not expose the uploaded bytes.
+On Jobvite, SmartRecruiters and other unfamiliar sites, open the employer form and
+choose **Fill current page**. Review the fields, choose **Next** yourself, then
+repeat on the new page. If an older queued entry owns that application, finish
+the saved draft manually with its selected résumé. The extension protects the
+draft from having its selected PDF replaced by the default.
 
 Workday summary Review checks repeated education and employment answers within
 their own rows. Finding the right words elsewhere on the page is not sufficient.
@@ -549,10 +525,8 @@ Pinpoint. Recognition or job discovery does not imply C3 can fill that platform.
 SAP SuccessFactors and Teamtailor are also relevant expansion targets. This is
 a practical common-platform inventory, not an exhaustive list of every ATS.
 
-Next compatibility groups are iCIMS, Oracle Recruiting/Taleo, SAP SuccessFactors,
-and SmartRecruiters, followed by the other inventory entries. Each needs
-public job examples, UI inspection, and independent end-to-end evidence before
-being enabled in C3. Do not route unknown hosts to a generic form filler.
+C3.1 is limited to the five supported families. For other sites, use **Fill
+current page** and advance through the employer's steps yourself.
 
 Provider references: [Lever application forms](https://help.lever.co/s/article/Configuring-your-Lever-Application-Form),
 [Ashby postings](https://docs.ashbyhq.com/job-postings),

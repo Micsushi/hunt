@@ -4,7 +4,7 @@ const saved=await chrome.storage.local.get('token');
 $('extension-version').textContent=`Hunt C3 extension ${chrome.runtime.getManifest().version}`;
 $('job').textContent=tab?.title||'Current page';
 $('job').title=tab?.title||'';
-let supported=(()=>{try{const u=new URL(tab?.url);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&(/^[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com$/i.test(u.hostname)||['job-boards.greenhouse.io','boards.greenhouse.io','job-boards.eu.greenhouse.io','jobs.lever.co','jobs.eu.lever.co','jobs.ashbyhq.com','apply.workable.com'].includes(u.hostname));}catch{return false;}})();
+const supported=(()=>{try{const u=new URL(tab?.url);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&(/^[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com$/i.test(u.hostname)||['job-boards.greenhouse.io','boards.greenhouse.io','job-boards.eu.greenhouse.io','jobs.lever.co','jobs.eu.lever.co','jobs.ashbyhq.com','apply.workable.com'].includes(u.hostname));}catch{return false;}})();
 $('fill').disabled=!supported;
 let busy=false, serviceReady=false, browserReady=false;
 const canPartial=(()=>{try{return new URL(tab?.url).protocol==='https:';}catch{return false;}})();
@@ -110,9 +110,6 @@ $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…')
 $('undo').onclick=()=>run(()=>partial('undo'));
 $('redo').onclick=()=>run(()=>partial('redo'));
 if(canPartial)void(async()=>{const version=historyVersion;try{const result=await pageReply('inspect');if(version!==historyVersion)return;canUndo=result.canUndo;canRedo=result.canRedo;
-  if(result.smartRecruitersFirstStep || result.smartRecruitersScreening || result.jobviteFirstStep && /^https:\/\/jobs\.jobvite\.com\/[\w-]+\/job\/[\w-]+\/apply\/?$/.test(tab.url)){
-    supported=true;$('prepare-action').hidden=false;$('support').textContent='';
-  }
   controls();}catch{}})();
 async function connectWithToken(token){
   if(!token)throw new Error('Enter a pairing key, or use Connect to local app.');
@@ -151,13 +148,8 @@ async function connectLocal(){
 $('connect-local').onclick=()=>run(connectLocal,$('connect-local'),'Connecting…');
 $('batch').onclick=()=>run(async()=>{const {token}=await chrome.storage.local.get('token');await chrome.tabs.create({url:origin+'/#token='+encodeURIComponent(token||'')});});
 $('website').onclick=()=>run(async()=>{await chrome.tabs.create({url:'https://agent-hunt-review.mshi.ca/executioner#c3-extension='+chrome.runtime.id});},$('website'),'Opening Hunt…');
-$('fill').onclick=()=>run(async()=>{const current=await chrome.tabs.get(tab.id);if(current.url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');const {token}=await chrome.storage.local.get('token');const resultConnect=await browserReply(chrome.runtime.sendMessage({action:'connect'}));if(!resultConnect?.ok)throw new Error(resultConnect?.error||'Connection request failed');if((await chrome.tabs.get(tab.id)).url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');const jobvite=new URL(tab.url).hostname==='jobs.jobvite.com';
-  let request={jobs:[{url:tab.url,tabId:tab.id,title:tab.title}]};
-  if(jobvite || new URL(tab.url).hostname==='jobs.smartrecruiters.com'){
-    const observed=await pageReply('inspect');
-    if(!observed.jobviteFirstStep && !observed.smartRecruitersFirstStep && !observed.smartRecruitersScreening)throw new Error('Open the application before preparing it.');
-    request={jobs:[{url:tab.url,tabId:tab.id}],documentId:observed.documentId};
-  }
+$('fill').onclick=()=>run(async()=>{const current=await chrome.tabs.get(tab.id);if(current.url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');const {token}=await chrome.storage.local.get('token');const resultConnect=await browserReply(chrome.runtime.sendMessage({action:'connect'}));if(!resultConnect?.ok)throw new Error(resultConnect?.error||'Connection request failed');if((await chrome.tabs.get(tab.id)).url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');
+  const request={jobs:[{url:tab.url,tabId:tab.id,title:tab.title}]};
   let response,result;try{response=await fetch(origin+'/jobs',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify(request),signal:AbortSignal.timeout(15000)});result=await response.json();}catch{throw new Error('No confirmation received. Check Applications for this job.');}if(!response.ok)throw new Error(typeof result?.error==='string'&&result.error?result.error:'C3 could not confirm this job. Check Applications before retrying.');const job=result?.[0];if(!job||typeof job.status!=='string')throw new Error('No confirmation received. Check Applications for this job.');$('status').textContent=['queued','running'].includes(job.status)?'Queued. C3 will stop at Review.':`${job.stage||job.status}. Open Applications to continue.`;});
 
 controls();await checkConnection();

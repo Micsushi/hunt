@@ -7,7 +7,6 @@ import {ApplicationQueue} from '../../src/product/queue.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 import {startProductServer} from '../../src/product/server.ts';
 import {chromium} from 'playwright';
-import {ApplicationPause} from '../../src/product/engine.ts';
 import {createHash} from 'node:crypto';
 const profileDigest=(queue:ApplicationQueue)=>createHash('sha256').update(JSON.stringify(queue.getSettings()!.profile)).digest('hex');
 
@@ -69,22 +68,6 @@ test('successive refreshes undo in order and equal revisions cannot disguise a c
     }
     assert.equal(readFileSync(journal,'utf8'),'fixture journal');
     assert.equal(opens,0);
-  } finally {await queue.close();}
-});
-
-test('verified session application URL reaches only this run; original posting and selected input remain immutable',async()=>{
-  const root=mkdtempSync(join(tmpdir(),'c3-session-url-'));
-  const original='https://jobs.smartrecruiters.com/Fixture/744000123456789-analyst';
-  const actual='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
-  let captured:any,finished!:()=>void;const done=new Promise<void>(resolve=>finished=resolve);
-  const queue=new ApplicationQueue(root,{connected:true,open:async url=>{assert.equal(url,original);return {tabId:7,page:{} as any,browser:{close:async()=>{}} as any,applicationUrl:actual}},release:async()=>{}},async(_page,input)=>{captured=input;finished();throw new ApplicationPause('Fixture stop');});
-  try {
-    queue.configure(applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),Buffer.from('%PDF-selected').toString('base64'));
-    const job=queue.add([{url:original}],{paused:true})[0]!;
-    const path=join(root,job.id+'.input.json'),before=readFileSync(path,'utf8');
-    await queue.action(job.id,'retry');await done;
-    assert.equal(captured.url,actual);assert.equal(captured.resume.toString(),'%PDF-selected');
-    assert.equal(job.url,original);assert.equal(readFileSync(path,'utf8'),before);
   } finally {await queue.close();}
 });
 

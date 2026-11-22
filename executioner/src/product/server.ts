@@ -166,19 +166,23 @@ export async function startProductServer(options: { root?: string; port?: number
           try { key=productApplicationTarget(url.href).key; } catch { /* Manual fill supports other HTTPS forms. */ }
           const publication = smartRecruitersPublication(new URL(url.pathname,url.origin));
           const currentJobs = () => queue.jobs.filter(job=>job.status !== 'removed');
-          const blocked = 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.';
-          if (currentJobs().some(job=>{
+          const blocked = (job:typeof queue.jobs[number]) => productApplicationTarget(job.url).ats === 'generic'
+            ? 'This saved draft uses an unfamiliar site. Finish it on the employer page to preserve its selected resume.'
+            : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.';
+          const owner = currentJobs().find(job=>{
             const selected = job.selectedApplicationUrl && smartRecruitersPublication(new URL(job.selectedApplicationUrl));
             return job.tabId === body.tabId || key !== undefined && job.key === key ||
               publication && selected && publication.base.toLowerCase() === selected.base.toLowerCase();
-          })) throw new Error(blocked);
+          });
+          if (owner) throw new Error(blocked(owner));
           const companyPrefix = publication && `${url.hostname}/${publication.company.toLowerCase()}/`;
           if (companyPrefix && currentJobs().some(job=>job.key.toLowerCase().startsWith(companyPrefix) &&
               /^[0-9]+$/.test(job.key.slice(companyPrefix.length)))) {
             const posting = await smartRecruitersPostingForApplication(url.href);
             if (!posting) throw new Error('C3 could not verify whether this form belongs to a queued application. Open it from Applications.');
             const postingKey = productApplicationTarget(posting).key.toLowerCase();
-            if (currentJobs().some(job=>job.key.toLowerCase() === postingKey)) throw new Error(blocked);
+            const owner = currentJobs().find(job=>job.key.toLowerCase() === postingKey);
+            if (owner) throw new Error(blocked(owner));
           }
         }
         const profile = queue.getSettings()?.profile as {profile?:{facts?:unknown[]}} | undefined;
@@ -250,57 +254,7 @@ export async function startProductServer(options: { root?: string; port?: number
         const bundle = inspectHandoffBundle(body, queue.jobs);
         result = path === '/handoff/preview' ? {jobs:bundle.preview} : queue.add(bundle.jobs, {paused:path === "/handoff/import-paused"});
       } else if (path === "/jobs" && Object.hasOwn(body,'documentId')) {
-        const job = Array.isArray(body.jobs) && body.jobs.length === 1 && body.jobs[0];
-        if (!job || Object.keys(body).some(key=>!['jobs','documentId'].includes(key)) ||
-            Object.keys(job).some(key=>!['url','tabId'].includes(key)) || !Number.isSafeInteger(job.tabId) || job.tabId < 1 ||
-            typeof job.url !== 'string' ||
-            typeof body.documentId !== 'string' || !/^[a-f0-9]{64}$/.test(body.documentId)) {
-          throw new Error('Inspect one selected application before preparing it.');
-        }
-        const jobvite = /^https:\/\/jobs\.jobvite\.com\/[\w-]+\/job\/[\w-]+\/apply\/?$/.test(job.url);
-        const selectedUrl = new URL(job.url);
-        const publication = smartRecruitersPublication(selectedUrl);
-        if (!jobvite && !publication) throw new Error('Inspect one selected application before preparing it.');
-        if (publication && (job.url !== selectedUrl.origin + selectedUrl.pathname + selectedUrl.search ||
-            selectedUrl.search && selectedUrl.search !== `?dcr_ci=${publication.company}`)) {
-          throw new Error('Open the ordinary SmartRecruiters application link before preparing this job.');
-        }
-        const ownsScreening = (entry:{status:string;sourceJobId?:number;selectedDocument?:string;selectedApplicationUrl?:string}) =>
-          entry.status !== 'removed' && entry.sourceJobId === undefined && !!entry.selectedDocument && entry.selectedApplicationUrl === job.url;
-        if (publication?.screening && !queue.jobs.some(ownsScreening)) {
-          throw new Error('C3 could not confirm the move to screening. Use the employer’s Back control to reopen the personal step, then choose Prepare this job again.');
-        }
-        if (pageActions.has(job.tabId)) throw new Error('C3 is already operating this page.');
-        pageActions.add(job.tabId);
-        try {
-          const posting = publication ? await smartRecruitersPostingForApplication(job.url) : undefined;
-          if (publication && !posting) throw new Error('The selected first step could not be verified as an active posting.');
-          const page = await bridge.call('pageAction',{operation:'inspect',tabId:job.tabId,expectedUrl:job.url});
-          if (page.tabId!==job.tabId || page.url!==job.url || page.documentId!==body.documentId ||
-              typeof page.mainDocumentId!=='string' || !page.mainDocumentId || page.componentFailure) {
-            throw new Error('The selected application changed. Inspect its first step again.');
-          }
-          const smart = !!publication;
-          const url = smart && (publication.screening ? page.smartRecruitersScreening === true : page.smartRecruitersFirstStep === true) ?
-            posting : jobvite && page.jobviteFirstStep === true ? job.url : undefined;
-          if (!url) throw new Error('The selected first step could not be verified as an active posting. Open the employer application and inspect it again.');
-          const key = productApplicationTarget(url).key;
-          if (publication?.screening && !queue.jobs.some(entry=>entry.key===key && ownsScreening(entry))) {
-            throw new Error('The verified screening page belongs to a different draft.');
-          }
-          const aliases = new Set([key, productApplicationTarget(job.url).key].map(key=>key.toLowerCase()));
-          if (queue.snapshot().jobs.some(other=>other.status!=='removed' &&
-              (other.key===key && (other.sourceJobId!==undefined || other.tabId!==undefined && other.tabId!==job.tabId ||
-                smart && other.selectedApplicationUrl!==undefined && other.selectedApplicationUrl!==job.url) ||
-               other.key!==key && (other.tabId===job.tabId || smart && aliases.has(other.key.toLowerCase()))))) {
-            throw new Error(smart
-              ? 'C3 already has a saved draft for this application or tab. Open Applications. If your draft reached screening, choose Prepare this job on its screening page.'
-              : 'This application or tab already belongs to another draft. Open Applications.');
-          }
-          result = queue.add([{...job,url}],{
-            paused:true,selectedDocument:page.mainDocumentId,...(smart && {selectedApplicationUrl:job.url}),
-          });
-        } finally {pageActions.delete(job.tabId);}
+        throw new Error('This Prepare request is from an older extension. Reload Hunt and choose Fill current page on this application.');
       } else if (path === "/jobs") result = queue.add(body.jobs);
       else if (path === "/recover-storage") queue.recoverStorage();
       else if (path === "/concurrency") queue.setConcurrency(body.value);

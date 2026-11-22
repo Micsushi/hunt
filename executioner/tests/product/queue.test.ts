@@ -239,21 +239,6 @@ test("legacy scalar study plans normalize without modifying saved input and reta
 });
 
 
-test("unfamiliar selected resumes require paused admission and cannot become submittable", async()=>{
-  const root=mkdtempSync(join(tmpdir(),'c3-generic-import-'));
-  const bridge:BrowserConnection={connected:false,open:async()=>{throw new Error('must stay paused');},release:async()=>{}};
-  const queue=new ApplicationQueue(root,bridge);
-  try {
-    queue.configure(applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
-    const input={url:'https://fixture.bamboohr.com/careers/123',resumeBase64:Buffer.from('%PDF-selected').toString('base64'),sourceJobId:123,resumeVersion:'17'};
-    assert.throws(()=>queue.add([input]),/paused/);
-    const [job]=queue.add([input],{paused:true});assert.equal(job!.submissionAllowed,false);
-    assert.equal(job!.status,'paused');assert.equal(JSON.parse(readFileSync(join(root,`${job!.id}.input.json`),'utf8')).resume,input.resumeBase64);
-    await queue.close();const restored=new ApplicationQueue(root,bridge);assert.equal(restored.jobs[0]!.status,'paused');assert.equal(restored.jobs[0]!.resumeVersion,'17');await restored.close();
-  }finally{await queue.close();}
-});
-
-
 test("live drafts allow reviewable defaults without changing saved policy",()=>{
   const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',answer_policy:'test'}) as any;
   const before=JSON.stringify(profile);const sources=productSources(profile,Buffer.from('%PDF-fixture'));

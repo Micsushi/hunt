@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { productApplicationTarget } from './target.ts';
+import { applicationTarget } from './target.ts';
 import type { ProductJob } from './queue.ts';
 
 export const handoffMaxBytes = 32 * 1024 * 1024;
@@ -23,7 +23,7 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
         typeof entry.resumeBase64 !== 'string' || typeof entry.resumeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.resumeSha256)) {
       throw new Error('The application bundle contains invalid job or resume details. Export it again from Hunt.');
     }
-    const job = entry as unknown as HandoffJob, target = productApplicationTarget(job.url);
+    const job = entry as unknown as HandoffJob, target = applicationTarget(job.url);
     if (keys.has(target.key) || ids.has(job.sourceJobId)) throw new Error('The application bundle contains duplicate jobs. Export each application once.');
     keys.add(target.key); ids.add(job.sourceJobId);
     const pdf = Buffer.from(job.resumeBase64,'base64');
@@ -38,7 +38,7 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
     return job;
   });
   const preview = jobs.map(({resumeBase64: _pdf,...job})=>({ ...job,
-    status: existing.some(item=>item.status !== 'removed' && item.key === productApplicationTarget(job.url).key) ? 'existing' as const : 'new' as const,
+    status: existing.some(item=>item.status !== 'removed' && item.key === applicationTarget(job.url).key) ? 'existing' as const : 'new' as const,
   }));
   return { jobs, preview };
 }

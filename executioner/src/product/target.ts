@@ -66,7 +66,7 @@ export function applicationTarget(input: string): { url: string; key: string; ho
     } else if (["jobs.lever.co", "jobs.eu.lever.co", "jobs.ashbyhq.com"].includes(url.hostname) && parts.length >= 2 && parts.length <= 3 && /^[a-f0-9-]{36}$/i.test(parts[1]!) && (!parts[2] || ["apply", "application"].includes(parts[2]))) {
       ats = url.hostname === "jobs.ashbyhq.com" ? "ashby" : "lever";
       posting = `${parts[0]}/${parts[1]}`;
-    } else throw new Error("Supported job links: Workday, Greenhouse, Lever, Ashby, and Workable hosted postings.");
+    } else throw new Error("For other sites, open the application and choose Fill current page. Queued preparation supports Workday, Greenhouse, Lever, Ashby and Workable.");
   }
   if (!posting || /%2f|%5c/i.test(posting)) throw new Error("Job identity is invalid.");
   if(url.hostname === "boards.greenhouse.io") url.hostname = "job-boards.greenhouse.io";

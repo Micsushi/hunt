@@ -349,7 +349,8 @@ function renderJobs() {
     const li=document.createElement('li'); li.dataset.job=job.id;li.tabIndex=-1;
     const content=document.createElement('div'), title=document.createElement('a'); title.className='job-title';title.textContent=job.title;title.href=job.url;title.target='_blank';title.rel='noopener noreferrer'; content.append(title);
     const status=document.createElement('p');status.className='job-status';status.textContent=job.status==='paused'&&job.actionPending?'Pausing…':ownerReview(job)?'Owner review needed':({queued:'Queued',running:'Running',paused:'Paused',review:'At review',submitting:'Submitting',submitted:'Submitted',submission_uncertain:'Submission uncertain'}[job.status]||job.status);status.dataset.attention=String(needsAttention(job));content.append(status);
-    if(job.stage!==status.textContent&&!(job.stage==='Needs attention'&&job.error)){const stage=document.createElement('p');stage.className=ownerReview(job)?'job-stage owner-warning':'job-stage';stage.textContent=ownerReview(job)?job.stage.replace(/^Owner review needed: /,'').replace(/^./,c=>c.toUpperCase()):job.stage;content.append(stage);}
+    if(job.currentPageOnly && ['paused','review'].includes(job.status)){const stage=document.createElement('p');stage.className='job-stage';stage.textContent='Finish this saved draft on the employer page with its selected resume.';content.append(stage);}
+    else if(job.stage!==status.textContent&&!(job.stage==='Needs attention'&&job.error)){const stage=document.createElement('p');stage.className=ownerReview(job)?'job-stage owner-warning':'job-stage';stage.textContent=ownerReview(job)?job.stage.replace(/^Owner review needed: /,'').replace(/^./,c=>c.toUpperCase()):job.stage;content.append(stage);}
     if(job.resumeName){const resume=document.createElement('p');resume.className='job-stage';resume.textContent=`Resume: ${job.resumeName}${job.resumeVersion ? ' · '+job.resumeVersion : ''}`;content.append(resume);}
     if(proxied && job.sourceJobId){const source=document.createElement('a');source.href=`/jobs/${job.sourceJobId}`;source.target='_top';source.textContent='View Hunt job';content.append(source);}
     if (job.status === 'paused' && job.componentFailure) {
@@ -366,8 +367,8 @@ function renderJobs() {
     const act=action=>api(`jobs/${job.id}/action`,{action});
     if(job.tabId)actions.append(button('Open application',()=>act('open'),job.id));
     if(['running','queued'].includes(job.status))actions.append(button('Pause',()=>act('pause'),job.id));
-    if(['paused','review'].includes(job.status))actions.append(button('Retry',()=>act('retry'),job.id,job.actionPending));
-    if(job.status==='paused'&&job.profileUpdateAvailable)actions.append(button('Use saved profile',async()=>{
+    if(!job.currentPageOnly && ['paused','review'].includes(job.status))actions.append(button('Retry',()=>act('retry'),job.id,job.actionPending));
+    if(!job.currentPageOnly && job.status==='paused'&&job.profileUpdateAvailable)actions.append(button('Use saved profile',async()=>{
       const expectedProfileRevision=savedProfile?.profile?.profile?.revision;
       const expectedProfileDigest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(savedProfile?.profile))))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
       const apply=()=>api(`jobs/${job.id}/action`,{action:'refresh_profile',expectedProfileRevision,expectedProfileDigest});
@@ -376,9 +377,9 @@ function renderJobs() {
       $('notice').textContent=refreshed.unchanged?'This application already uses the saved profile.':'Saved profile applied to this paused application. Its resume is unchanged. Undo is available; choose Retry when ready.';
     },job.id,job.actionPending||!profileLoaded||profileDirty));
     if(['paused','queued','review'].includes(job.status))actions.append(button('Remove',async()=>{await act('remove');remember({undo:()=>act('restore'),redo:()=>act('remove')});$('notice').textContent='Removed from the list. Undo is available in this tab until reload or 20 more changes. Saved inputs are kept.';},job.id,job.actionPending));
-    if(job.status==='review'||job.status==='paused'&&job.reviewUrl)actions.append(button('Refresh review',()=>act('refresh_review'),job.id,job.actionPending));
+    if(!job.currentPageOnly && (job.status==='review'||job.status==='paused'&&job.reviewUrl))actions.append(button('Refresh review',()=>act('refresh_review'),job.id,job.actionPending));
     if(job.status==='review'){
-      if(job.submissionAllowed)actions.append(button('Submit…',async()=>{pendingSubmit=job;$('submit-title').textContent=job.title;$('reviewed').checked=false;$('submit-dialog').returnValue='';$('submit-dialog').showModal();},job.id,job.actionPending));
+      if(!job.currentPageOnly && job.submissionAllowed)actions.append(button('Submit…',async()=>{pendingSubmit=job;$('submit-title').textContent=job.title;$('reviewed').checked=false;$('submit-dialog').returnValue='';$('submit-dialog').showModal();},job.id,job.actionPending));
     }
     li.append(content,actions);return li;
   });
