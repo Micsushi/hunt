@@ -464,6 +464,18 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         try {state.fabricOptions.set(field.element,await fabricMenu(fabric));}
         catch {state.fabricOptions.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}
       }
+      // Read the employer's final action after filling. Never activate it to test readiness.
+      const [form] = applicationRegions;
+      if (applicationRegions.length === 1 && form instanceof HTMLFormElement) {
+        const submitters = [...form.elements].filter(e => e.type === 'submit' && visible(e));
+        const [button] = submitters;
+        if (submitters.length === 1 && form.contains(button) &&
+            /^(?:apply|submit application|send application)$/i.test((button.innerText || button.value || '').trim()) &&
+            (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
+          result.incomplete = true;
+          addSkip('Application', 'employer_submission_disabled');
+        }
+      }
       result.matching=observations();
       if(result.matching.some(row=>row.required && row.reason==='button_choice_interaction_unsupported'))result.incomplete=true;
       return result;

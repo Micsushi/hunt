@@ -67,5 +67,17 @@ test('Rippling location commits a matched suggestion, reverses it and preserves 
       assert.equal((await status()).selected,'');
       await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/changed/i);
     }
+    await page.goto(url);
+    await page.locator('form').evaluate(form => {
+      form.insertAdjacentHTML('beforeend','<button type="submit" aria-disabled="true">Apply</button>');
+      form.insertAdjacentHTML('afterend','<form><button type="submit" disabled>Apply</button></form>');
+      form.addEventListener('submit',event=>{event.preventDefault();form.dataset.submitted='true';});
+    });
+    const observeSubmission = () => page.evaluate(fillVisibleFields,{action:'status' as const,facts});
+    const disabled = await observeSubmission();
+    assert.ok(disabled.incomplete && disabled.skipped.some(row=>row.reason==='employer_submission_disabled'));
+    await page.locator('form').first().locator('button').evaluate(button=>button.removeAttribute('aria-disabled'));
+    assert.ok(!(await observeSubmission()).skipped.some(row=>row.reason==='employer_submission_disabled'));
+    assert.equal(await page.locator('form').first().getAttribute('data-submitted'),null);
   } finally {disposeResumeArtifact(sources.resumeIntent.artifact);await browser.close();}
 });

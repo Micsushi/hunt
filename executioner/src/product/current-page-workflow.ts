@@ -49,6 +49,7 @@ export async function prepareCurrentPage(page: Page, input: ProductInput, signal
     }
     const reasons:Record<string,string>={saved_value_conflict:'saved profile differs',value_changed_after_fill:'site changed the filled value',existing_attachment_preserved:'existing attachment needs review',resume_attachment_not_verified:'attachment could not be verified',choice_requires_mapping:'no matching saved option',no_stored_mapping:'no saved answer',value_not_accepted:'site rejected the value',ambiguous_duplicate:'more than one matching field'};
     Object.assign(reasons,{
+      employer_submission_disabled:'the employer still has submission disabled',
       protected_answer_denied:'choose your answer on the employer page',
       screening_choice_not_confirmed:'check the selected answer on the employer page',
       screening_choice_requires_queue:'choose the answer on the employer page',

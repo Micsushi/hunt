@@ -93,10 +93,15 @@ async function partial(action){
     $('status').dataset.error = 'true';
     $('status').textContent += ' Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').';
   }
+  const submissionDisabled = result.skipped?.some(item => item.reason === 'employer_submission_disabled');
+  if (submissionDisabled) {
+    $('status').dataset.error = 'true';
+    $('status').textContent += ' The employer still has submission disabled.';
+  }
   if (result.frames?.some(frame => frame.status === 'unavailable')) {
     $('status').dataset.error = 'true';
     $('status').textContent += ' A frame could not be reached. Check it before retrying.';
-  } else if (result.incomplete && !result.componentFailure) {
+  } else if (result.incomplete && !result.componentFailure && !submissionDisabled) {
     $('status').dataset.error = 'true';
     $('status').textContent += ' Check the incomplete fields before retrying.';
   }
