@@ -1,13 +1,14 @@
 export function createRequiredFieldReader({ uploadHeading, markedRequired,
   verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
 }) {
+  const requiredLabel=label=>label.matches('.Mui-required') || label.querySelector('abbr[title="required" i],[aria-label="required" i]');
   const isRequired = e => {
     const attachment=verifiedDialogUpload(e);
     if(attachment && isRequired(attachment.trigger))return true;
     const fabric=fabricWidget(e);if(fabric)return isRequired(fabric.backing);
     const group=composedClosest(e,'fieldset,[role=radiogroup]');
     if (e.required || e.getAttribute('aria-required')==='true' ||
-        [...e.labels??[]].some(label=>label.matches('.Mui-required') || label.querySelector('abbr[title="required" i],[aria-label="required" i]')) ||
+        [...e.labels??[]].some(requiredLabel) ||
         e.type==='radio' && group && (group.getAttribute('aria-required')==='true' ||
           deepQuery(group,'input[type=radio]').some(r=>r.required || r.getAttribute('aria-required')==='true'))) return true;
     const originalLabel=e.getAttribute('data-hunt-question-label')||rawLabelFor(e);
@@ -50,7 +51,7 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     let owner=input;
     let required=input.required || input.getAttribute('aria-required')==='true';
     const region=regionFor(input);
-    for (let group=composedParent(input); group && group!==region && !group.matches('form,body,html'); group=composedParent(group)) {
+    for (let group=composedParent(input); group && group!==region && group!==region.host && !group.matches('form,body,html'); group=composedParent(group)) {
       if (deepQuery(group,'input:not([type=hidden],[type=button]),textarea,select').some(node=>node!==input)) break;
       owner=group;
       if (!shown(group)) continue;
@@ -59,6 +60,10 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
       if (!label && otherAttachment(heading)) label=heading;
     }
     const boundLabels=[...input.labels ?? []].filter(node=>node.control===input && shown(node));
+    required ||= boundLabels.some(requiredLabel) || markedRequired(input,(element,selector)=>{
+      const field=composedClosest(element,selector);
+      return field && owner.contains(field) ? field : null;
+    },deepQuery);
     const titles=[...boundLabels,...deepQuery(owner,'p,label,legend,h1,h2,h3,h4,h5,h6,[role=heading],.application-label,.application-question-title,div,span')];
     for (const title of titles) {
       const labelledControl=title.closest('label')?.control;
@@ -89,7 +94,8 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     const attachmentIds=['fileid','uploadid','attachmentid'];
     const names=new Set([...attachmentIds,...attachmentIds.map(suffix=>compact(label)+suffix)]);
     const pending='[role=progressbar],progress,[aria-busy=true],[data-upload-state=pending],[data-upload-state=uploading]';
-    if (owner.matches(pending) && shown(owner) || deepQuery(owner,pending).some(shown)) {
+    if (input.validity.customError || input.getAttribute('aria-invalid')==='true' ||
+        owner.matches(pending) && shown(owner) || deepQuery(owner,pending).some(shown)) {
       return {label,reason:'required_attachment_unconfirmed'};
     }
     const completed='[data-upload-state=success]';

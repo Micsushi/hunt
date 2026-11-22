@@ -442,14 +442,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     let applicationRegions = identifyApplicationRegions(fields);
     const finalReport = () => {
       screeningGroups.reportMissing(result,addSkip);
-      if (applicationRegions.length===1 && applicationRegions[0] instanceof Element) {
-        for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
-          if (regionFor(input)!==applicationRegions[0] || !scopedControl(input)) continue;
-          const attachment=unresolvedAttachment(input);
-          if (attachment) {
-            if (action==='status' || !matchingRunId) result.incomplete=true;
-            addSkip(attachment.label,attachment.reason);
-          }
+      for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
+        if (!applicationRegions.includes(regionFor(input)) || !scopedControl(input)) continue;
+        const attachment=unresolvedAttachment(input);
+        if (attachment) {
+          if (action==='status' || !matchingRunId) result.incomplete=true;
+          addSkip(attachment.label,attachment.reason);
         }
       }
       // Read the employer's final action after filling. Never activate it to test readiness.

@@ -161,6 +161,35 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     assert.deepEqual(unresolved(await status()),[]);
     assert.equal(await page.evaluate('submits'),0);
 
+    const applicant='<label>First name<input name="first" required></label><label>Email<input type="email" required></label>';
+    const resumeField='<div><label>Resume/CV*<input id="resume" type="file" required></label><button type="button">Choose File*</button><span>No file selected</span><div>Drop here</div></div>';
+    await page.setContent('<form>'+applicant+resumeField+'</form>');
+    assert.deepEqual(unresolved(await status()),[],'resume helper text is never an extra document');
+    await page.locator('#resume').evaluate(input=>input.insertAdjacentHTML('afterend','<span>Resume.pdf</span>'));
+    assert.deepEqual(unresolved(await status()),[],'a cleared picker and a displayed resume filename are not extra documents');
+
+    await page.setContent('<main>'+applicant+resumeField+'<div class="ashby-application-form-field"><p>Cover Letter</p><span class="ashby-application-form-field-required">*</span><input id="letter" type="file"></div></main>'+
+      '<form><label>Portfolio<input required type="file"></label></form>');
+    const partialFormless=await fill(page);
+    assert.equal(partialFormless.incomplete,true);
+    assert.deepEqual(unresolved(partialFormless),['Cover Letter']);
+    assert.equal(await page.locator('[name=first]').inputValue(),'Fixture');
+    assert.deepEqual(await bytes(page,'letter'),[]);
+    await page.evaluate(applicant=>{
+      const host=document.createElement('section');
+      document.body.append(host);
+      host.attachShadow({mode:'open'}).innerHTML=applicant+'<label>Transcript<input type="file" required></label>';
+    },applicant);
+    assert.deepEqual(unresolved(await status()),['Cover Letter','Transcript'],'each identified document or shadow region owns its own files');
+    const letter=page.locator('#letter');
+    await letter.setInputFiles({name:'MyLetter.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-owner-letter')});
+    await letter.evaluate(input=>input.insertAdjacentHTML('afterend','<input type="hidden" name="coverLetterFileId" value="stored">'));
+    assert.deepEqual(unresolved(await status()),['Transcript']);
+    await letter.evaluate(input=>input.setAttribute('aria-invalid','true'));
+    assert.ok((await status()).skipped.some(row=>row.label==='Cover Letter' && row.reason==='required_attachment_unconfirmed'));
+    await letter.evaluate((input:HTMLInputElement)=>{input.removeAttribute('aria-invalid');input.setCustomValidity('File rejected');});
+    assert.ok((await status()).skipped.some(row=>row.label==='Cover Letter' && row.reason==='required_attachment_unconfirmed'));
+
   }finally{await browser.close();}
 });
 
