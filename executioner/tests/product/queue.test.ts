@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {randomUUID} from 'node:crypto';
 import { mkdtempSync, readFileSync, unlinkSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -194,7 +195,7 @@ test("restoring a replaced job and silently changing its selected resume are rej
         assert.throws(()=>queue.add([{...selected,url:canonicalUrl,sourceJobId:131}],options),/another Hunt job/);
         assert.throws(()=>queue.add([{...selected,url:url+'/unrelated'}],options),/recognized public application form/);
       } else {
-        const [replacement] = queue.add([{...selected,url:canonicalUrl}],options);
+        const [replacement] = queue.add([{...selected,url:canonicalUrl,sourceJobId:131,resumeBase64:Buffer.from('%PDF-replacement').toString('base64')}],options);
         assert.notEqual(replacement!.id,amazon!.id);
         await assert.rejects(queue.action(amazon!.id,'restore'),/already been added/);
       }
@@ -209,10 +210,61 @@ test("restoring a replaced job and silently changing its selected resume are rej
       writeFileSync(stateFile,JSON.stringify(saved));
       assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
     }
-    archived.key = oldKey;
-    archived.status = 'paused';
+    Object.assign(archived,{url,key:oldKey,status:'submitting',tabId:405,selectedDocument:'private-legacy-document',title:'private-legacy-title'});
+    const bare=saved.jobs.find((job:{id:string;key:string})=>job.id!==archived.id && job.key==='amazon.jobs/jobs/7654');
+    Object.assign(bare,{status:'submitted',tabId:406});
+    const bareInput=join(root,bare.id+'.input.json'), originalBare=readFileSync(bareInput);
+    assert.notDeepEqual(originalBare,originalInput);
+    const dormant={...archived,id:randomUUID(),status:'removed',sourceJobId:132};
+    saved.jobs.push(dormant); writeFileSync(join(root,dormant.id+'.input.json'),originalInput);
+    const bundle=(link:string,sourceJobId:number)=>({format:'hunt-c3-handoff',version:1,jobs:[{url:link,sourceJobId,
+      title:'Fixture',resumeName:'Selected.pdf',resumeVersion:bare.resumeVersion,resumeSha256:bare.resumeSha256,
+      resumeBase64:JSON.parse(originalBare.toString()).resume}]});
     writeFileSync(stateFile,JSON.stringify(saved));
-    assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
+    for (let restart=0; restart<2; restart++) {
+      const app=await startProductServer({root,port:0});
+      try {
+        const headers={Authorization:'Bearer '+readFileSync(app.tokenPath,'utf8'),Origin:app.origin,'Content-Type':'application/json'};
+        const post=(path:string,body:unknown)=>fetch(app.origin+path,{method:'POST',headers,body:JSON.stringify(body)});
+        const state=await (await fetch(app.origin+'/state',{headers})).json();
+        assert.equal(state.unavailableJobCount,2); assert.equal(state.conflictingJobCount,2);
+        assert.deepEqual(state.jobs.map((job:{id:string})=>job.id),[neighbor!.id]);
+        assert.doesNotMatch(JSON.stringify(state),/private-legacy|amazon\.jobs/);
+        for (const held of [archived,bare]) for (const action of ['open','retry','submit','remove','restore']) {
+          assert.equal((await post('/jobs/'+held.id+'/action',{action,confirmed:true})).status,400);
+        }
+        for (const expectedUrl of [url,canonicalUrl,canonicalUrl+'/questionnaire','https://amazon.jobs/applicant/screening']) {
+          const res=await post('/browser/page',{expectedUrl,tabId:407,operation:'fill',documentId:'c'.repeat(64)});
+          assert.equal(res.status,400);assert.match((await res.json()).error,/conflict/i);
+        }
+        const restore=await post('/jobs/'+dormant.id+'/action',{action:'restore'});
+        assert.equal(restore.status,400); assert.match((await restore.json()).error,/conflict/i);
+        for (const path of ['/handoff/preview','/handoff/import-paused']) assert.equal((await post(path,bundle(canonicalUrl,131))).status,400);
+        const separate=canonicalUrl.replace('7654','7655');
+        assert.equal((await post('/handoff/preview',bundle(separate,131))).status,400,'a conflicting saved source ID cannot move to a different posting');
+        assert.equal((await post('/handoff/preview',bundle(separate,140))).status,200,'a distinct Amazon posting remains available');
+        assert.equal((await post('/repair-saved-link',{url})).status,400);
+        assert.throws(()=>app.queue.add([{...selected,url:'https://fixture.bamboohr.com/careers/13'}],options),/conflict/i);
+        assert.equal((await post('/concurrency',{value:3})).status,200);
+      } finally {await app.close();}
+      const persisted=JSON.parse(readFileSync(stateFile,'utf8')).jobs;
+      assert.deepEqual(persisted.find((j:{id:string})=>j.id===archived.id),archived);
+      assert.deepEqual(persisted.find((j:{id:string})=>j.id===bare.id),bare);
+      assert.deepEqual(readFileSync(inputFile),originalInput);assert.deepEqual(readFileSync(bareInput),originalBare);
+    }
+    // An unreadable owner with the same stable key still holds the readable owner and private original URL.
+    archived.url='javascript:private-legacy-url';
+    writeFileSync(stateFile,JSON.stringify(saved));
+    queue = new ApplicationQueue(root,bridge);
+    assert.equal(queue.snapshot().conflictingJobCount,2);
+    assert.doesNotMatch(JSON.stringify(queue.snapshot()),/private-legacy/);
+    await queue.close();
+    // With only one active record in a restored backup, the ordinary restart protections apply.
+    archived.url=url; bare.status='removed'; writeFileSync(stateFile,JSON.stringify(saved));
+    queue = new ApplicationQueue(root,bridge);
+    assert.equal(queue.snapshot().unavailableJobCount,0);
+    assert.equal(queue.jobs.find(job=>job.id===archived.id)?.status,'submission_uncertain');
+    await assert.rejects(queue.action(bare.id,'restore'),/already been added/);
   } finally { await queue.close(); }
 });
 

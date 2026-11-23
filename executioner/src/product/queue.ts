@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
-import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget, savedPostingsMayOverlap, possibleUnmappedStep } from "./target.ts";
+import { amazonPostingKey, applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget, savedPostingsMayOverlap, possibleUnmappedStep } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { aiConsentAuthority, applicantProfile, productSources, effectiveProfileFacts, withCurrentAiConsent } from "./sources.ts";
@@ -94,10 +94,12 @@ function verifiedSavedPublication(posting:string, link:string) {
       selected.search && selected.search !== '?dcr_ci=' + publication.company) return false;
   return verifySmartRecruitersApplication(posting,selected.href);
 }
+const postingConflict = 'Saved applications have conflicting posting links. Preserve your local data and restore an Applications backup with one active entry for this posting.';
 export class ApplicationQueue {
   // Keep unreadable legacy links on disk, outside every operational job lookup.
   private records: ProductJob[] = [];
-  get jobs() { return this.records.filter(job=>savedTarget(job.url)); }
+  private readonly conflictingIds = new Set<string>();
+  get jobs() { return this.records.filter(job=>!this.conflictingIds.has(job.id) && savedTarget(job.url)); }
   concurrency = 6;
   credentials?: ProductInput["credentials"];
   verifyEmail?: import('./workday-sign-in.ts').WorkdayAccountOptions['verifyEmail'];
@@ -125,14 +127,20 @@ export class ApplicationQueue {
           new Set(saved.jobs.map((job: ProductJob) => job.id)).size !== saved.jobs.length) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
       this.records = saved.jobs;
       this.concurrency = saved.concurrency;
-      const activeKeys=new Set<string>();
+      const owners=new Map<string,string>();
       for (const job of this.records) {
         const target=savedTarget(job.url);
-        if (!target) continue;
-        const {key}=target;
-        if (typeof job.key!=='string' || canonicalPostingKey(job.key)!==key || job.status!=='removed' && activeKeys.has(key)) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
-        job.key=key;
-        if (job.status!=='removed') activeKeys.add(key);
+        if (target && (typeof job.key!=='string' || canonicalPostingKey(job.key)!==target.key)) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
+        const key=target?.key ?? (typeof job.key==='string' ? amazonPostingKey(job.key) : undefined);
+        if (!key || job.status==='removed') continue;
+        const first=owners.get(key);
+        if (!first) owners.set(key,job.id);
+        else if (amazonPostingKey(key)) { this.conflictingIds.add(first); this.conflictingIds.add(job.id); }
+        else throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
+      }
+      // Isolate every conflicting owner before normalizing any saved tabs or submission state.
+      for (const job of this.jobs) {
+        job.key=canonicalPostingKey(job.key);
         delete job.tabId;
         if (job.status === "submitting") { job.status = "submission_uncertain"; job.stage = "Check the employer site before doing anything else"; }
         else if (["running", "queued", "review"].includes(job.status)) { job.status = "paused"; job.stage = "Service restarted. Retry to inspect the saved application"; }
@@ -160,7 +168,7 @@ export class ApplicationQueue {
     const visible=this.records.filter(job=>job.status!=="removed");
     const jobs=visible.flatMap(job => {
       const target=savedTarget(job.url);
-      if (!target) return [];
+      if (!target || this.conflictingIds.has(job.id)) return [];
       let profileUpdateAvailable=false;
       if (job.status==='paused' && profileDigest) try {
         const input=JSON.parse(readFileSync(join(this.root,`${job.id}.input.json`),'utf8'));
@@ -168,11 +176,15 @@ export class ApplicationQueue {
       } catch { /* A damaged saved input is reported by the explicit job action. */ }
       return [{...job,currentPageOnly:target.ats==='generic',profileUpdateAvailable,actionPending:this.running.has(job.id)||this.reviewActions.has(job.id)}];
     });
-    return { jobs, unavailableJobCount:visible.length-jobs.length, connected: this.bridge.connected,
+    return { jobs, unavailableJobCount:visible.length-jobs.length, conflictingJobCount:this.conflictingIds.size, connected: this.bridge.connected,
     configured: !!this.settings, accountConfigured: !!this.credentials, emailConfigured: !!this.verifyEmail, concurrency: this.concurrency, storageError: this.storageError }; }
   getSettings() { return this.settings ?? null; }
-  assertAvailableLink(url:string, sourceJobId?:number) {
+  assertAvailableLink(url:string, sourceJobId?:number, writesPage=false) {
     const key=savedTarget(url)?.key;
+    const page=writesPage && !key && this.conflictingIds.size ? URL.parse(url) : undefined;
+    if (this.conflictingIds.size && this.records.some(job=>this.conflictingIds.has(job.id) &&
+        (key && savedPostingsMayOverlap(job.key,key) || sourceJobId!==undefined && job.sourceJobId===sourceJobId ||
+         job.selectedApplicationUrl===url || job.reviewUrl===url || page && possibleUnmappedStep(job.key,page)))) throw new Error(postingConflict);
     if (this.records.some(job=>job.status!=='removed' && !savedTarget(job.url) &&
         (job.url===url || sourceJobId!==undefined && job.sourceJobId===sourceJobId ||
          key && typeof job.key==='string' && possiblePostingAlias(job.key)===possiblePostingAlias(key)))) {
@@ -197,6 +209,7 @@ export class ApplicationQueue {
     if (!target) throw new Error('Paste the full HTTPS link to the original employer posting.');
     const held = this.records.find(job => job.status !== 'removed' && typeof job.key === 'string' && canonicalPostingKey(job.key) === target.key);
     const mismatch = 'C3 could not match this link to one unreadable application. Check the original employer posting or recover a known-good backup.';
+    if (held && this.conflictingIds.has(held.id)) throw new Error(postingConflict);
     if (!held || savedTarget(held.url)) throw new Error(mismatch);
     if (held.ats !== undefined && held.ats !== target.ats || held.posting !== undefined && held.posting !== target.posting ||
         held.host !== undefined && held.host !== target.host && canonicalPostingKey(held.host + held.posting) !== target.key ||

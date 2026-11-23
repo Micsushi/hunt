@@ -329,8 +329,10 @@ async function refresh() {
   $('start').disabled=!state.configured || !state.connected; $('concurrency').disabled=false; $('concurrency').value=String(state.concurrency);
   renderProfileStatus();
   $('summary').textContent=`${state.jobs.filter(j=>j.status==='review').length} at review · ${state.jobs.filter(needsAttention).length} need attention · ${state.jobs.filter(j=>j.status==='running').length} running`;
-  $('link-recovery').hidden=proxied || !state.unavailableJobCount;
-  if(state.unavailableJobCount) $('summary').textContent+=` · ${state.unavailableJobCount} saved ${state.unavailableJobCount===1?'application has an unreadable link':'applications have unreadable links'}${proxied ? '. Open local Applications to repair.' : ''}`;
+  const conflicting=state.conflictingJobCount || 0, unreadable=(state.unavailableJobCount || 0)-conflicting;
+  $('link-recovery').hidden=proxied || !unreadable;
+  if(conflicting) $('summary').textContent+=` · ${conflicting} saved applications have conflicting posting links. Preserve your local data and restore an Applications backup with one active entry per posting.`;
+  if(unreadable) $('summary').textContent+=` · ${unreadable} saved ${unreadable===1?'application has an unreadable link':'applications have unreadable links'}${proxied ? '. Open local Applications to repair.' : ''}`;
   $('empty').hidden=state.jobs.length>0;
   historyButtons(); renderJobs();
   if(!profileLoaded) {

@@ -3,7 +3,8 @@ import { smartRecruitersPublication } from './smartrecruiters-target.ts';
 export type AtsFamily = "workday" | "greenhouse" | "lever" | "ashby" | "workable";
 
 // Persisted rows can retain either public Amazon hostname after an upgrade.
-export const canonicalPostingKey = (key: string) => key.replace(/^www\.amazon\.jobs(?=\/jobs\/\d+$)/u, 'amazon.jobs');
+export const amazonPostingKey = (key: string) => /^(?:www\.)?(amazon\.jobs\/jobs\/\d+)$/u.exec(key)?.[1];
+export const canonicalPostingKey = (key: string) => amazonPostingKey(key) ?? key;
 
 // Do not send a default PDF where an ambiguous spelling could identify a saved draft.
 export function possiblePostingAlias(key: string): string {

@@ -163,7 +163,7 @@ export async function startProductServer(options: { root?: string; port?: number
         }
         if (queue.snapshot().jobs.some(job=>job.tabId===body.tabId && (job.actionPending || ['queued','running','submitting'].includes(job.status)))) throw new Error('C3 is already operating this page. Wait for it to finish.');
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
-        queue.assertAvailableLink(url.href);
+        queue.assertAvailableLink(url.href,undefined,writesProfile);
         const owner = await currentPageOwner(queue.jobs, body.tabId, url);
         if (writesProfile && !owner) queue.assertDefaultPageInput(url);
         const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
