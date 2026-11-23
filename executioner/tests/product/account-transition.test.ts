@@ -113,7 +113,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
     const sha = createHash("sha256").update(pdf).digest("hex");
     const review = page.locator('[data-automation-id=applyFlowReviewPage]');
     assert.equal(await review.count(),1);
-    const row = `<section id="resume-review"><h3>Resume/CV</h3><div data-automation-id="file-upload-item"><span data-automation-id="file-upload-item-name">${filename}</span></div></section>`;
+    const row = `<div aria-labelledby="unrelated-parent-label"><div role="group" id="resume-review"><h4>Resume/CV</h4><div><div data-automation-id="file-upload-item" style="display:contents"><span data-automation-id="file-upload-item-name">${filename}</span></div></div></div><div role="group"><h4>Application Questions</h4></div></div>`;
     await review.evaluate((root,row)=>root.insertAdjacentHTML("beforeend",row),row);
     const queueRoot = mkdtempSync(join(tmpdir(),"hunt-workday-resume-evidence-"));
     const queue = new ApplicationQueue(queueRoot,{connected:false,open:async()=>({tabId:1,page,browser:{close:async()=>{}} as typeof browser}),release:async()=>{}});
@@ -137,12 +137,19 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
       served=Buffer.from("invalid response");
       await assert.rejects(refresh(),/download failed/i);
       served=pdf;
-      await review.locator("h3").evaluate(node=>node.remove());
+      await review.locator("#resume-review").evaluate(node=>node.parentElement!.removeAttribute("aria-labelledby"));
+      await review.locator("#resume-review > h4").evaluate(node=>node.remove());
       const before=downloads;
       await assert.rejects(refresh(),/could not safely check/);
       assert.equal(downloads,before);
-      await name.evaluate(node=>{const a=node.parentElement!;a.replaceWith(node);(node as HTMLElement).hidden=true;});
-      await assert.rejects(refresh(),/resume is missing/);
+      await name.evaluate(node=>{const a=node.parentElement!;a.replaceWith(node);});
+      assert.equal((await reviewSnapshot(page,sha)).workdayResumeEvidence?.review,"not_shown",
+        "a matching filename in an unlabelled group is not résumé evidence");
+      await name.evaluate(node=>{(node as HTMLElement).hidden=true;});
+      await assert.rejects(refresh(),/could not confirm the previously visible resume/);
+      await review.locator("#resume-review").evaluate(node=>node.insertAdjacentHTML("beforeend","<h4>Resume/CV</h4><p>No attachments</p>"));
+      await assert.rejects(reviewSnapshot(page,sha),/resume is missing/);
+      await review.locator("#resume-review").evaluate(node=>node.remove());
       await review.evaluate((node,bytes)=>{
         const input=document.createElement("input");input.type="file";input.dataset.automationId="file-upload-input-ref";input.hidden=true;
         const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array(bytes)],"unshown.pdf",{type:"application/pdf"}));input.files=transfer.files;

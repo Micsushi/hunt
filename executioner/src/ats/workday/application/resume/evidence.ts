@@ -20,29 +20,46 @@ export async function inspectWorkdayResume(page: Page, sha256: string, artifactI
   return page.evaluate(async ({selector, names, sha256, maxBytes, phase}) => {
     const shown = (node: Element) => node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) &&
       !node.closest('[hidden],[inert],[aria-hidden=true]');
-    const active = () => [...document.querySelectorAll(selector)].filter(shown);
+    const itemSelector = '[data-automation-id="file-upload-item"]';
+    const nameSelector = '[data-automation-id="file-upload-item-name"]';
+    // A read-only Review group may lay out its visible children without a wrapper box.
+    const visibleWrapper = (node: Element) => shown(node) || phase === "review" &&
+      getComputedStyle(node).display === "contents" && [...node.querySelectorAll("h2,h3,h4," + nameSelector)].some(shown);
+    const active = () => [...document.querySelectorAll(selector)].filter(visibleWrapper);
     const roots = active();
     if (roots.length !== 1) return roots.length ? "ambiguous" : "not_shown";
     const root = roots[0]!;
-    const itemSelector = '[data-automation-id="file-upload-item"]';
-    const nameSelector = '[data-automation-id="file-upload-item-name"]';
+    const isResumeLabel = (text: string | null | undefined) =>
+      /^(?:resume(?:[ /-]?cv)?|résumé|cv|curriculum vitae)(?:\s*\*)?$/i.test(text?.trim() ?? "");
     const ownership = (node: Element) => {
-      let resume = false;
-      for (let region: Element | null = node; region && region !== root; region = region.parentElement) {
+      let resume = false, uncertainReference = false;
+      // A read-only heading names its own summary group. Labels elsewhere on the
+      // enclosing Review summary describe separate fields.
+      const group = phase === "review" ? node.closest('[role=group],section') : null;
+      const headings = group && group !== root ? [...group.querySelectorAll(":scope > h2,:scope > h3,:scope > h4,:scope > [role=heading]")].filter(shown) : [];
+      const reviewOwner = group && headings.length === 1 && isResumeLabel(headings[0]!.textContent) ? group : null;
+      if (group && group !== root && headings.length && !reviewOwner) return "other";
+      for (let region: Element | null = node; region && region !== root && region !== reviewOwner?.parentElement; region = region.parentElement) {
         if (region.querySelectorAll(itemSelector).length > 1 || region.querySelectorAll("input:not([type=hidden]),select,textarea").length > 1) break;
         const labels = [region.getAttribute("aria-label"),
           ...[...region.querySelectorAll(":scope > legend,:scope > label,:scope > .application-label,:scope > h2,:scope > h3,:scope > h4")].filter(shown).map(n=>n.textContent)];
         const ids = region.getAttribute("aria-labelledby")?.trim().split(/\s+/u).filter(Boolean) ?? [];
         for (const [index,id] of ids.entries()) {
           const refs = document.querySelectorAll(`[id="${CSS.escape(id)}"]`);
-          if (refs.length > 1 || index === 0 && (!refs[0] || !(refs[0].textContent?.trim() || refs[0].getAttribute("aria-label")?.trim()))) return "other";
+          if (refs.length > 1) return "other";
+          if (index === 0 && !(refs[0]?.textContent?.trim() || refs[0]?.getAttribute("aria-label")?.trim())) {
+            if (!reviewOwner) return "other";
+            uncertainReference = true;
+          }
           if (refs[0]) labels.push(refs[0].textContent, refs[0].getAttribute("aria-label"));
         }
         if (labels.some(s => /transcript|cover[ -]letter|supporting document|writing sample|passport|portfolio/i.test(s ?? ""))) return "other";
         if (/^formField-resume$/i.test(region.getAttribute("data-automation-id") ?? "") ||
-            labels.some(s => /^(?:resume(?:[ /-]?cv)?|résumé|cv|curriculum vitae)(?:\s*\*)?$/i.test(s?.trim() ?? ""))) resume = true;
+            labels.some(isResumeLabel)) resume = true;
       }
-      return resume ? "resume" : undefined;
+      // The visible heading and row establish filename display, but a broken
+      // association must never authorize following an employer link.
+      return resume ? uncertainReference ? "displayed_resume" : "resume" : undefined;
     };
     const filename = (item: Element) => {
       const visible = [...item.querySelectorAll(nameSelector)].filter(shown);
@@ -51,7 +68,7 @@ export async function inspectWorkdayResume(page: Page, sha256: string, artifactI
       return [...item.childNodes].filter(n => n.nodeType === Node.TEXT_NODE)
         .map(n => n.textContent?.trim()).find(name => name && /\.pdf$/i.test(name)) ?? "";
     };
-    const candidates = () => [...root.querySelectorAll(itemSelector)].filter(shown).filter(item =>
+    const candidates = () => [...root.querySelectorAll(itemSelector)].filter(visibleWrapper).filter(item =>
       ownership(item) === "resume" || ownership(item) !== "other" && names.includes(filename(item)));
     const items = candidates();
     if (items.length > 1) return "ambiguous";
@@ -112,10 +129,10 @@ export async function inspectWorkdayResume(page: Page, sha256: string, artifactI
       if (!current() || !root.contains(picker[0]!) || picker[0]!.files?.length !== 1 || picker[0]!.files[0] !== selection ||
           item && filename(item) !== name) return "ambiguous";
       if (!matches) return "mismatch";
-      return name ? "filename" : "picker";
+      return name && (phase !== "review" || item && ["resume","displayed_resume"].includes(ownership(item) ?? "")) ? "filename" : "picker";
     }
     if (picker.some(input => (input.files?.length ?? 0) > 0)) return "ambiguous";
-    if (name) return "filename";
+    if (name && (phase !== "review" || item && ["resume","displayed_resume"].includes(ownership(item) ?? ""))) return "filename";
     const emptyResume = [...root.querySelectorAll("h2,h3,h4,legend,[role=heading]")].find(node=>shown(node) &&
       /^(?:resume(?:[ /]cv)?|résumé|cv)$/i.test((node as HTMLElement).innerText.trim()) &&
       /\b(?:no (?:file|resume|attachments?) (?:attached|uploaded|selected)|no attachments)\b/i.test((node.parentElement as HTMLElement)?.innerText ?? ""));

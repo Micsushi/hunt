@@ -23,14 +23,17 @@ function attachmentStage(evidence?: ProductInput['workdayResumeEvidence']) {
     ? " The employer’s earlier download matched. Matching resume filename visible on Review, current PDF contents unverified."
     : filenameOnlyStage;
   if (evidence.review === "picker") return " The local file picker matches the selected PDF. Employer contents unverified.";
-  if (evidence.upload === "download") return " The employer’s earlier download matched. Review does not show a resume to recheck.";
-  if (evidence.upload === "picker") return " The earlier file picker matched the selected PDF. Review does not show a resume. Employer contents unverified.";
-  if (evidence.upload === "filename") return " The upload page showed the matching filename. Review does not show a resume. PDF contents unverified.";
-  return " Review does not show the selected resume. Check the attachment on the employer page.";
+  if (evidence.upload === "download") return " The employer’s earlier download matched. C3 could not confirm the resume on Review.";
+  if (evidence.upload === "picker") return " The earlier file picker matched the selected PDF. C3 could not confirm the resume on Review. Employer contents unverified.";
+  if (evidence.upload === "filename") return " The upload page showed the matching filename. C3 could not confirm the resume on Review. PDF contents unverified.";
+  return " C3 could not confirm the selected resume on Review. Check the attachment on the employer page.";
 }
 function reviewStage(stage: string, filenameOnly?: boolean, evidence?: ProductInput['workdayResumeEvidence'], previous?: ProductInput['workdayResumeEvidence']) {
   const before = attachmentStage(previous) || filenameOnlyStage;
-  const original = stage.endsWith(before) ? stage.slice(0, -before.length) : stage;
+  const normalized = stage.replace("Review does not show a resume to recheck.","C3 could not confirm the resume on Review.")
+    .replace("Review does not show a resume.","C3 could not confirm the resume on Review.")
+    .replace("Review does not show the selected resume.","C3 could not confirm the selected resume on Review.");
+  const original = normalized.endsWith(before) ? normalized.slice(0, -before.length) : normalized;
   const notice = evidence ? attachmentStage(evidence) : filenameOnly ? filenameOnlyStage : "";
   if (!notice) return original === "Ready to review." ? "Ready to review" : original;
   return (original.endsWith(".") ? original : original + ".") + notice;

@@ -78,7 +78,9 @@ export async function reviewSnapshot(page: Page, expectedResumeSha256?: string, 
   const digest = await reviewDigest(page);
   if (!expectedResumeSha256) return {digest};
   const review = checkWorkdayAttachment(await inspectWorkdayResume(page, expectedResumeSha256, productResumeId(expectedResumeSha256), "review"));
-  if ((review === "not_shown" || review === "picker") && (previous?.review === "filename" || previous?.review === "download")) checkWorkdayAttachment("missing");
+  if ((review === "not_shown" || review === "picker") && (previous?.review === "filename" || previous?.review === "download")) {
+    throw new ApplicationPause("C3 could not confirm the previously visible resume on Review. Check the attachment on the employer page.");
+  }
   if (await reviewDigest(page) !== digest) throw new ApplicationPause("The Review page changed while checking the attachment. Inspect it again.");
   return {digest, workdayResumeEvidence:{upload:previous?.upload,review}};
 
