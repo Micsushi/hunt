@@ -306,6 +306,17 @@ test("saved Workday drafts preserve uploads and continue without rewinding", { t
       await fillApplication(consentPage,{url:consentUrl,profile:consentProfile,resume:Buffer.from("%PDF-fixture")},AbortSignal.timeout(15000),()=>{});
       assert.deepEqual(await consentPage.evaluate("window.changedControls"),["required"]);
       assert.equal(await consentPage.locator('[data-automation-id="applyFlowReviewPage"]').count(),1);
+      await consentPage.reload();
+      await consentPage.locator('#required').evaluate(input=>{
+        input.setAttribute('aria-describedby','screening');
+        input.previousElementSibling!.textContent='I agree to the application terms.';
+        input.insertAdjacentHTML('afterend','<p id="screening">We use AI-assisted screening to evaluate applications.</p>');
+      });
+      await assert.rejects(fillApplication(consentPage,{url:consentUrl,profile:consentProfile,resume:Buffer.from("%PDF-fixture")},
+        AbortSignal.timeout(15000),()=>{}),ApplicationPause);
+      assert.deepEqual(await consentPage.evaluate("window.changedControls"),[]);
+      assert.equal(await consentPage.locator('#required').isChecked(),false);
+      assert.equal(await consentPage.evaluate('submits'),0);
     } finally {await consentPage.close();}
     for (const scenario of ["review", "experience", "missing-back", "bad-summary"]) {
       const canGoBack = scenario !== "missing-back";

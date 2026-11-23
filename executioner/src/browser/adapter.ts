@@ -2282,6 +2282,8 @@ async function inspectControls(page: Page): Promise<RawControl[]> {
         !/(?:^|\s|\()not required\)?(?:\s*\*)?$/iu.test(accessibleName);
     };
     const groupOf = (input: HTMLInputElement): string => {
+      const context = input.closest('fieldset,[role=radiogroup]')?.getAttribute('data-hunt-question-context');
+      if (context) return context;
       const fieldset = input.closest("fieldset");
       const legend = normalize(fieldset?.querySelector(":scope > legend")?.textContent);
       if (legend.length > 0) return legend;

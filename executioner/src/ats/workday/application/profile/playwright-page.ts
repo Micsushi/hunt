@@ -3447,7 +3447,7 @@ async function observedControlLabel(
     };
     if (radioGroup) {
       const legend = element.closest("fieldset")?.querySelector("legend");
-      return normalized(legend?.textContent);
+      return element.closest('fieldset,[role=radiogroup]')?.getAttribute('data-hunt-question-context') || normalized(legend?.textContent);
     }
     if (element.id !== "") {
       const owned = [...document.querySelectorAll("label")].find((label) => label.htmlFor === element.id);

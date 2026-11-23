@@ -116,7 +116,7 @@ export function protectedQuestionCategory(
   options: readonly string[] = [],
 ): ProtectedQuestionCategory | null {
   const normalized = normalizeCatalogText(label);
-  if (isAiEvaluationConsent(label)) return "consent";
+  if (isAiEvaluationConsent(label) || /\b(?:application|applicant|recruitment|account) terms\b/u.test(normalized)) return "consent";
   if (options.some(option => /\b(?:i (?:hereby )?(?:agree|consent|acknowledge|confirm|attest|certify)|acknowledge confirm)\b/u.test(normalizeCatalogText(option)))) return "consent";
   if (/\b(?:i|we) (?:hereby )?(?:confirm|certify|declare|attest|pledge)\b|\b(?:please )?(?:confirm|certify|attest) that\b|\b(?:consent|acknowledge|signature|privacy (?:notice|policy|statement)|terms (?:(?:and )?conditions|of (?:use|service)))\b|\b(?:(?:i|we) (?:hereby )?agree|agree to)\b|^agree$|^terms$|\b(?:accept|read) (?:the )?terms\b|\bi have (?:received )?read and (?:understood|understand)\b/u.test(normalized)) {
     return "consent";

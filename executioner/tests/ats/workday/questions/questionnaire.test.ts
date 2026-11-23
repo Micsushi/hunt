@@ -288,6 +288,8 @@ test("preserved consent skips mutations and unknown consent cannot become an inj
   for (const observed of [
     {...terms,rawQuestion:aiConsent.label,rawOptions:["I decline"]},
     field("mixed","I agree to the recruitment privacy notice and AI screening of my application.","checkbox"),
+    field("mixed","We use automated tools to screen applications. Do you consent to the processing of your application under our recruitment terms?","checkbox"),
+    field("mixed","We use AI-assisted screening. I accept the application terms.","checkbox"),
   ]) {
     const result = await denied.handler.complete(request([observed]),new AbortController().signal);
     assert.ok(result.ok && result.value.kind === "blocked" && result.value.code === "protected_answer_denied");

@@ -133,6 +133,11 @@ test('bilingual screening uses Canadian eligibility, separates background consen
       const ai = await answer(screeningQuestion,'radio',['Yes','No']);
       assert.equal(ai.answer,willing === undefined ? null : granted ? 'No' : 'Yes');
       assert.equal(ai.provisional,willing === undefined);
+      const mixed='We use automated tools to screen applications. I accept the application terms.';
+      assert.equal((await answer(mixed,'radio',['Yes','No'])).reason,'protected_answer_denied');
+      assert.equal((await answer(mixed,'checkbox',[],false)).reason,'optional_field');
+      const mixedDecline={...existingDecline,question:mixed};
+      assert.equal((await plan(mixedDecline,[mixedDecline],AbortSignal.timeout(3000))).reason,'readback_only');
       const expectedBackground = willing === undefined ? null : willing ? 'Yes' : 'No';
       assert.equal((await answer(background.replaceAll('RCL','ABC'),'radio',['Yes','No'])).answer,expectedBackground);
       assert.equal((await answer(background.replace('de RCL','de XYZ'),'radio',['Yes','No'])).answer,null);

@@ -26,7 +26,7 @@ export function createFieldObserver({
     state.matchingIds??=new WeakMap();
     if (!state.matchingIds.has(node)) state.matchingIds.set(node,crypto.randomUUID());
     const radios=group ? deepQuery(group,'input[type=radio]').filter(editable) : [];
-    if (group) label=group.getAttribute('aria-label') || group.querySelector('legend')?.textContent || label;
+    if (group) label=group.getAttribute('data-hunt-question-context') || group.getAttribute('aria-label') || group.querySelector('legend')?.textContent || label;
     const control=province?'listbox':group?'radio':searchChoice || buttonChoice?'listbox':fabric || e.getAttribute('role')==='combobox' || e.getAttribute('role')==='listbox'?'listbox':
       e.type==='checkbox'?'checkbox':e.tagName==='SELECT'?'select':e.tagName==='TEXTAREA'?'textarea':e.type==='date'?'date':'text';
     const menuId=e.getAttribute('aria-controls');

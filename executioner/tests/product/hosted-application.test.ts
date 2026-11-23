@@ -10,6 +10,9 @@ import {fillApplication, reviewDigest, submitReviewedApplication} from '../../sr
 import {fillGenericIdentityFields} from './retired-queue/generic-application.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 import {inspectHostedFields} from '../../src/product/hosted-application.ts';
+import {annotateQuestionContext} from '../../extension/question-context.js';
+import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {fillMatchedPage} from '../../src/product/page-matching.ts';
 import {hostedReviewSnapshot} from '../../src/product/hosted-application.ts';
 import {uploadGreenhouseResume,verifiedGreenhouseResume} from '../../src/product/greenhouse-resume.ts';
 import {ApplicationQueue} from '../../src/product/queue.ts';
@@ -352,6 +355,28 @@ test('Ashby nested optional consent stays separate from required Phone and legal
       await fillApplication(p,{...input,profile:saved},AbortSignal.timeout(15000),()=>{});
       assert.equal(await p.locator('select').inputValue(),'No'); // Preserve the committed decline after the preference changes.
     }
+    await p.locator('.ashby-application-form-texting-consent-description').evaluate(group=>{
+      group.innerHTML='<div><label>I agree to the application terms.<input id="box" type="checkbox" required></label>'+
+        '<p>We use AI-assisted screening to evaluate applications.</p></div>'+
+        '<label for="choice">I accept the application terms.</label><select id="choice" required aria-describedby="notice"><option></option><option>Yes</option><option>No</option></select>'+
+        '<fieldset aria-describedby="notice"><legend>I agree to the application terms.</legend><label><input type="radio" name="screen" required>Yes</label><label><input type="radio" name="screen">No</label></fieldset>'+
+        '<p hidden id="notice">We use automated tools to screen applications.</p>';
+    });
+    const protectedFields=(await inspectHostedFields(p)).filter(row=>['radio','checkbox','select'].includes(row.kind));
+    assert.equal(protectedFields.length,3);
+    assert.ok(protectedFields.every(row=>/screen applications|screening to evaluate/.test(row.label)));
+    const granted=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'true'},input.profile);
+    await assert.rejects(fillApplication(p,{...input,profile:granted},AbortSignal.timeout(15000),()=>{}),/requires a consent decision/);
+    const current=await fillMatchedPage({profile:granted,resume:input.resume,url,workflow:'C3.2',signal:AbortSignal.timeout(10000),
+      call:async(action,matchingPlans,matchingRunId)=>{
+        await p.evaluate(annotateQuestionContext);
+        return {...await p.evaluate(fillVisibleFields,{action,scope:'page' as const,matchingPlans,matchingRunId})};
+      }});
+    assert.equal(current.skipped.filter(row=>row.reason==='protected_answer_denied').length,3);
+    assert.ok(protectedFields.every(field=>current.matching?.some(row=>row.question===field.label)));
+    assert.equal(await p.locator('#box').isChecked(),false);
+    assert.equal(await p.locator('#choice').inputValue(),'');
+    assert.equal(await p.locator('[name=screen]:checked').count(),0);
     assert.equal(await p.evaluate('submits'),0);
   } finally { await b.close(); }
 });

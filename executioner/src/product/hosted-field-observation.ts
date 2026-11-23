@@ -165,7 +165,7 @@ export async function inspectHostedFields(page: Page) {
         !!group?.matches('[data-required=true],[aria-required=true]');
       const maskedDate = location.hostname==='apply.workable.com' && e.type==='text' && e.placeholder==='MM/DD/YYYY' && e.inputMode==='tel';
       const kind = multiChecks.length?'multicheck':e.classList.contains('ashby-application-form-input-yesno') ? 'buttons' : e.type === 'file' ? 'file' : e.id === 'location-input' && e.closest('.application-field') ? 'location' : e.tagName === 'SELECT' ? 'select' : e.getAttribute('role') === 'combobox' ? 'combobox' : e.type === 'radio' ? 'radio' : e.type === 'checkbox' ? 'checkbox' : e.tagName === 'TEXTAREA' ? 'textarea' : maskedDate || e.type === 'date' ? 'date' : 'text';
-      label = e.getAttribute('data-hunt-question-context') || label;
+      label = radioGroup?.getAttribute('data-hunt-question-context') || e.getAttribute('data-hunt-question-context') || label;
       const key = `hosted-${index}`;
       e.setAttribute('data-c3-hosted', key);
       const options = kind==='multicheck'?multiChecks.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind==='radio'?radios.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind === 'select' ? [...(raw as HTMLSelectElement).options].filter(o => !o.disabled && o.value).map(o => o.textContent?.trim() ?? '') : kind === 'buttons' ? [...e.querySelectorAll('button[data-option]')].map(o => o.textContent?.trim() ?? '') : [];
