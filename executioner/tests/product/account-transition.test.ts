@@ -128,7 +128,22 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
       assert.equal(await page.evaluate("submits"),0);
       if (action !== "download") assert.equal(downloads,before);
     }
-    attachmentAction = "none"; retainPicker = true;
+    restored = true; attachmentAction = "none";
+    await page.reload();
+    const restoredRow = await fill();
+    assert.deepEqual(restoredRow.workdayResumeEvidence,{upload:"filename",review:"not_shown"});
+    assert.equal(await page.locator('[data-automation-id=applyFlowReviewPage]').count(),1);
+    assert.equal(await page.evaluate("writes"),0);
+    assert.equal(await page.evaluate("submits"),0);
+    await page.reload();
+    await page.locator('[data-automation-id=file-upload-item-name]').evaluate(node=>node.textContent='different.pdf');
+    await assert.rejects(fill(),/different resume filename/);
+    assert.equal(await page.evaluate("writes"),0);
+    await page.reload();
+    await page.locator('#picker').evaluate(node=>node.setAttribute('aria-labelledby','missing-primary file-title'));
+    await assert.rejects(fill(),/required attachment needs your review/);
+    assert.equal(await page.evaluate("writes"),0);
+    restored = false; retainPicker = true;
     await page.reload();
     assert.deepEqual((await fill()).workdayResumeEvidence,{upload:"filename",review:"not_shown"});
     assert.equal(await page.evaluate("writes"),1);

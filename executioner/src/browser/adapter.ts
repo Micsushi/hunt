@@ -225,7 +225,8 @@ async function inspectUploadReadback(
           const links = actions();
           hasDownload = () => actions().length > 0;
           if (links.length === 0 && element.files.length === 0) {
-            return {kind:shown(names()[0]!) ? "no_download" : "unavailable"};
+            const displayed = names()[0] as HTMLElement;
+            return {kind:shown(displayed) && displayed.innerText.trim() === expectedName ? "no_download" : "unavailable"};
           }
           if (links.length) {
             const link = links[0];

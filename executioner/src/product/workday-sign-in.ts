@@ -71,6 +71,7 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
   const runId = randomUUID();
   const base = { url: options.url, tabId: options.tabId, runId };
   let opened = false, attempted = false, authenticated = false, creationAttempted = false, verificationAttempted = false;
+  let signInClickConfirmed = false;
   let preferCreate = options.preferCreate === true;
   let creationSince = options.verificationSince ?? 0;
   let rejected = false;
@@ -115,6 +116,41 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
     }
     if (result.state === 'blocked') throw new ApplicationPause(blocked[result.reason] ?? 'The selected sign-in form changed. Inspect the tab before retrying.');
   };
+  const recoverLateSignIn = async (failure: {state:string;reason?:string}) => {
+    if (!signInClickConfirmed || creationAttempted || failure.state !== 'blocked' ||
+        !['document_changed','navigation_changed'].includes(failure.reason ?? '')) return false;
+    record('sign_in_diagnostic', 'submit_late_' + failure.reason);
+    // The original tab and operation lease stay bound. Only inspect during the transition.
+    const until = Math.min(deadline, Date.now() + 3000);
+    while (Date.now() < until) {
+      const current = await command({operation:'inspect'});
+      signal.throwIfAborted();
+      if (Date.now() >= until) return false;
+      const observation = current.observation;
+      if (current.state === 'application') {
+        const expected = new URL(options.url), landed = URL.parse(current.url);
+        const postingPath = (url: URL) => url.pathname.replace(/(?:\/(?:apply|applyManually))+\/?$/i, '').replace(/\/$/, '');
+        if (!landed || landed.origin !== expected.origin || landed.username || landed.password ||
+            postingPath(landed) !== postingPath(expected) || !current.documentId || observation?.documentId !== current.documentId ||
+            observation.version !== 'workday-page-v1' || observation.conflicts?.length !== 0 ||
+            !Array.isArray(observation.signals) || observation.signals.some((value:string) =>
+              !['application_root','review_root','entry_link','entry_control'].includes(value) && !value.startsWith('root_')) ||
+            !(observation.kind === 'application' && observation.signals?.includes('application_root') ||
+              observation.kind === 'review' && observation.signals?.includes('review_root'))) return false;
+        return true;
+      }
+      if (current.state === 'blocked') check(current);
+      if (!['loading','unknown'].includes(current.state) || !observation ||
+          !['loading','unknown'].includes(observation.kind) || observation.conflicts?.length !== 0 ||
+          observation.signals?.some((value:string) => !['tab_loading','loading_marker'].includes(value))) return false;
+      await delay(150, undefined, {signal});
+    }
+    return false;
+  };
+  const applicationOpened = () => {
+    if (attempted || creationAttempted) { record('sign_in_transition_observed'); record('application_opened'); }
+    authenticated = true;
+  };
   try {
     const start = await command({ operation: 'begin' });
     base.tabId = start.tabId; opened = true; options.onTab(start.tabId);
@@ -150,6 +186,7 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
         await delay(1000, undefined, {signal});
         continue;
       }
+      if (await recoverLateSignIn(state)) {applicationOpened(); return;}
       check(state);
       if (verificationAttempted && attempted && (state.state==='sign_in' || state.state==='navigation' && state.action==='show_sign_in')) {
         throw new ApplicationPause('C3 opened the verification link, but the employer still requests sign-in. Check the account in this tab before retrying.');
@@ -163,8 +200,7 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
         preferCreate = false; creationSince = 0;
       }
       if (state.state === 'application') {
-        if (attempted || creationAttempted) { record('sign_in_transition_observed'); record('application_opened'); }
-        authenticated = true; return;
+        applicationOpened(); return;
       }
       const document = { documentId: state.documentId, expectedUrl: state.url };
       const openSignIn = state.state === 'account_exists' || (state.state === 'create_account' && !preferCreate && !creationAttempted);
@@ -224,6 +260,7 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           check(clicked);
           if (clicked.state !== 'clicked') throw new ApplicationPause('Sign-in was not confirmed. Inspect the tab before retrying.');
           if (creating) preferCreate = false;
+          else signInClickConfirmed = true;
           record('sign_in_diagnostic', 'submit_script_click_succeeded');
         }
       } else if (action && (!attempted || action === 'continue_application')) {
@@ -239,7 +276,9 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
         navigation.set(key, Date.now());
         // A notice left by an earlier session identifies the sign-in route, not which email was used.
         if (state.state === 'account_exists' && creationAttempted) record('account_exists');
-        check(await command({ operation: 'navigate', ...document, action, preferCreate }));
+        const navigated = await command({ operation: 'navigate', ...document, action, preferCreate });
+        if (await recoverLateSignIn(navigated)) {applicationOpened(); return;}
+        check(navigated);
       }
       await delay(500, undefined, { signal });
     }

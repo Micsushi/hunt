@@ -1415,6 +1415,9 @@ export class OwnedWorkdayApplicationRuntime {
           required,
         })),
       })}`);
+      const restoredFilenameTargets = new Set(snapshot.fields.filter(field =>
+        field.required && field.behavior === "file_upload" && "filePurpose" in field && field.filePurpose === "resume" &&
+        uploadIssues.get(field.target) === "no_download").map(field => field.target));
       const facts = structuralObservations(snapshot.fields);
       const currentReadbacks = new Map(
         observed.value.targets.map(({ token, readback }) => [token, readback]),
@@ -1518,6 +1521,10 @@ export class OwnedWorkdayApplicationRuntime {
             operation: "resolve_answer",
             observedOptionCount: resolutionRequest.field.options.length,
           };
+          if (restoredFilenameTargets.has(resolutionRequest.field.target)) {
+            // Preserve the employer's completed row without issuing an upload or recording byte verification.
+            return {ok:true as const, value:{kind:"readback_only" as const, fieldId:resolutionRequest.field.fieldId}};
+          }
           const resolution = await activeBatch.answerResolver.resolve({
             ...resolutionRequest,
             committedReadback: readback,
@@ -1793,15 +1800,6 @@ export class OwnedWorkdayApplicationRuntime {
         );
       }
       await closeBatch();
-      this.#acceptances.record(Object.freeze({
-        schemaVersion: 1,
-        checkpoint: "questionnaire_verified",
-        answers: completed.value.answers,
-        protectedPlaceholderCount: 0,
-        independentlyVerified: true,
-        submitActivated: false,
-        privacyScan: "pass",
-      }));
       // The independent monitor can blur the last control and Workday can then
       // remount the questionnaire root. Rebind the stable, value-free target
       // identities before the final review-expectation readback just as the
@@ -1810,6 +1808,20 @@ export class OwnedWorkdayApplicationRuntime {
       const after = await semantic.observe(signal);
       if (!after.ok) throw new TypeError("questionnaire review truth unavailable");
       const targets = new Map(after.value.targets.map((target) => [target.token, target]));
+      if (restoredFilenameTargets.size) {
+        const fields = await enrichQuestionnaireFields(page, discoverFields(after.value.targets));
+        for (const token of restoredFilenameTargets) {
+          const owned = fields.filter(field => field.target === token && field.filePurpose === "resume");
+          const issue = uploadIssues.get(token);
+          const readback = targets.get(token)?.readback;
+          if (owned.length !== 1 || !(issue === "no_download" || readback?.kind === "upload" &&
+              readback.sha256 === expectedResume.sha256 && readback.resumeId === expectedResume.resumeId)) {
+            this.#trace?.("questionnaire_reconciliation_blocked", {uiBehavior:"file_upload",code:"verification_unavailable"});
+            if (owned.length === 1 && issue) this.#trace?.("questionnaire_attachment_unverified", {issue,fieldId:owned[0]!.fieldId});
+            return applicationFailure("page_incomplete","question_control","question");
+          }
+        }
+      }
       for (const answer of completed.value.answers) {
         const field = snapshot.fields.find(({ fieldId }) => fieldId === answer.fieldId);
         if (field !== undefined && /^Language(?:\s*\*)?$/u.test(
@@ -1820,6 +1832,15 @@ export class OwnedWorkdayApplicationRuntime {
         if (value === undefined) throw new TypeError("questionnaire review truth unavailable");
         this.#recordReviewExpectation(answer.fieldId, answer.provenance, value);
       }
+      this.#acceptances.record(Object.freeze({
+        schemaVersion: 1,
+        checkpoint: "questionnaire_verified",
+        answers: completed.value.answers,
+        protectedPlaceholderCount: 0,
+        independentlyVerified: true,
+        submitActivated: false,
+        privacyScan: "pass",
+      }));
       return verified("questionnaire", "questionnaire_verified", input.pageId);
     } catch (error) {
       causalError ??= error;

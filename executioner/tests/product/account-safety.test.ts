@@ -5,8 +5,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
 import {accountJournal} from '../../src/product/account-journal.ts';
+import {observeWorkdayPage} from '../../src/ats/workday/page-observation.ts';
 import {prepareWorkdayAccount} from '../../src/product/workday-sign-in.ts';
-import {fillApplication} from '../../src/product/engine.ts';
+import {ApplicationPause,fillApplication} from '../../src/product/engine.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 import {accountFixture} from './fixture.ts';
 import {PlaywrightAccountPageAdapter} from '../../src/browser/playwright-live/private/playwright-account-page.ts';
@@ -54,6 +55,63 @@ test('delayed transition from Create Account to Sign In opens the link once', as
     assert.ok(events.includes('application_opened'));
     if(resumed) assert.ok(events.includes('sign_in_transition_observed'));
   }
+  const browser = await chromium.launch({headless:true});
+  try {
+    for (const scenario of ['application','review','late_continue','other_posting','other_origin','lost_lease','conflict','rejected','protected','heading_only','wrong_document','explicit_target_change']) {
+      const page = await browser.newPage();
+      await page.route('**/*', route=>route.fulfill({contentType:'text/html',body:'<label>Email<input id="email"></label><label>Password<input id="password"></label><button>Sign In</button>'}));
+      await page.goto(url);
+      let reads = 0, clicks = 0;
+      const writes:string[] = [], afterClick:string[] = [], events:string[] = [];
+      const run = prepareWorkdayAccount(async(method,request={})=>{
+        if (method==='agentStatus') return {capabilities:['workday-account-v1','workday-page-v1']};
+        if (clicks) afterClick.push(String(request.operation));
+        switch(request.operation) {
+          case 'begin': return {tabId:17};
+          case 'end': return {};
+          case 'navigate':
+            assert.equal(scenario,'late_continue'); assert.equal(request.action,'continue_application');
+            return {state:'blocked',reason:'navigation_changed'};
+          case 'fill':
+            writes.push(String(request.field));
+            await page.locator('#'+String(request.field)).fill(String(request.value));
+            return {state:'filled',verified:true};
+          case 'click':
+            await page.getByRole('button',{name:'Sign In'}).click(); clicks++;
+            return {state:'clicked'};
+          case 'inspect': {
+            assert.equal(request.tabId,17);
+            if (!clicks) return {state:'sign_in',ready:true,clickReady:true,documentId:'signin',url};
+            if (++reads===1) return scenario==='late_continue' ?
+              {state:'navigation',action:'continue_application',url,documentId:'signin'} :
+              {state:'blocked',reason:scenario==='explicit_target_change'?'target_changed':'document_changed'};
+            if (scenario==='lost_lease') throw new Error('Run no longer owns the tab');
+            if (scenario==='rejected') return {state:'blocked',reason:'rejected'};
+            if (scenario==='protected') return {state:'blocked',reason:'security_check'};
+            const destination=scenario==='other_posting'?url.replace('Job_R1','Job_R2'):
+              scenario==='other_origin'?url.replace('fixture.wd1','other.wd1'):url+'/apply';
+            await page.goto(destination);
+            await page.setContent(scenario==='heading_only'?'<h2>My Information</h2>':
+              scenario==='conflict'?'<section data-automation-id="applyFlowMyInfoPage">My Information</section><section data-automation-id="applyFlowMyExperiencePage">My Experience</section>':
+              scenario==='review'?'<section data-automation-id="applyFlowReviewPage">Review</section>':'<section data-automation-id="applyFlowMyInfoPage">My Information</section>');
+            const observed=await observeWorkdayPage(page);
+            return {state:observed.kind==='application'||observed.kind==='review'?'application':observed.kind,
+              documentId:'current',url:page.url(),observation:{...observed,documentId:scenario==='wrong_document'?'stale':'current'}};
+          }
+          default: throw new Error('Unexpected account operation');
+        }
+      },{url,tabId:17,signal:AbortSignal.timeout(9000),credentials:{email:'fixture@example.invalid',password:'synthetic'},record:event=>events.push(event),onTab:()=>{}});
+      if (['application','review','late_continue'].includes(scenario)) {await run;assert.ok(events.includes('application_opened'));}
+      else {await assert.rejects(run,ApplicationPause);assert.equal(events.includes('application_opened'),false);}
+      assert.equal(clicks,1);
+      assert.deepEqual(writes,['email','password']);
+      if (scenario==='late_continue') assert.deepEqual(afterClick.splice(0,2),['inspect','navigate']);
+      assert.ok(afterClick.every(operation=>['inspect','end'].includes(operation)));
+      if (scenario==='explicit_target_change') assert.equal(reads,1);
+      await page.close();
+    }
+  } finally {await browser.close();}
+
 });
 
 test('a resumed account notice needs an explicit employer response before sign-in', async ()=>{
