@@ -16,10 +16,24 @@ import { smartRecruitersPublication, verifySmartRecruitersApplication } from './
 import { componentFailure, recordComponentFailure, type ComponentFailure } from "./component-diagnostics.ts";
 
 const filenameOnlyStage = " The employer shows the resume filename. PDF contents unverified.";
-function reviewStage(stage: string, filenameOnly?: boolean) {
-  const original = stage.endsWith(filenameOnlyStage) ? stage.slice(0, -filenameOnlyStage.length) : stage;
-  if (!filenameOnly) return original === "Ready to review." ? "Ready to review" : original;
-  return (original.endsWith(".") ? original : original + ".") + filenameOnlyStage;
+function attachmentStage(evidence?: ProductInput['workdayResumeEvidence']) {
+  if (!evidence) return "";
+  if (evidence.review === "download") return " The employer’s downloaded PDF matches the selected resume.";
+  if (evidence.review === "filename") return evidence.upload === "download"
+    ? " The employer’s earlier download matched. Matching resume filename visible on Review, current PDF contents unverified."
+    : filenameOnlyStage;
+  if (evidence.review === "picker") return " The local file picker matches the selected PDF. Employer contents unverified.";
+  if (evidence.upload === "download") return " The employer’s earlier download matched. Review does not show a resume to recheck.";
+  if (evidence.upload === "picker") return " The earlier file picker matched the selected PDF. Review does not show a resume. Employer contents unverified.";
+  if (evidence.upload === "filename") return " The upload page showed the matching filename. Review does not show a resume. PDF contents unverified.";
+  return " Review does not show the selected resume. Check the attachment on the employer page.";
+}
+function reviewStage(stage: string, filenameOnly?: boolean, evidence?: ProductInput['workdayResumeEvidence'], previous?: ProductInput['workdayResumeEvidence']) {
+  const before = attachmentStage(previous) || filenameOnlyStage;
+  const original = stage.endsWith(before) ? stage.slice(0, -before.length) : stage;
+  const notice = evidence ? attachmentStage(evidence) : filenameOnly ? filenameOnlyStage : "";
+  if (!notice) return original === "Ready to review." ? "Ready to review" : original;
+  return (original.endsWith(".") ? original : original + ".") + notice;
 }
 
 export type JobStatus = "queued" | "running" | "paused" | "review" | "submitting" | "submitted" | "submission_uncertain" | "removed";
@@ -56,6 +70,7 @@ export interface ProductJob {
   pageHandoff?: true; selectedDocument?: string; selectedApplicationUrl?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
   componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
+  workdayResumeEvidence?: ProductInput['workdayResumeEvidence'];
   resumeName?: string; resumeVersion?: string; resumeSha256?: string; resumeExpected?: boolean; resumeUpload?: ProductInput['resumeUpload'];
 }
 export interface BrowserConnection {
@@ -342,14 +357,15 @@ export class ApplicationQueue {
         });
         const resumeSha256 = job.resumeSha256 ?? createHash("sha256").update(Buffer.from(
           JSON.parse(readFileSync(join(this.root, `${job.id}.input.json`), "utf8")).resume, "base64")).digest("hex");
-        const verified = await reviewSnapshot(session.page, resumeSha256, job.resumeExpected, job.resumeUpload).catch(error => {
+        const verified = await reviewSnapshot(session.page, resumeSha256, job.resumeExpected, job.resumeUpload, job.workdayResumeEvidence).catch(error => {
           recordComponentFailure(error, "review", "inspect_saved_review");
           throw error;
         });
         const digest = verified.digest;
         if (this.closed) throw new Error("The application service is stopping.");
         if (job.status === "paused") job.stage = "Owner review needed: Check every answer and the attached resume.";
-        job.stage = reviewStage(job.stage, verified.resumeFilenameOnly);
+        job.stage = reviewStage(job.stage, verified.resumeFilenameOnly, verified.workdayResumeEvidence, job.workdayResumeEvidence);
+        job.workdayResumeEvidence = verified.workdayResumeEvidence;
         job.resumeExpected = job.resumeExpected === true || verified.resumeExpected;
         job.status = "review"; job.reviewDigest = digest; delete job.error; delete job.componentFailure; this.changed(job); return;
       } catch (error) {
@@ -444,7 +460,7 @@ export class ApplicationQueue {
       controller.signal.throwIfAborted();
       this.changed(job);
       const result = await this.fill(session.page, { url: job.url, profile: input.profile, learningRoot: join(this.root, "learning", job.id, runId),
-        resume: Buffer.from(input.resume, "base64"), resumeExpected: job.resumeExpected,
+        resume: Buffer.from(input.resume, "base64"), resumeExpected: job.resumeExpected, workdayResumeEvidence:job.workdayResumeEvidence,
         onResumeObserved: () => { job.resumeExpected = true; this.changed(job); },
         resumeUpload: job.resumeUpload, onResumeUpload: receipt => { job.resumeUpload = receipt; this.changed(job); },
         credentials: this.credentials, requireScriptSignIn: !!this.bridge.prepareAccount, recordAccountAction: journal }, controller.signal,
@@ -456,7 +472,8 @@ export class ApplicationQueue {
       job.status = "review";
       job.stage = result.needsOwnerReview ? "Owner review needed: suggested or unverified answers. Check every answer in the draft." : "Ready to review";
       if (result.salaryUnitsNeedReview) job.stage += " " + salaryUnitsNotice;
-      job.stage = reviewStage(job.stage, result.resumeFilenameOnly);
+      job.stage = reviewStage(job.stage, result.resumeFilenameOnly, result.workdayResumeEvidence);
+      job.workdayResumeEvidence = result.workdayResumeEvidence;
       job.resumeExpected = job.resumeExpected === true || result.resumeExpected;
       job.reviewDigest = result.reviewDigest; job.reviewUrl = reviewUrl; delete job.error; delete job.componentFailure;
       this.changed(job);

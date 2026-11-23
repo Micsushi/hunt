@@ -8,7 +8,8 @@ import { journeyId } from "../../src/contracts/index.ts";
 import { PlaywrightWorkdayApplicationPage } from "../../src/ats/workday/application/playwright-page.ts";
 import { observeWorkdayPage } from "../../src/ats/workday/page-observation.ts";
 import { chromium } from "playwright";
-import { ApplicationPause, fillApplication } from "../../src/product/engine.ts";
+import { ApplicationQueue } from "../../src/product/queue.ts";
+import { ApplicationPause, fillApplication, reviewSnapshot } from "../../src/product/engine.ts";
 import { fixtureApplicantProfile, accountFixture, applicationFixture } from "./fixture.ts";
 
 test("missing answers reload only a bound required empty busy catalog and only once", { timeout: 60_000 }, async () => {
@@ -107,7 +108,49 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
       assert.equal(await page.evaluate("writes"), 0);
     }
     await page.reload();
-    await fill();
+    const filled = await fill();
+    assert.deepEqual(filled.workdayResumeEvidence,{upload:"download",review:"not_shown"});
+    const sha = createHash("sha256").update(pdf).digest("hex");
+    const review = page.locator('[data-automation-id=applyFlowReviewPage]');
+    assert.equal(await review.count(),1);
+    const row = `<section id="resume-review"><h3>Resume/CV</h3><div data-automation-id="file-upload-item"><span data-automation-id="file-upload-item-name">${filename}</span></div></section>`;
+    await review.evaluate((root,row)=>root.insertAdjacentHTML("beforeend",row),row);
+    const queueRoot = mkdtempSync(join(tmpdir(),"hunt-workday-resume-evidence-"));
+    const queue = new ApplicationQueue(queueRoot,{connected:false,open:async()=>({tabId:1,page,browser:{close:async()=>{}} as typeof browser}),release:async()=>{}});
+    try {
+      queue.configure(profile,pdf.toString("base64"));
+      const [job] = queue.add([{url}]);
+      Object.assign(job!,{status:"review",tabId:1,reviewUrl:url,workdayResumeEvidence:filled.workdayResumeEvidence});
+      const refresh = () => queue.action(job!.id,"refresh_review");
+      await refresh();
+      assert.equal(job!.workdayResumeEvidence?.review,"filename");
+      assert.match(job!.stage,/earlier download matched.*filename visible.*contents unverified/);
+      const name = review.locator('[data-automation-id=file-upload-item-name]');
+      await name.evaluate(node=>{const a=document.createElement("a");a.href="/attachment.pdf";a.setAttribute("download","");node.replaceWith(a);a.append(node);});
+      await refresh();
+      assert.equal(job!.workdayResumeEvidence?.review,"download");
+      assert.match(job!.stage,/downloaded PDF matches the selected resume/);
+      assert.doesNotMatch(job!.stage,/filename only/);
+      served=Buffer.from("%PDF-wrong");
+      await assert.rejects(refresh(),/differs from the selected resume/);
+      assert.equal(job!.status,"paused");
+      served=Buffer.from("invalid response");
+      await assert.rejects(refresh(),/download failed/i);
+      served=pdf;
+      await review.locator("h3").evaluate(node=>node.remove());
+      const before=downloads;
+      await assert.rejects(refresh(),/could not safely check/);
+      assert.equal(downloads,before);
+      await name.evaluate(node=>{const a=node.parentElement!;a.replaceWith(node);(node as HTMLElement).hidden=true;});
+      await assert.rejects(refresh(),/resume is missing/);
+      await review.evaluate((node,bytes)=>{
+        const input=document.createElement("input");input.type="file";input.dataset.automationId="file-upload-input-ref";input.hidden=true;
+        const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array(bytes)],"unshown.pdf",{type:"application/pdf"}));input.files=transfer.files;
+        const label=document.createElement("label");label.textContent="Resume";label.append(input);node.append(label);
+      },[...pdf]);
+      assert.deepEqual((await reviewSnapshot(page,sha)).workdayResumeEvidence,{upload:undefined,review:"picker"});
+      assert.equal(await page.evaluate("submits"),0);
+    } finally {await queue.close();rmSync(queueRoot,{recursive:true,force:true});}
     // The empty form inserts the attribute-only row in the file change handler. Restored forms start with a success child.
     assert.equal(await page.evaluate("writes"),1);
     assert.ok(downloads > 0);
@@ -118,7 +161,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
     assert.equal(await page.evaluate("writes"),0);
     served = Buffer.from("%PDF-1.4 other file");
     await page.reload();
-    await assert.rejects(fill(),/required attachment needs your review/);
+    await assert.rejects(fill(),/attachment differs from the selected resume/);
     assert.equal(await page.evaluate("writes"),0);
     await page.evaluate(({filename, bytes}) => {
       const retained = new DataTransfer();
@@ -126,7 +169,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
       document.querySelector<HTMLInputElement>('#picker')!.files = retained.files;
     }, {filename, bytes:[...pdf]});
     const before = downloads;
-    await assert.rejects(fill(),/required attachment needs your review/);
+    await assert.rejects(fill(),/attachment differs from the selected resume/);
     assert.ok(downloads > before);
     assert.equal(await page.evaluate("writes"),0);
     assert.equal(await page.locator('[data-automation-id=applyFlowReviewPage]').count(),0);

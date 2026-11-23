@@ -698,10 +698,12 @@ export const productBoundary = {
       "src/product/application-wait.ts",
     ],
     "src/product/application-contract.ts": [
+      "src/ats/workday/application/resume/index.ts",
       "src/product/page-matching.ts",
       "src/product/account-journal.ts",
     ],
     "src/product/application-review.ts": [
+      "src/ats/workday/application/resume/index.ts",
       "src/ats/workday/application/page-walk-contract.ts",
       "src/ats/workday/application/playwright-page.ts",
       "src/ats/workday/page-observation.ts",
@@ -830,6 +832,7 @@ export const productBoundary = {
       "src/browser/playwright-live/private/application-page-types.ts",
     ],
     "src/product/workday-workflow.ts": [
+      "src/ats/workday/application/resume/index.ts",
       "src/ats/workday/application/page-walk-contract.ts",
       "src/ats/workday/application/page-walk.ts",
       "src/ats/workday/page-observation.ts",

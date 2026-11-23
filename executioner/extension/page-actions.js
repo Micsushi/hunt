@@ -195,7 +195,9 @@ export async function pageAction(params, attached) {
     if (!completed.length) throw new Error(results[0]?.error || 'This page could not be read. Inspect the application before retrying.');
     const observation = completed.find(result=>result.frameId===root.id)?.observation;
     const componentFailure = completed.find(result => result.componentFailure)?.componentFailure;
-    const resume = completed.find(result=>result.frameId === root.id)?.resume;
+    const attachment = completed.find(result=>result.frameId === root.id);
+    const resume = attachment?.resume;
+    const resumeEvidence = attachment?.resumeEvidence;
     const rootResult = operation === 'inspect' && completed.find(result=>result.frameId===root.id);
     const jobviteFirstStep = Boolean(rootResult && rootResult.jobviteFirstStep);
     const smartRecruitersFirstStep = Boolean(rootResult && rootResult.smartRecruitersFirstStep);
@@ -204,6 +206,7 @@ export async function pageAction(params, attached) {
       ...((jobviteFirstStep || smartRecruitersFirstStep || smartRecruitersScreening) && root.loaderId ? {jobviteFirstStep,smartRecruitersFirstStep,smartRecruitersScreening,mainDocumentId:root.loaderId} : {}),
       ...(componentFailure ? {componentFailure} : {}),
       ...(['verified','missing','unverified','optional'].includes(resume) ? {resume} : {}),
+      ...(resume === 'verified' && ['picker','filename','earlier_filename'].includes(resumeEvidence) ? {resumeEvidence} : {}),
       incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true),
       matching:completed.flatMap(result=>(result.matching??[]).map(row=>({...row,frameId:result.frameId}))),
       ...(operation==='inspect'?{navigationDiagnostics:completed.filter(result=>result.navigationDiagnostics).map(result=>({frameId:result.frameId,...result.navigationDiagnostics}))}:{}),

@@ -446,6 +446,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     };
     let applicationRegions = identifyApplicationRegions(fields);
     const finalReport = () => {
+      if (result.resume === 'verified' && state.resumeAttempt?.attachmentEvidence) result.resumeEvidence = state.resumeAttempt.attachmentEvidence();
       screeningGroups.reportMissing(result,addSkip);
       for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
         if (!applicationRegions.includes(regionFor(input)) || !scopedControl(input)) continue;

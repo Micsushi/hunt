@@ -438,7 +438,7 @@ function uploadedItemResult(value: unknown): value is {
     typeof (value as { complete?: unknown }).complete === "boolean";
 }
 
-export function workdayResumeUploadFileName(intent: WorkdayResumeFileIntent): string {
+export function workdayResumeUploadFileName(intent: Pick<WorkdayResumeFileIntent, "artifactId">): string {
   const token = createHash("sha256").update(intent.artifactId, "utf8").digest("hex").slice(0, 16);
   return `resume-${token}.pdf`;
 }

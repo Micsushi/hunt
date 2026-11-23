@@ -9,6 +9,7 @@ export interface PartialFillResult {
   skipped: { label: string; reason: string; componentFailure?: ComponentFailure; fieldId?: string; frameId?: string }[];
   canUndo: boolean;
   canRedo: boolean;
+  resumeEvidence?: 'filename' | 'earlier_filename' | 'picker';
   resume?: 'verified' | 'missing' | 'unverified' | 'optional';
 }
 export function fillVisibleFields(input?: {

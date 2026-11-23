@@ -45,6 +45,9 @@ export function jobviteResumeAcknowledgment(panel, fileName, detached = false) {
 
 export function watchJobviteScreening(receipt, binding, state) {
   if (binding?.kind !== 'jobvite' || !binding.valid()) return;
+  const pickerProof = () => state.resumeAttempt === receipt && receipt.url === location.href && receipt.fileSha256 &&
+    receipt.element.isConnected && receipt.element.files?.length === 1 && receipt.element.files[0] === receipt.file ? 'picker' : undefined;
+  receipt.attachmentEvidence = pickerProof;
   const form = receipt.region;
   const article = form.closest?.('article[ng-controller="JVApply"]');
   const firstSelector = '[ng-form="scopeData.step1"][ng-if="showStep(1)"]';
@@ -149,6 +152,12 @@ export function watchJobviteScreening(receipt, binding, state) {
     const link = links.length === 1 && links[0];
     return link && link.closest('form') === form && link.getAttribute('href') === '' &&
       !link.hasAttribute('target') && link.textContent.trim().toLowerCase() === 'view full application form' ? link : null;
+  };
+  receipt.attachmentEvidence = () => {
+    const panel = receipt.acknowledgedPanel();
+    if (panel === first && jobviteRetainedResume(first, receipt.file.name) === 'resume_filename_visible_contents_unverified') return 'filename';
+    if (panel && panel === second) return 'earlier_filename';
+    return pickerProof();
   };
   const firstReady = () => !state.busy && receipt.acknowledgedPanel() === first &&
     ![...document.querySelectorAll('[role=dialog],dialog[open]')].some(visible) &&

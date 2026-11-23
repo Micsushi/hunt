@@ -1,3 +1,4 @@
+import { inspectWorkdayResume, type WorkdayReviewEvidence } from "../ats/workday/application/resume/index.ts";
 import { WorkdayWalkDiagnostics } from './workday-walk-diagnostics.ts';
 import { observeWorkdayPage, workdayObservationMessage } from '../ats/workday/page-observation.ts';
 import { randomBytes } from "node:crypto";
@@ -13,14 +14,14 @@ import { join } from "node:path";
 import { applicationTarget } from "./target.ts";
 import { ApplicationPause, salaryUnitsNotice, type ProductInput } from './application-contract.ts';
 import { enterApplication } from './application-authentication.ts';
-import { verifyPreparedReview } from './application-review.ts';
+import { verifyPreparedReview, reviewSnapshot, checkWorkdayAttachment } from './application-review.ts';
 import { componentFailure, recordComponentFailure } from './component-diagnostics.ts';
 import { walkFailureComponent, operationComponent } from './walk-failure-component.ts';
 
 const id = () => randomBytes(16).toString("hex");
 
 export async function fillApplicationAttempt(page: Page, input: ProductInput, signal: AbortSignal,
-  progress: (stage: string) => void, assertTarget: () => void): Promise<{ reviewDigest: string; completedPages: number; needsOwnerReview?: boolean; salaryUnitsNeedReview?: boolean }> {
+  progress: (stage: string) => void, assertTarget: () => void): Promise<{ reviewDigest: string; completedPages: number; needsOwnerReview?: boolean; salaryUnitsNeedReview?: boolean; workdayResumeEvidence?: WorkdayReviewEvidence }> {
   const target = applicationTarget(input.url);
   progress("Signing in");
   try {
@@ -37,6 +38,8 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
     await page.locator(laterApplicationPages).count() > 0;
   if(continuingSavedDraft)progress("Continuing saved application");
   const sources = productSources(input.profile, input.resume);
+  const artifact = sources.resumeIntent.artifact;
+  let upload = input.workdayResumeEvidence?.upload;
   const learning = productQuestionLearning(input.learningRoot === undefined ? undefined : join(input.learningRoot, id()), sources, input.url, input.profile);
   const journey = `journey_${id()}`;
   const session: LiveBrowserSessionV1 = {
@@ -64,6 +67,13 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
     review_expectations: 'Checking application review',
     capture_review: 'Checking application review',
   };
+  async function inspectUpload(phase: "resume" | "questionnaire", beforeFill = false) {
+    assertTarget();
+    const outcome = await inspectWorkdayResume(page, artifact.sha256, sources.resumeIntent.artifactId, phase);
+    if (beforeFill && outcome === "missing") return;
+    const proof = checkWorkdayAttachment(outcome);
+    if (proof === "download" || proof !== "not_shown" && upload !== "download") upload = proof;
+  }
   async function operation<T>(op: OwnedApplicationOperation): Promise<T> {
     // A profile failure belongs only to that operation. A recovered profile
     // must not relabel a later upload, navigation, questionnaire or Review error.
@@ -74,6 +84,8 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
     assertTarget();
     const stage=operationStages[op.kind];
     if(stage)progress(stage);
+    const uploadPhase = op.kind === "reconcile_resume" ? "resume" : op.kind === "reconcile_questionnaire" ? "questionnaire" : undefined;
+    if (uploadPhase) await inspectUpload(uploadPhase, true);
     const result = await runtime.run(page, { schemaVersion: 1, journeyId: session.journeyId,
       operationId: generatedOperationId(`operation_${id()}`), sessionId: session.sessionId,
       target: session.target, now: new Date().toISOString() }, op, signal).catch(error => {
@@ -85,6 +97,7 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
       if(observed.ok)diagnostics.observe(observed.value);
     }
     if (result !== null && typeof result === "object" && "ok" in result && result.ok === true) {
+      if (uploadPhase) await inspectUpload(uploadPhase);
       diagnostics.failureCode = undefined;
       diagnostics.failureField = undefined;
     }
@@ -121,7 +134,10 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
     }
     diagnostics.failureBoundary = { component: 'review', operation: 'verify_prepared_review' };
     const review = await verifyPreparedReview(page, signal, assertTarget, operation, continuingSavedDraft, diagnostics.reviewIssues, diagnostics.recordDiagnostic);
-    return { ...review, salaryUnitsNeedReview: learning.salaryUnitsNeedReview, completedPages: result.value.pageChecks.length, needsOwnerReview: review.needsOwnerReview || learning.needsOwnerReview };
+    assertTarget();
+    const attachment = await reviewSnapshot(page, artifact.sha256, true, undefined, {upload, review:input.workdayResumeEvidence?.review ?? "not_shown"});
+    if (attachment.digest !== review.reviewDigest) throw new ApplicationPause("The employer Review changed during attachment verification. Inspect it again.");
+    return { ...review, workdayResumeEvidence:attachment.workdayResumeEvidence, salaryUnitsNeedReview: learning.salaryUnitsNeedReview, completedPages: result.value.pageChecks.length, needsOwnerReview: review.needsOwnerReview || learning.needsOwnerReview };
   } catch (error) {
     diagnostics.failureBoundary = componentFailure(error) ?? diagnostics.failureBoundary ?? { component: 'workflow', operation: diagnostics.activeOperation ?? 'walk' };
     recordComponentFailure(error, diagnostics.failureBoundary.component, diagnostics.failureBoundary.operation);

@@ -1,8 +1,9 @@
+import { productResumeId } from "../deterministic/resume-identity.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createQuestionAnswerLearningCapture, type QuestionAnswerLearningCapture } from "../live/evidence/question-answer-learning.ts";
-import { captureResumeArtifact, upstreamResumeId } from "../contracts/index.ts";
+import { captureResumeArtifact } from "../contracts/index.ts";
 import { admitApplicationExecutionPolicy, answerModeAllowedByPolicy, liveApplicationExecutionPolicy } from "../contracts/application-execution-policy.ts";
 import { parseApplicationProfile, createApplicationProfileQuery } from "../profile/application-profile.ts";
 import { createConfiguredNarrativeProvider } from "../ats/workday/application/questions/index.ts";
@@ -322,11 +323,11 @@ export function productSources(value: unknown, pdf: Buffer): Stage2ApplicationOw
     : savedExecutionPolicy;
   const sha256 = createHash("sha256").update(pdf).digest("hex");
   const capture = () => {
-    const result = captureResumeArtifact({ resumeId: upstreamResumeId(`resume_${sha256.slice(0, 24)}`), sha256 }, pdf);
+    const result = captureResumeArtifact({ resumeId: productResumeId(sha256), sha256 }, pdf);
     if (!result.ok) throw new Error("Resume could not be captured.");
     return result.value;
   };
-  const intent = createWorkdayResumeFileIntent({ artifactId: upstreamResumeId(`resume_${sha256.slice(0, 24)}`), artifact: capture(), fileType: "pdf" });
+  const intent = createWorkdayResumeFileIntent({ artifactId: productResumeId(sha256), artifact: capture(), fileType: "pdf" });
   if (!intent.ok) throw new Error("Resume is invalid.");
   const narrative = profile.facts.find(f => f.factId === "configured_narrative");
   return {

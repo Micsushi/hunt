@@ -40,7 +40,7 @@ test('Jobvite portal transition binds Resume despite duplicate dialog IDs, with 
       await page.getByRole('button',{name:'Submit application'}).evaluate(button => { button.textContent='Next'; });
     }
     assert.equal(await proof(page),true);assert.deepEqual(await counts(page),[0,0]);
-    const result=await fill(page);assert.equal(result.resume,'verified');assert.ok(result.filled.includes('Resume'));
+    const result=await fill(page);assert.equal(result.resume,'verified');assert.equal(result.resumeEvidence,'picker');assert.ok(result.filled.includes('Resume'));
     assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.locator('#file-input-0').evaluate(async(e:HTMLInputElement)=>e.files![0]!.text()),'%PDF-selected-jobvite-fixture');
     await proof(page);await fill(page);assert.equal(await page.evaluate('uploads'),1);assert.equal(await page.evaluate('opens'),1);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});assert.deepEqual(await counts(page),[0,0]);
@@ -97,7 +97,7 @@ test('extension page actions verify Jobvite file history and the final SmartRecr
     const tabId=await worker.evaluate(async u=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===u).id,url);
     const action=(operation:string,documentId?:string,pageHandoff?:string,file=resume)=>worker.evaluate(p=>(globalThis as any).runAction(p),{tabId,expectedUrl:url,operation,documentId,pageHandoff,facts,resume:file,expiresAt:Date.now()+10000});
     const inspection=await action('inspect');const result=await action('fill',inspection.documentId);
-    assert.equal(result.resume,'verified',JSON.stringify(result));assert.deepEqual(await counts(page),[1,0]);
+    assert.equal(result.resume,'verified',JSON.stringify(result));assert.equal(result.resumeEvidence,'picker');assert.deepEqual(await counts(page),[1,0]);
     await action('undo',inspection.documentId);assert.deepEqual(await counts(page),[0,0]);
     await action('redo',inspection.documentId);assert.deepEqual(await counts(page),[1,0]);assert.equal(await page.evaluate('submits'),0);
     const occupied=await action('inspect',undefined,'imported-job');

@@ -1,3 +1,4 @@
+import type { WorkdayReviewEvidence } from "../ats/workday/application/resume/index.ts";
 import type { Page } from "playwright";
 import type { AccountEvent } from "./account-journal.ts";
 import type { MatchedPageResult } from './page-matching.ts';
@@ -22,6 +23,7 @@ export interface ProductInput {
   selectedResumeFill?: SelectedResumeFill;
   /** Queue-owned durable recorder. Absence forbids account mutation. */
   recordAccountAction?: (event: AccountEvent, trace?: string) => void;
+  workdayResumeEvidence?: WorkdayReviewEvidence;
   resumeExpected?: boolean;
   onResumeObserved?: () => void;
   resumeUpload?: ResumeUploadReceipt;

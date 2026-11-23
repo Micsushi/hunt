@@ -1,3 +1,4 @@
+import { questionnaireUploadFileName } from "../deterministic/resume-identity.ts";
 import type { Locator, Page } from "playwright";
 import { createHash } from "node:crypto";
 import { annotateQuestionContext } from '../../extension/question-context.js';
@@ -81,9 +82,7 @@ export interface UploadedArtifactReadback {
   readonly sha256: ReturnType<typeof sha256Digest>;
 }
 
-export function questionnaireUploadFileName(sha256: string): string {
-  return `c3-attachment-${sha256}.pdf`;
-}
+export { questionnaireUploadFileName };
 
 export interface PageInspection {
   readonly observation: BrowserObservation;

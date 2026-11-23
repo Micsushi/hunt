@@ -1,3 +1,5 @@
+import { inspectWorkdayResume, type WorkdayReviewEvidence, type WorkdayAttachmentObservation } from '../ats/workday/application/resume/index.ts';
+import { productResumeId } from "../deterministic/resume-identity.ts";
 import type { ReviewExpectedField } from '../browser/playwright-live/private/workday-application-runtime.ts';
 import type { OwnedApplicationOperation } from '../browser/playwright-live/private/application-page-types.ts';
 import { observeWorkdayPage, workdayObservationMessage } from '../ats/workday/page-observation.ts';
@@ -60,9 +62,26 @@ export async function restoreSavedReview(page: Page, reviewedUrl: string): Promi
   throw new ApplicationPause("The saved application did not reach Review within the navigation limit. Inspect its current page.");
 }
 
-export async function reviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt): Promise<{ digest: string; resumeExpected?: boolean; resumeFilenameOnly?: boolean }> {
+export function checkWorkdayAttachment(outcome: WorkdayAttachmentObservation) {
+  switch (outcome) {
+    case "missing": throw new ApplicationPause("The employer shows that the resume is missing. Check the attachment before reviewing.");
+    case "mismatch": throw new ApplicationPause("The employer attachment differs from the selected resume. Check the file before reviewing.");
+    case "ambiguous": throw new ApplicationPause("C3 could not identify one unchanged resume attachment. Check the employer page.");
+    case "download_unavailable": throw new ApplicationPause("The employer shows an attachment action that C3 could not safely check. PDF contents unverified.");
+    case "download_failed": throw new ApplicationPause("Resume download failed. PDF contents unverified. Check the employer attachment.");
+    default: return outcome;
+  }
+}
+
+export async function reviewSnapshot(page: Page, expectedResumeSha256?: string, resumeExpected?: boolean, resumeUpload?: ResumeUploadReceipt, previous?: WorkdayReviewEvidence): Promise<{ digest: string; resumeExpected?: boolean; resumeFilenameOnly?: boolean; workdayResumeEvidence?: WorkdayReviewEvidence }> {
   if (applicationTarget(page.url()).ats !== "workday") return hostedReviewSnapshot(page, expectedResumeSha256, resumeExpected, resumeUpload);
-  return { digest: await reviewDigest(page) };
+  const digest = await reviewDigest(page);
+  if (!expectedResumeSha256) return {digest};
+  const review = checkWorkdayAttachment(await inspectWorkdayResume(page, expectedResumeSha256, productResumeId(expectedResumeSha256), "review"));
+  if ((review === "not_shown" || review === "picker") && (previous?.review === "filename" || previous?.review === "download")) checkWorkdayAttachment("missing");
+  if (await reviewDigest(page) !== digest) throw new ApplicationPause("The Review page changed while checking the attachment. Inspect it again.");
+  return {digest, workdayResumeEvidence:{upload:previous?.upload,review}};
+
 }
 
 export async function reviewDigest(page: Page, expectedResumeSha256?: string): Promise<string> {
