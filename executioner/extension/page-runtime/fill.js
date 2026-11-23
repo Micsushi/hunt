@@ -36,7 +36,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   const historyState = pageHandoff ? state.handoffHistory : queueHistory ? (state.queuedHistory ??= {undo:[],redo:[]}) : state;
   state.busy = true;
   const result = { status: 'partial', filled: [], skipped: [], canUndo: false, canRedo: false, matching: [],
-    resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ (action === 'status' ? 'unverified' : 'missing') };
+    resume: /** @type {'verified'|'missing'|'unverified'|'optional'} */ (action === 'fill' ? 'missing' : 'unverified') };
   const screening = adapters.jobviteScreeningPanel(), firstStep = adapters.jobviteScreeningPanel(1);
   const applicationStep = screening ?? firstStep;
   if (action === 'status' && firstStep && screening === undefined && adapters.jobviteScreeningPanel(1,true) === firstStep) result.jobviteFirstStep = true;
@@ -97,6 +97,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       (!e.isConnected || composedContains(owner, e) && regionFor(e)===region) && attachmentIds(owner).some(input=>input.value);
   };
   const externalAttachment = e => {
+      if (!e.files?.length && fileBinding(e)?.renderedFilename) return true;
       if (isPortalResumeBinding(state.nativeFileBindings?.get(e)) && !verifiedDialogUpload(e)) return true;
       if (ownedAttachmentPresent(e)) return true;
       for (let group=composedParent(e), depth=0; group && depth<6 && group!==regionFor(e) && group!==document.body; group=composedParent(group),depth++) {
@@ -465,28 +466,43 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         addSkip('Application', 'employer_submission_disabled');
       }
     };
-    if (historyAction) {
-      reportDisabledSubmission(identifyApplicationRegions(fields,true));
-      return result;
-    }
-    let applicationRegions = identifyApplicationRegions(fields);
-    const finalReport = () => {
-      if (result.resume === 'verified' && state.resumeAttempt?.attachmentEvidence) result.resumeEvidence = state.resumeAttempt.attachmentEvidence();
-      screeningGroups.reportMissing(result,addSkip);
-      for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
-        if (!applicationRegions.includes(regionFor(input)) || !scopedControl(input)) continue;
-        const attachment=unresolvedAttachment(input);
-        if (attachment) {
-          if (action==='status' || !matchingRunId) result.incomplete=true;
-          addSkip(attachment.label,attachment.reason);
-        }
-      }
-      reportDisabledSubmission(action==='status' ? identifyApplicationRegions(fields,true) : applicationRegions);
-      return result;
-    };
+    let applicationRegions = identifyApplicationRegions(fields,action!=='fill');
     const { isRequired, unresolvedAttachment } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
     });
+    const pickerHoldsAttempt = receipt => !!receipt && receipt.url===location.href && !receipt.externalized &&
+      fileBinding(receipt.element) && regionFor(receipt.element)===receipt.region && receipt.element.files?.length===1 &&
+      read(receipt.element)===receipt.file && receipt.element.validity.valid && receipt.element.getAttribute('aria-invalid')!=='true';
+    const finalReport = () => {
+      const receipt=state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
+      if (action==='fill' && result.resume === 'verified') result.resumeEvidence=receipt?.attachmentEvidence?.() || (pickerHoldsAttempt(receipt) ? 'picker' : undefined);
+      if (!historyAction) screeningGroups.reportMissing(result,addSkip);
+      const resumeInputs=[];
+      for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
+        if (!applicationRegions.includes(regionFor(input)) || !scopedControl(input)) continue;
+        if (action!=='fill' && fileBinding(input)) resumeInputs.push(input);
+        const attachment=unresolvedAttachment(input);
+        if (attachment) {
+          if (action==='status' || action==='fill' && !matchingRunId) result.incomplete=true;
+          addSkip(attachment.label,attachment.reason);
+        }
+      }
+      // Read-only actions have no selected PDF to compare against the employer or the picker.
+      if (resumeInputs.length===1 && !matchingRunId) {
+        const [input]=resumeInputs;
+        if (input.files?.length) addSkip('Resume','resume_picker_occupied');
+        else if (fileBinding(input)?.renderedFilename) addSkip('Resume','resume_filename_visible');
+        else if (customForm?.upload?.(input)?.occupied || externalAttachment(input)) addSkip('Resume','existing_remote_attachment_requires_review');
+        else if (!receipt && visible(input) && input.willValidate && input.validity.valueMissing) {
+          result.resume='missing';
+          if (action==='status') result.incomplete=true;
+          addSkip('Resume','required_resume_missing');
+        } else if (receipt?.element===input && result.resume!=='verified') addSkip('Resume','resume_upload_already_attempted_review_attachment');
+      }
+      reportDisabledSubmission(applicationRegions);
+      return result;
+    };
+    if (historyAction) return finalReport();
     const { observe:baseObserve } = createFieldObserver({
       deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
       sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
@@ -546,9 +562,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         applicationRegions.includes(regionFor(e)) && fileBinding(e));
       const targets = resumeFields.filter(isRequired);
       const customUpload = targets.length === 1 ? customForm?.upload?.(targets[0]) : null;
-      const reportAttachment = (label, reason) => addSkip(label,
-        customUpload?.filenameVisible(resume.name) ? 'resume_filename_visible_contents_unverified' : reason,
-        'uploads', 'verify_attachment');
+      const reportAttachment = (label, reason) => {
+        const rendered=targets.length===1 && !targets[0].files?.length && fileBinding(targets[0])?.renderedFilename;
+        addSkip(label,customUpload?.filenameVisible(resume.name) || rendered===resume.name ? 'resume_filename_visible_contents_unverified' :
+          rendered ? 'resume_filename_differs' : reason,'uploads','verify_attachment');
+      };
       if (!targets.length && resumeFields.length && !uploadReceipt) result.resume='optional';
       if (uploadReceipt) {
         if (uploadReceipt.customUpload && uploadReceipt.customUpload.currentSelection?.()!==true) {
@@ -569,8 +587,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const e=uploadReceipt.element;
         if (!checkedStep && firstStep && uploadReceipt.acknowledgedPanel?.() === firstStep) checkedStep = firstStep;
         uploadReceipt.externalized ||= !e.isConnected || externalAttachment(e) || read(e)!==uploadReceipt.file;
-        result.resume = ownedUploadCompleted(uploadReceipt) || !uploadReceipt.externalized && fileBinding(e) && regionFor(e)===uploadReceipt.region &&
-          e.files?.length===1 && read(e)===uploadReceipt.file && e.validity.valid && e.getAttribute('aria-invalid')!=='true' ? 'verified' : 'unverified';
+        result.resume = ownedUploadCompleted(uploadReceipt) || pickerHoldsAttempt(uploadReceipt) ? 'verified' : 'unverified';
         if (checkedStep && result.resume !== 'verified') result.incomplete = true;
         if (result.resume==='verified') addSkip('Resume', 'selected_resume_already_present');
         else reportAttachment('Resume', 'resume_upload_already_attempted_review_attachment');

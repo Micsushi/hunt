@@ -82,6 +82,31 @@ function showSubmissionWarning(result){
   status.textContent+=(status.textContent?' ':'')+'The employer still has submission disabled.';
   return true;
 }
+function showAttachments(result){
+  const rows=result.skipped??[], reasons=new Set(rows.map(row=>row.reason));
+  const notes=new Set();
+  if(reasons.has('different_resume_requires_manual_review'))notes.add('Your selected PDF differs from the earlier resume selection on this page. Check which resume the employer has.');
+  else if(reasons.has('resume_filename_differs'))notes.add('The employer shows a different resume filename. Check it against your selected PDF.');
+  else if(result.resumeEvidence==='filename'||reasons.has('resume_filename_visible_contents_unverified'))notes.add('The employer shows the matching resume filename. PDF contents unverified.');
+  else if(result.resumeEvidence==='earlier_filename')notes.add('The previous step showed the matching resume filename. PDF contents unverified.');
+  else if(reasons.has('resume_filename_visible'))notes.add('The employer shows a resume filename. Check it against your selected PDF. Contents unverified.');
+  else if(reasons.has('resume_picker_occupied'))notes.add('The local resume picker contains a file. Check it against your selected PDF. Employer contents unverified.');
+  else if(['existing_attachment_preserved','existing_remote_attachment_requires_review','existing_smartrecruiters_attachment_requires_review','remote_upload_preserved','client_attachment_preserved'].some(reason=>reasons.has(reason)))notes.add('A resume is already present. Check it against your selected PDF.');
+  else if(result.resumeEvidence==='picker')notes.add('The local file picker matches the selected PDF. Employer contents unverified.');
+  else if(reasons.has('required_resume_missing') || result.operation==='inspect' && result.resume==='missing')notes.add('The required resume field is empty.');
+  else if(reasons.has('resume_control_not_identified'))notes.add('C3 could not identify the resume field. Check the employer page.');
+  else if(['resume_attachment_not_verified','resume_upload_already_attempted_review_attachment','uploaded_attachment_requires_review','attachment_not_verified_native_file_retained','ambiguous_resume_attachment','resume_parsing_pending_profile_not_filled'].some(reason=>reasons.has(reason)))notes.add('The resume attachment was not confirmed. Check it on the employer page.');
+  for(const row of rows){
+    if(!['required_attachment_missing','required_attachment_unconfirmed'].includes(row.reason))continue;
+    const name=/transcript|relev[ée] de notes/i.test(row.label)?'transcript':/cover[ -]?letter|lettre de/i.test(row.label)?'cover letter':'document';
+    notes.add(row.reason==='required_attachment_missing'?`The required ${name} is missing.`:`Check the required ${name}. Its upload is unconfirmed.`);
+  }
+  if(notes.size){
+    const status=$('status');
+    status.dataset.error='true';
+    status.textContent+=(status.textContent?' ':'')+[...notes].join(' ');
+  }
+}
 async function partial(action){
   historyVersion++;
   if(!pageDocumentId)await pageReply('inspect');
@@ -92,10 +117,7 @@ async function partial(action){
   $('status').textContent=action==='fill'?`${count} changes on this page. Existing entries were preserved. Review every answer and attachment.`:`${count} field changes ${action==='undo'?'undone':'restored'}.`;
   const conflicts=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason)).length;
   if(conflicts){$('status').dataset.error='true';$('status').textContent+=` ${conflicts} ${conflicts===1?'field differs':'fields differ'} from saved answers or changed after filling. Check them before continuing.`;}
-  if((result.skipped||[]).some(item=>item.reason==='resume_attachment_not_verified')){$('status').dataset.error='true';$('status').textContent+=' The resume attachment was not confirmed.';}
-  if(result.resumeEvidence==='filename'||(result.skipped||[]).some(item=>item.reason==='resume_filename_visible_contents_unverified')){$('status').dataset.error='true';$('status').textContent+=' The employer shows the matching resume filename. PDF contents unverified.';}
-  if(result.resumeEvidence==='earlier_filename')$('status').textContent+=' The previous step showed the matching resume filename. PDF contents unverified.';
-  if(result.resumeEvidence==='picker')$('status').textContent+=' The local file picker matches the selected PDF. Employer contents unverified.';
+  showAttachments(result);
   if(result.needsOwnerReview)$('status').textContent+=' Suggested answers and uncertain matches need review.';
   if (result.componentFailure) {
     const {component, operation} = result.componentFailure;
@@ -115,7 +137,7 @@ $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…')
 $('undo').onclick=()=>run(()=>partial('undo'));
 $('redo').onclick=()=>run(()=>partial('redo'));
 if(canPartial)void(async()=>{const version=historyVersion;try{const result=await pageReply('inspect');if(version!==historyVersion)return;canUndo=result.canUndo;canRedo=result.canRedo;
-  if(!busy&&!$('status').textContent)showSubmissionWarning(result);
+  if(!busy&&!$('status').textContent){showAttachments(result);showSubmissionWarning(result);}
   controls();}catch{}})();
 async function connectWithToken(token){
   if(!token)throw new Error('Enter a pairing key, or use Connect to local app.');

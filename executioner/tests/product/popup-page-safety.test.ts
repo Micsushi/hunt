@@ -89,13 +89,16 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     assert.equal(redone.ok,true,JSON.stringify(redone));
     assert.equal(reportsDisabled(redone),true);
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
-    await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
-    const [view]=await Promise.all([context.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]);
+    const openPopup=async()=>{
+      await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
+      return (await Promise.all([context!.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]))[0];
+    };
+    const view=await openPopup();
     const warning='The employer still has submission disabled.';
-    await view.getByText(warning,{exact:true}).waitFor();
+    await view.locator('#status').filter({hasText:warning}).waitFor();
     for(const [action,verb] of [['undo','undone'],['redo','restored']]) {
       await view.locator('#'+action).click();
-      await view.locator('#status').filter({hasText:'field changes '+verb+'. '+warning}).waitFor();
+      await view.locator('#status').filter({hasText:'field changes '+verb+'.'}).filter({hasText:warning}).waitFor();
     }
     await view.close();
     await submit.evaluate((button:HTMLButtonElement)=>{button.disabled=false;});
@@ -123,6 +126,60 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     await page.evaluate(next=>window.history.pushState({},'',next),otherPosting);
     await page.waitForURL(otherPosting);
     assert.equal((await send('inspect',undefined,otherPosting)).result.resume,'missing');
+    const attachmentsUrl=new URL('/fixture/jobs/125',url).href;
+    await context.route(attachmentsUrl,route=>route.fulfill({contentType:'text/html',body:`
+      <form><label>First name<input></label><label>Email<input type=email></label>
+      <label>Resume<input type=file required></label><label>Transcript<input type=file required></label>
+      <button>Submit application</button></form>`}));
+    await page.goto(attachmentsUrl);
+    const attachments=await openPopup();
+    const status=attachments.locator('#status'), resumeInput=page.locator('input[type=file]').first();
+    const transcript=page.getByLabel('Transcript',{exact:true});
+    const requiredTranscript='The required transcript is missing.';
+    await status.filter({hasText:'The required resume field is empty.'}).filter({hasText:requiredTranscript}).waitFor();
+    for(const [action,message] of [
+      ['partial','The local file picker matches the selected PDF. Employer contents unverified.'],
+      ['undo','The required resume field is empty.'],
+      ['redo','The local resume picker contains a file.']
+    ]) {
+      await attachments.locator('#'+action).click();
+      await status.filter({hasText:message!}).filter({hasText:requiredTranscript}).waitFor();
+      assert.equal(await transcript.evaluate((e:HTMLInputElement)=>e.files!.length),0);
+      assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files!.length),action==='undo'?0:1);
+    }
+    service.queue.configure(personal,selected);
+    await attachments.locator('#partial').click();
+    await status.filter({hasText:'Your selected PDF differs from the earlier resume selection'}).filter({hasText:requiredTranscript}).waitFor();
+    assert.doesNotMatch(await status.innerText(),/picker matches the selected PDF/);
+    assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files![0]!.text()),Buffer.from(resume,'base64').toString());
+    await attachments.close();
+    await page.goto(attachmentsUrl);
+    await resumeInput.setInputFiles({name:'Previous.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-previous')});
+    const occupied=await openPopup();
+    await occupied.locator('#status').filter({hasText:'The local resume picker contains a file.'}).waitFor();
+    await occupied.locator('#partial').click();
+    await occupied.locator('#status').filter({hasText:'A resume is already present.'}).waitFor();
+    assert.doesNotMatch(await occupied.locator('#status').innerText(),/picker matches the selected PDF/);
+    assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files![0]!.text()),'%PDF-previous');
+    await occupied.close();
+    await page.goto(attachmentsUrl);
+    await resumeInput.evaluate(input=>{
+      const label=input.closest('label')!;
+      label.firstChild!.textContent='Resume/CV*';
+      label.append(Object.assign(document.createElement('span'),{textContent:'CV.pdf'}));
+      input.addEventListener('change',()=>{input.dataset.changed='yes';});
+    });
+    const retained=await openPopup();
+    await retained.locator('#status').filter({hasText:'The employer shows a resume filename.'}).filter({hasText:requiredTranscript}).waitFor();
+    await retained.locator('#partial').click();
+    await retained.locator('#status').filter({hasText:'The employer shows a different resume filename.'}).waitFor();
+    assert.doesNotMatch(await retained.locator('#status').innerText(),/picker matches the selected PDF|CV\.pdf/);
+    await resumeInput.evaluate(input=>{input.nextElementSibling!.textContent='Resume.pdf';});
+    await retained.locator('#partial').click();
+    await retained.locator('#status').filter({hasText:'The employer shows the matching resume filename. PDF contents unverified.'}).waitFor();
+    assert.equal(await resumeInput.getAttribute('data-changed'),null);
+    assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files!.length),0);
+    await retained.close();
     const oneClick='https://jobs.smartrecruiters.com/oneclick-ui/company/Fixture/publication/11111111-1111-4111-8111-111111111111';
     const childUrl=new URL('/unrelated-contact',oneClick).href;
     const contact='<label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label>';
