@@ -47,6 +47,9 @@ for(const url of [numeric,publication,publication+'/screening']) {
   }
 }
 assert.equal(c3.isManualApplicationUrl('https://ordinary.example/careers/823'),true);
+assert.equal(c3.isManualApplicationUrl('https://Ordinary.EXAMPLE/careers/823'),true);
+assert.equal(c3.isGenericApplicationUrl('https://Solace.BambooHR.com/careers/823'),true);
+assert.equal(c3.supportsQueuedApplication('lever','https://Jobs.LEVER.co/fixture/11111111-1111-4111-8111-111111111111'),true);
 for(const url of ['https://solace.bamboohr.com.evil.example/careers/823','https://user@foo.example/apply',
   'https://company.example:444/apply','http://company.example/apply','https://jobs.jobvite.com/company/job/%2f']) {
   assert.equal(c3.isManualApplicationUrl(url),false);

@@ -35,7 +35,8 @@ function postingUrl(value: string | null | undefined) {
   if (!raw || /%2f|%5c|\/(?:\.|%2e){1,2}(?:\/|$)/i.test(raw[2])) return
   try {
     const url = new URL(value)
-    if (raw[1] === url.hostname && /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/.test(url.hostname)) return url
+    if (raw[1].toLowerCase() === url.hostname && /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/i.test(raw[1]))
+      return url
   } catch {
     /* A malformed link cannot identify an employer. */
   }

@@ -52,7 +52,7 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
             "workable": f"https://apply.workable.com/fixture/j/ABC{job_id}/apply/",
             "workday": f"https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R{job_id}",
             "greenhouse": f"https://job-boards.greenhouse.io/fixture/jobs/{job_id}",
-            "lever": f"https://jobs.lever.co/fixture/11111111-1111-4111-8111-11111111111{job_id}",
+            "lever": f"https://Jobs.LEVER.co/fixture/11111111-1111-4111-8111-11111111111{job_id}",
             "ashby": f"https://jobs.ashbyhq.com/fixture/11111111-1111-4111-8111-11111111111{job_id}",
             "bamboohr": f"https://solace.bamboohr.com/careers/{job_id}",
             "rippling": f"https://ats.rippling.com/exacare/jobs/11111111-1111-4111-8111-11111111111{job_id}/apply",

@@ -166,7 +166,8 @@ def prepared_jobs(job_ids: list[int], *, omitted: dict) -> list[dict]:
                 and not re.search(r"[\x00-\x1f\x7f\\]", link)
                 and target.scheme == "https"
                 and bool(host)
-                and target.netloc == host
+                and target.netloc.isascii()
+                and target.netloc.lower() == host
                 and not re.search(r"%2f|%5c", route, re.I)
                 and not re.search(r"[/](?:\.|%2e){1,2}(?:/|$)", route, re.I)
                 and re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*", host) is not None
