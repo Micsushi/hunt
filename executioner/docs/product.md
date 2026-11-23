@@ -232,6 +232,14 @@ repeat on the new page. If an older queued entry owns that application, finish
 the saved draft manually with its selected résumé. The extension protects the
 draft from having its selected PDF replaced by the default.
 
+If C3 reports a different résumé filename or PDF, open the saved Workday
+employer draft and compare its attachment with the PDF selected for this job.
+If you decide to replace it, use the employer's attachment control. Choose
+**Retry** after correcting a paused draft, or **Refresh Review** for a draft
+already at Review. If the employer only displays a filename, its copy remains
+unverified. A failed download or a different SHA-256 requires your attention
+before submitting.
+
 Workday summary Review checks repeated education and employment answers within
 their own rows. Finding the right words elsewhere on the page is not sufficient.
 Unavailable row structure stays unverified, and provisional answers retain their

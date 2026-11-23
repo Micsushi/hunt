@@ -28,8 +28,8 @@ export async function settleLeverResume(page: Page): Promise<boolean> {
     const state = await page.waitForFunction(read => read(), read, {timeout:15_000, polling:100});
     const result = await state.jsonValue();
     await state.dispose();
-    if (result === 'failed') throw new ApplicationPause('Lever could not auto-read the resume. Inspect the attachment and the application fields.');
-    if (result === 'oversize') throw new ApplicationPause('Lever rejected the resume file size. Inspect the attachment.');
+    if (result === 'failed') throw new ApplicationPause('Lever could not auto-read the resume. Open the employer form and check the attachment and any fields Lever filled. Retry after the employer clears the error.');
+    if (result === 'oversize') throw new ApplicationPause('Lever rejected the resume file size. Check the employer’s limit and select a smaller PDF for this application.');
     if (result === 'changed') throw new ApplicationPause('The resume control changed while Lever was reading it. Inspect the draft.');
     return result === 'filename';
   } catch (error) {
