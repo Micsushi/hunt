@@ -350,16 +350,18 @@ async function reconcileObservedProfile(
       finalControls.some(control => control.fieldId === field.fieldId && control.required) &&
       !verified.some(item => item.fieldId === field.fieldId && item.rowKey === undefined));
     for (const field of lateFields) {
-      const shown = finalControls.find(control => control.fieldId === field.fieldId)!;
-      if (shown.readback !== null && normalize(shown.readback) !== "" &&
-          !readbackMatches(field, shown.readback, visibleValue(field), shown.uiBehavior)) {
-        return blocked("profile_commit_unverified", {fieldId:field.fieldId});
-      }
+      const conflicts = (control: ProfileControlSnapshot) => control.fieldId === field.fieldId &&
+        control.readback !== null && normalize(control.readback) !== "" &&
+        !readbackMatches(field, control.readback, visibleValue(field), control.uiBehavior);
+      let refusal: BlockedResult | undefined;
+      if (finalControls.some(conflicts)) return blocked("profile_commit_unverified", {fieldId:field.fieldId});
       const result = await reconcileField(field, async () => {
         const current = await page.inspect(signal, false);
-        if (preflightSnapshot(effectivePlan, current)) return [];
-        return current.controls;
+        refusal = preflightSnapshot(effectivePlan, current);
+        if (!refusal && current.controls.some(conflicts)) refusal = blocked("profile_commit_unverified", {fieldId:field.fieldId});
+        return refusal ? [] : current.controls;
       }, page, signal);
+      if (refusal) return refusal;
       if (result.kind === "blocked") return result;
       if (result.kind === "verified") verified.push(result.field);
     }

@@ -103,14 +103,18 @@ test("profile reconciliation preserves optional values and reads choices reveale
   assert.deepEqual(resumed.commits.map(commit => commit.value), ["Mobile"]);
   assert.equal(resumed.snapshot.controls[0]?.readback, "Mobile");
 
-  for (const [hasOwnerAnswer, readback, accepted, writes] of [
-    [true, null, true, ["Mobile"]], [true, "Mobile", true, []],
-    [true, "Home", false, []], [false, null, false, []],
+  for (const [hasOwnerAnswer, readback, lateChange, accepted, writes] of [
+    [true, null, false, true, ["Mobile"]], [true, "Mobile", false, true, []],
+    [true, "Home", false, false, []], [false, null, false, false, []],
+    [true, null, true, false, []],
   ] as const) {
     const live = new MemoryProfilePage({pageType:"profile", controls:[{...phone, readback}], rows:[]});
     const inspect = live.inspect.bind(live);
     live.inspect = async () => {
       const current = await inspect();
+      if (lateChange && live.inspections >= 3) {
+        return {...current, controls:[{...phone, readback:"Home"}]};
+      }
       return live.inspections === 1 ? {...current, controls:[]} : current;
     };
     const ownerField = field("phone.device_type", "phone", "single_select", "Mobile", "owner_provided", "Mobile");
