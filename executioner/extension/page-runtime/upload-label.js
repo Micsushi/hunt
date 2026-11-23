@@ -22,6 +22,27 @@ export function uploadLabelKind(value) {
   return 'other';
 }
 
+// The field title and the displayed file are separate nodes in this native label.
+export function createInlineUploadLabelReader() {
+  return input => {
+    const label=input.parentElement;
+    if (input.type!=='file' || input.multiple || input.labels?.length!==1 || label!==input.labels[0] ||
+        label.control!==input || label.children.length!==2 || label.firstElementChild!==input) return null;
+    const filenameNode=input.nextElementSibling;
+    if (filenameNode.localName!=='span' || filenameNode.children.length ||
+        filenameNode.getAttributeNames().some(name=>name!=='class') ||
+        !filenameNode.checkVisibility({visibilityProperty:true,opacityProperty:true}) ||
+        filenameNode.closest('[hidden],[aria-hidden=true],[inert]')) return null;
+    const parts=[...label.childNodes].filter(node=>node.nodeType!==Node.TEXT_NODE || node.textContent.trim());
+    if (parts.length!==3 || parts[0].nodeType!==Node.TEXT_NODE || parts[1]!==input || parts[2]!==filenameNode) return null;
+    const title=parts[0].textContent.trim(), filename=filenameNode.textContent.trim();
+    if (!/^(?:r[ée]sum[ée](?:\s*\/\s*cv)?|cv)\s*[✱*]?$/iu.test(title) ||
+        !/^(?:r[ée]sum[ée](?:-[\da-f]{12})?|cv)\.pdf$/iu.test(filename) ||
+        input.files?.length && input.files[0].name!==filename) return null;
+    return {title,filename};
+  };
+}
+
 // Read corroborating labels, including hidden accessible names. A contradiction can veto an upload
 // even when a hidden reference could not, on its own, identify a visible picker.
 export function readUploadOwnerLabels(inputs) {

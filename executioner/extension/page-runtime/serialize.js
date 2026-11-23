@@ -1,5 +1,5 @@
 import { applicationAttachmentControls, observeCurrentDocument, smartRecruitersForm, smartRecruitersScreeningFooter, workdayNoticeMarkers } from '../page-adapters/document.js';
-import { uploadLabelKind, readUploadOwnerLabels } from './upload-label.js';
+import { uploadLabelKind, readUploadOwnerLabels, createInlineUploadLabelReader } from './upload-label.js';
 import { createUploadReader } from './upload-reader.js';
 import { createLegacyAnswerReader } from './legacy-page-answers.js';
 import { createFabricControl } from '../page-adapters/fabric-control.js';
@@ -55,6 +55,7 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   createUploadReader,
   uploadLabelKind,
   readUploadOwnerLabels,
+  createInlineUploadLabelReader,
   createLegacyAnswerReader,
   createFabricControl,
   createProvinceMenu,

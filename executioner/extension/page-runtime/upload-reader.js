@@ -1,8 +1,9 @@
-import {uploadLabelKind,readUploadOwnerLabels} from './upload-label.js';
+import {uploadLabelKind,readUploadOwnerLabels,createInlineUploadLabelReader} from './upload-label.js';
 
 export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrappedUploadTitle,
   state, regionFor, deepQuery, composedClosest, composedParent, composedContains, visible, editable, norm, verifiedDialogUpload, resumeLabel, otherAttachment
 }) {
+  const inlineUploadLabel=createInlineUploadLabelReader();
   const fileBinding = e => {
     if (!e.isConnected || e.type !== 'file' || e.disabled || e.readOnly || e.matches(':disabled') || composedClosest(e,'[inert]')) return null;
     const wrappingLabel = e.closest('label');
@@ -16,9 +17,11 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrapp
       return matches.length === 1 && matches[0] !== e && widgetVisible(matches[0]) ? matches : [];
     });
     const title = wrappedUploadTitle(e);
+    const inline=inlineUploadLabel(e);
+    const bound=widget=>({label:'Resume',widget,...inline && {renderedFilename:inline.filename}});
     const text = [e.getAttribute('aria-label') ?? '', ...refs(e).map(node=>node.textContent ?? ''),
       ...labels.flatMap(label=>[label.getAttribute('aria-label') ?? '', ...refs(label).map(node=>node.textContent ?? ''),
-        (title?.parentElement === label ? title : label).textContent ?? ''])];
+        inline?.title ?? (title?.parentElement === label ? title : label).textContent ?? ''])];
     const fieldset = composedClosest(e,'fieldset');
     const legend = fieldset?.querySelector(':scope > legend');
     if (legend && fieldset.querySelectorAll('input:not([type=hidden]),select,textarea').length===1) text.push(legend.textContent ?? '');
@@ -26,7 +29,7 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrapp
     if (owner.ambiguous || [...text,...owner.labels].some(label=>uploadLabelKind(label)==='other')) return null;
     if (isPortalResumeBinding(proven)) {
       const proof=verifiedDialogUpload(e);
-      return proof && !e.multiple ? {label:'Resume',widget:proof.label} : null;
+      return proof && !e.multiple ? bound(proof.label) : null;
     }
     if (proven && regionFor(e)===proven.region &&
         proven.region.isConnected && proven.group.isConnected && proven.button.isConnected &&
@@ -35,7 +38,7 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrapp
         !composedClosest(proven.button,'[inert],[aria-hidden=true]') &&
         resumeLabel((proven.group.innerText??'').split('\n').find(line=>line.trim())??'') &&
         !proven.button.disabled && proven.button.type==='button' && norm(proven.button.textContent)==='choose file') {
-      return {label:'Resume',widget:proven.button};
+      return bound(proven.button);
     }
     const boundLabels = labels.filter(label=>widgetVisible(label) && !composedClosest(label,'[aria-hidden="true"],[inert]') &&
       deepQuery(label,'input[type=file]').length <= 1);
@@ -53,13 +56,13 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrapp
       if (resumeLabel(name)) {
         if (!widgetVisible(uploadGroup) || composedClosest(uploadGroup,'[aria-hidden=true],[inert]') ||
             deepQuery(uploadGroup,'input,textarea,select').some(control=>control!==e)) return null;
-        if (nativeVisible || boundLabels.length===1 && composedContains(uploadGroup,boundLabels[0])) return {label:'Resume',widget:uploadGroup};
+        if (nativeVisible || boundLabels.length===1 && composedContains(uploadGroup,boundLabels[0])) return bound(uploadGroup);
         return null;
       }
     }
     if ([...text,...owner.visibleHeadings].some(resumeLabel)) {
-      if (nativeVisible) return {label:'Resume', widget:e};
-      if (boundLabels.length === 1) return {label:'Resume', widget:boundLabels[0]};
+      if (nativeVisible) return bound(e);
+      if (boundLabels.length === 1) return bound(boundLabels[0]);
     }
     // Some native inputs have only a technical aria-label. Stay inside their
     // nearest small upload field, never a whole form or an unrelated heading.
@@ -74,7 +77,7 @@ export function createUploadReader({ isPortalResumeBinding, uploadHeading, wrapp
       const headings=[...group.children].filter(child=>child.matches('h1,h2,h3,h4,h5,h6,[role=heading],' + uploadHeading));
       if (!resumeLabel(lines[0] ?? '') && !(headings.length===1 && resumeLabel(headings[0].textContent))) continue;
       const visibleWidget=nativeVisible || boundLabels.some(label=>composedContains(group,label));
-      if (visibleWidget) return {label:'Resume',widget:group};
+      if (visibleWidget) return bound(group);
     }
     return null;
   };

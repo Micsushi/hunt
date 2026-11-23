@@ -9,6 +9,7 @@ import { applicationTarget } from '../target.ts';
 interface UploadField {
   kind: string;
   resumeTarget?: boolean;
+  inlineFilenameOnly?: boolean;
   label: string;
   required: boolean;
   files: number;
@@ -38,6 +39,7 @@ export async function prepareHostedResume(
 ): Promise<'existing' | 'prepared'> {
   try {
     if (!isResume(field)) throw new ApplicationPause('This application requires an additional attachment.');
+    if (field.inlineFilenameOnly) throw new ApplicationPause('The employer displays a resume filename. Its contents are unverified. Inspect the existing attachment before retrying.');
     const ats = applicationTarget(page.url()).ats;
     const name = ats === 'workable' ? `Resume-${sha256.slice(0, 12)}.pdf` : 'Resume.pdf';
     const file = { name, mimeType: 'application/pdf', buffer: resume };

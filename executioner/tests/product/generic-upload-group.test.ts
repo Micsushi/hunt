@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {chromium,type Page} from 'playwright';
 import {uploadLabelKind,readUploadOwnerLabels} from '../../extension/page-runtime/upload-label.js';
 import {inspectHostedFields} from '../../src/product/hosted-field-observation.ts';
+import {prepareHostedResume} from '../../src/product/uploads/hosted.ts';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
 import {fillMatchedPage} from '../../src/product/page-matching.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
@@ -168,6 +169,30 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     await page.locator('#resume').evaluate(input=>input.insertAdjacentHTML('afterend','<span>Resume.pdf</span>'));
     assert.deepEqual(unresolved(await status()),[],'a cleared picker and a displayed resume filename are not extra documents');
 
+    const inline = (await inspectHostedFields(page)).find(field=>field.kind==='file');
+    assert.equal(inline?.resumeTarget,true,'the native label still identifies the cleared picker');
+    await assert.rejects(prepareHostedResume(page,page.locator('#resume'),inline,pdf,'',undefined,()=>{}),/contents are unverified/);
+    assert.deepEqual(await bytes(page,'resume'),[]);
+    await page.locator('#resume + span').evaluate(span=>span.remove());
+    await page.locator('#resume').evaluate((input: HTMLInputElement)=>{
+      input.onchange=()=>{
+        input.nextElementSibling?.remove();
+        if (input.files?.length) {
+          const name=document.createElement('span');
+          name.textContent=input.files[0]!.name;
+          input.after(name);
+        }
+      };
+    });
+    assert.equal((await fill(page)).resume,'verified','rendering a filename after selection preserves the file binding');
+    assert.equal((await fill(page)).resume,'verified','retry recognizes the same native file');
+    assert.deepEqual(await bytes(page,'resume'),[...pdf]);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.deepEqual(await bytes(page,'resume'),[]);
+    await page.evaluate(fillVisibleFields,{action:'redo' as const});
+    assert.deepEqual(await bytes(page,'resume'),[...pdf]);
+
+    await page.reload();
     await page.setContent('<main>'+applicant+resumeField+'<div class="ashby-application-form-field"><p>Cover Letter</p><span class="ashby-application-form-field-required">*</span><input id="letter" type="file"></div></main>'+
       '<form><label>Portfolio<input required type="file"></label></form>');
     const partialFormless=await fill(page);
@@ -197,6 +222,14 @@ test('duplicate names, multiple inputs and foreign group labels cannot authorize
   const browser=await chromium.launch({headless:true});
   try {
     const conflictingOwners = [
+      '<label>Resume/CV*<input required type="file"><span>Academic transcript.pdf</span></label>',
+      '<label>Cover letter<input required type="file"><span>Resume.pdf</span></label>',
+      '<label>Resume/CV* or transcript<input required type="file"><span>Resume.pdf</span></label>',
+      '<label>Resume/CV*<input required type="file"><span aria-label="Cover letter">Resume.pdf</span></label>',
+      '<label>Resume/CV*<input required type="file"><span>Resume.pdf</span><span>Transcript.pdf</span></label>',
+      '<label>Resume/CV*<input required multiple type="file"><span>Resume.pdf</span></label>',
+      '<label>Resume/CV*<input required type="file"><span>Download Resume.pdf template</span></label>',
+      '<label>Resume/CV*<input required type="file" aria-label="Academic transcript"><span>Resume.pdf</span></label>',
       '<fieldset><legend>Cover letter</legend><div class="field"><input type="text"><input required type="file" aria-label="Resume"></div></fieldset>',
       '<div role="group"><div><h3>Cover letter</h3></div><input type="text"><input required type="file" aria-label="Resume"></div>',
       '<div class="application-label">Cover letter</div><div class="application-field"><input type="text"><input required type="file" aria-label="Resume"></div>',

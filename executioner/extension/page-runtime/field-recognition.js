@@ -1,7 +1,8 @@
-import {uploadLabelKind} from './upload-label.js';
+import {uploadLabelKind,createInlineUploadLabelReader} from './upload-label.js';
 
 export function createFieldRecognition({ addressGroupLabel, wrappedUploadTitle, composedClosest, deepQuery, fabricWidget, norm }) {
   const semanticChoiceButton = e => e.tagName==='BUTTON' && (e.getAttribute('aria-haspopup')==='listbox' || e.getAttribute('role')==='combobox') && !fabricWidget(e);
+  const inlineUploadLabel=createInlineUploadLabelReader();
   const rawLabelFor = element => {
     if(semanticChoiceButton(element)) {
       const owned=[...element.labels??[]].filter(label=>label.control===element);
@@ -17,6 +18,8 @@ export function createFieldRecognition({ addressGroupLabel, wrappedUploadTitle, 
     return refs || element.getAttribute('aria-label') || [...element.labels ?? []].map(l => {
       const title = element.type === 'file' && wrappedUploadTitle(element);
       if (title?.parentElement === l) return title.textContent;
+      const inline=element.type==='file' && inlineUploadLabel(element);
+      if (inline) return inline.title;
       const copy = l.cloneNode(true); copy.querySelectorAll('input,textarea,select,button').forEach(e => e.remove()); return copy.textContent;
     }).join(' ').trim() || addressGroupLabel(element,norm) || ({'given-name':'First name','family-name':'Last name',name:'Full name',email:'Email',tel:'Phone','address-line1':'Address line 1','address-line2':'Address line 2','address-level2':'City','address-level1':'State','postal-code':'Postal code','country-name':'Country'}[element.autocomplete]) || element.name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ') || element.placeholder || '';
   };

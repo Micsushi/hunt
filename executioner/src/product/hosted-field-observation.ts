@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import { uploadLabelKind, readUploadOwnerLabels } from '../../extension/page-runtime/upload-label.js';
+import { uploadLabelKind, readUploadOwnerLabels, createInlineUploadLabelReader } from '../../extension/page-runtime/upload-label.js';
 import { createLeverResumeTitleReader } from '../../extension/page-adapters/lever-resume.js';
 import { annotateQuestionContext } from '../../extension/question-context.js';
 import { ApplicationPause } from './application-contract.ts';
@@ -9,7 +9,8 @@ const controls = 'input:not([type=hidden]):not([type=submit]):not([type=button])
 export async function inspectHostedFields(page: Page) {
   await page.evaluate(annotateQuestionContext);
   const titleReader = await page.evaluateHandle(createLeverResumeTitleReader);
-  const fields = await page.locator(controls).evaluateAll((elements, wrappedUploadTitle) => {
+  const inlineReader = await page.evaluateHandle(createInlineUploadLabelReader);
+  const fields = await page.locator(controls).evaluateAll((elements, {wrappedUploadTitle,inlineUploadLabel}) => {
     const visible = (e: Element) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).display !== 'none';
     const clean = (s: string) => s.replace(/[✱*]/g, '').replace(/\s+/g, ' ').trim();
     const labelContent = (e: Element, includeAsterisk = false) => {
@@ -57,12 +58,14 @@ export async function inspectHostedFields(page: Page) {
       const referenced=referenceMatches.every((matches,index)=>matches.length===1 || e.type==='file' && index>0 && !matches.length)?referenceMatches.flat():[];
       const ownLabels = [...e.labels ?? []];
       const wrappedTitle = e.type === 'file' ? wrappedUploadTitle(e) : null;
+      const inline = e.type === 'file' ? inlineUploadLabel(e) : null;
       const nativeLabels = ownLabels.map(owner => wrappedTitle?.parentElement === owner && owner.control === e ? wrappedTitle : owner);
       const descriptiveIds = new Set((e.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean));
       const labelsOnly = referenced.filter(label => !descriptiveIds.has(label.id));
       let labelOwners: Element[] = labelsOnly.length ? labelsOnly : nativeLabels;
-      let label = labelsOnly.map(labelText).join(' ').trim() || clean(e.getAttribute('aria-label') ?? '') || nativeLabels.map(labelText).join(' ');
-      const fileLabels = e.type === 'file' ? [e.getAttribute('aria-label') ?? '', ...labelsOnly.map(labelText), ...nativeLabels.map(labelText)] : [];
+      const nativeTexts=inline ? [clean(inline.title)] : nativeLabels.map(labelText);
+      let label = labelsOnly.map(labelText).join(' ').trim() || clean(e.getAttribute('aria-label') ?? '') || nativeTexts.join(' ');
+      const fileLabels = e.type === 'file' ? [e.getAttribute('aria-label') ?? '', ...labelsOnly.map(labelText), ...nativeTexts] : [];
       const ambiguousFile = e.type === 'file' && (referenceMatches.some((matches,index) => matches.length>1 || index===0 && !matches.length) || e.multiple);
       if(uploadGroup) {
         const owners=(uploadGroup.getAttribute('aria-labelledby')??'').split(/\s+/).filter(Boolean).flatMap(id=>{
@@ -150,7 +153,7 @@ export async function inspectHostedFields(page: Page) {
           return false;
         })();
       if (ambiguousTitles?.some(hasRequiredMarker)) return null;
-      const markedLabel = labelOwners.some(hasRequiredMarker);
+      const markedLabel = labelOwners.some(hasRequiredMarker) || !!inline && /[✱*]$/.test(inline.title);
       const ashbyMarker = ashbyEntryRequired || group?.matches('.ashby-application-form-field-entry') &&
         !!group.querySelector(':scope > .ashby-application-form-field-required');
       const uploadWrapper=e.type==='file'?e.closest('.ashby-application-form-field-entry,.application-question,.application-field,.field'):null;
@@ -188,12 +191,12 @@ export async function inspectHostedFields(page: Page) {
       }
       const owner = e.form ?? (e.hasAttribute('form') ? null : e.closest('form,[role=form]'));
       const formId = owner ? forms.indexOf(owner) : -1;
-      out.push({ key, fileLabels, ambiguousFile, ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
+      out.push({ key, fileLabels, ambiguousFile, ...(inline && !e.files?.length && {inlineFilenameOnly:true}), ...(formId >= 0 && {formId: String(formId)}), label, required, kind, options, value, checked: radios.length?radios.some(selected):e.checked ?? false, files: e.files?.length ?? 0,
         ...(buttonConflict && {buttonConflict: true}), valid: !buttonConflict && e.getAttribute('aria-invalid') !== 'true' && (!e.validity || e.validity.valid), name: e.name ?? '',
         inputType: e.type, min: e.min === '' ? null : Number(e.min), max: e.max === '' ? null : Number(e.max), step: e.step === 'any' ? null : Number(e.step || '1'), minLength: e.minLength, maxLength: e.maxLength, pattern: e.pattern ?? '', readOnly: e.readOnly ?? false });
     }
     return out;
-  }, titleReader).finally(() => titleReader.dispose());
+  }, {wrappedUploadTitle:titleReader,inlineUploadLabel:inlineReader}).finally(() => Promise.all([titleReader.dispose(),inlineReader.dispose()]));
   if (fields === null) throw new ApplicationPause('A required choice has ambiguous controls. Inspect the application before retrying.');
   const owners = fields.some(field=>field.kind==='file')
     ? await page.locator('input[type=file][data-c3-hosted]').evaluateAll(readUploadOwnerLabels) : [];
