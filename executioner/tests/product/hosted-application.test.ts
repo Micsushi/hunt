@@ -367,17 +367,58 @@ test('Ashby nested optional consent stays separate from required Phone and legal
     assert.ok(protectedFields.every(row=>/screen applications|screening to evaluate/.test(row.label)));
     const granted=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'true'},input.profile);
     await assert.rejects(fillApplication(p,{...input,profile:granted},AbortSignal.timeout(15000),()=>{}),/requires a consent decision/);
-    const current=await fillMatchedPage({profile:granted,resume:input.resume,url,workflow:'C3.2',signal:AbortSignal.timeout(10000),
+    const fillCurrent=(profile:typeof granted)=>fillMatchedPage({profile,resume:input.resume,url,workflow:'C3.2',signal:AbortSignal.timeout(10000),
       call:async(action,matchingPlans,matchingRunId)=>{
         await p.evaluate(annotateQuestionContext);
         return {...await p.evaluate(fillVisibleFields,{action,scope:'page' as const,matchingPlans,matchingRunId})};
       }});
+    const current=await fillCurrent(granted);
     assert.equal(current.skipped.filter(row=>row.reason==='protected_answer_denied').length,3);
     assert.ok(protectedFields.every(field=>current.matching?.some(row=>row.question===field.label)));
     assert.equal(await p.locator('#box').isChecked(),false);
     assert.equal(await p.locator('#choice').inputValue(),'');
     assert.equal(await p.locator('[name=screen]:checked').count(),0);
     assert.equal(await p.evaluate('submits'),0);
+
+    const terms='I agree to the application terms.';
+    const group=(id:string,yes='',no='',state='required')=>`<fieldset><legend>${terms}</legend>
+      <label><input type=radio name="${id}" value=Yes ${state} ${yes}>Yes</label>
+      <label><input type=radio name="${id}" value=No ${no}>No</label></fieldset>`;
+    const common='aria-describedby="ai"';
+    const root='<label>First name<input required></label><label>Email<input type=email required></label>';
+    await p.reload();
+    await p.setContent('<form>'+root+
+      group('common',common,common)+group('individual',common)+group('different',common,'aria-description="Contact me about promotions."')+
+      group('labelled','aria-labelledby="yes ai"','aria-labelledby="no ai"')+
+      group('dangling','aria-describedby="missing"')+group('duplicate','aria-describedby="dup"')+
+      group('pure')+group('optional',common,common,'')+group('existing',common,'checked '+common)+
+      '<p hidden id="ai">We use AI-assisted screening to evaluate applications.</p><span id=yes>Yes</span><span id=no>No</span>'+
+      '<i id=dup>One</i><i id=dup>Two</i><button type=button>Submit application</button></form>');
+    const declined=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'false'},input.profile);
+    await assert.rejects(fillApplication(p,{...input,profile:declined},AbortSignal.timeout(15000),()=>{}),/requires a consent decision/);
+    assert.equal(await p.locator('[name=common]:checked').count(),0);
+    await p.evaluate(()=>{(window as any).changes=[];document.addEventListener('change',e=>{
+      const control=e.target as HTMLInputElement;if(control.type==='radio')(window as any).changes.push(control.name);
+    });});
+    const mixedResult=await fillCurrent(declined);
+    assert.ok(mixedResult.skipped.some(row=>row.reason==='protected_answer_denied'));
+    assert.equal(mixedResult.matching?.filter(row=>row.control==='radio' && row.required &&
+      /Consent details could not be verified|AI-assisted screening/.test(row.question)).length,7);
+    assert.deepEqual(await p.locator('input[type=radio]:checked').evaluateAll(nodes=>nodes.map(node=>[(node as HTMLInputElement).name,(node as HTMLInputElement).value])),[['pure','Yes'],['existing','No']]);
+    await fillCurrent(declined);
+    assert.deepEqual(await p.evaluate('window.changes'),['pure']);
+    for (const control of [
+      '<label>'+terms+'<input type=checkbox required></label><p>I also authorize contact for marketing purposes.</p>',
+      '<label>'+terms+'<textarea required aria-description="We use automated screening to evaluate applications."></textarea></label>',
+      '<label class="_required_fixture">'+terms+'</label><div class="ashby-application-form-input-yesno" aria-describedby="ai">'+
+        '<button type="button" data-option="yes" aria-pressed="false">Yes</button><button type="button" data-option="no" aria-pressed="false">No</button></div>',
+    ]) {
+      await p.setContent('<form>'+root+'<div class="ashby-application-form-field-entry">'+control+'</div>'+
+        '<p hidden id="ai">We use automated screening to evaluate applications.</p><button type=button>Submit application</button></form>');
+      await assert.rejects(fillApplication(p,{...input,profile:granted},AbortSignal.timeout(15000),()=>{}),/requires a consent decision/);
+      assert.equal(await p.locator('input:checked,[aria-pressed=true],textarea:not(:empty)').count(),0);
+      if(await p.locator('textarea').count()) assert.equal(await p.locator('textarea').inputValue(),'');
+    }
   } finally { await b.close(); }
 });
 

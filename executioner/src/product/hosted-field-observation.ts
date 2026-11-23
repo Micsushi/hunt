@@ -1,16 +1,16 @@
 import type { Page } from 'playwright';
 import { uploadLabelKind, readUploadOwnerLabels, createInlineUploadLabelReader } from '../../extension/page-runtime/upload-label.js';
 import { createLeverResumeTitleReader } from '../../extension/page-adapters/lever-resume.js';
-import { annotateQuestionContext } from '../../extension/question-context.js';
+import { annotateQuestionContext,type ConsentContextReader } from '../../extension/question-context.js';
 import { ApplicationPause } from './application-contract.ts';
 
 const controls = 'input:not([type=hidden]):not([type=submit]):not([type=button]),select,textarea,.ashby-application-form-input-yesno,[role=group][data-ui]:has(input[type=checkbox]),.application-field:has(>ul[data-qa=checkboxes])';
 
 export async function inspectHostedFields(page: Page) {
-  await page.evaluate(annotateQuestionContext);
+  const consentReader = await page.evaluateHandle<ConsentContextReader,'reader'>(annotateQuestionContext,'reader');
   const titleReader = await page.evaluateHandle(createLeverResumeTitleReader);
   const inlineReader = await page.evaluateHandle(createInlineUploadLabelReader);
-  const fields = await page.locator(controls).evaluateAll((elements, {wrappedUploadTitle,inlineUploadLabel}) => {
+  const fields = await page.locator(controls).evaluateAll((elements, {wrappedUploadTitle,inlineUploadLabel,consentContext}) => {
     const visible = (e: Element) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).display !== 'none';
     const clean = (s: string) => s.replace(/[✱*]/g, '').replace(/\s+/g, ' ').trim();
     const labelContent = (e: Element, includeAsterisk = false) => {
@@ -165,7 +165,10 @@ export async function inspectHostedFields(page: Page) {
         !!group?.matches('[data-required=true],[aria-required=true]');
       const maskedDate = location.hostname==='apply.workable.com' && e.type==='text' && e.placeholder==='MM/DD/YYYY' && e.inputMode==='tel';
       const kind = multiChecks.length?'multicheck':e.classList.contains('ashby-application-form-input-yesno') ? 'buttons' : e.type === 'file' ? 'file' : e.id === 'location-input' && e.closest('.application-field') ? 'location' : e.tagName === 'SELECT' ? 'select' : e.getAttribute('role') === 'combobox' ? 'combobox' : e.type === 'radio' ? 'radio' : e.type === 'checkbox' ? 'checkbox' : e.tagName === 'TEXTAREA' ? 'textarea' : maskedDate || e.type === 'date' ? 'date' : 'text';
-      label = radioGroup?.getAttribute('data-hunt-question-context') || e.getAttribute('data-hunt-question-context') || label;
+      if (required && kind!=='file') {
+        const choices=ashbyButtons ? [...e.querySelectorAll('button[data-option]')] : radios.length ? radios : multiChecks.length ? multiChecks : undefined;
+        label=consentContext(radioGroup ?? e,label,labelOwners,choices) || label;
+      }
       const key = `hosted-${index}`;
       e.setAttribute('data-c3-hosted', key);
       const options = kind==='multicheck'?multiChecks.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind==='radio'?radios.map(r=>[...r.labels??[]].map(labelText).join(' ')):kind === 'select' ? [...(raw as HTMLSelectElement).options].filter(o => !o.disabled && o.value).map(o => o.textContent?.trim() ?? '') : kind === 'buttons' ? [...e.querySelectorAll('button[data-option]')].map(o => o.textContent?.trim() ?? '') : [];
@@ -196,7 +199,8 @@ export async function inspectHostedFields(page: Page) {
         inputType: e.type, min: e.min === '' ? null : Number(e.min), max: e.max === '' ? null : Number(e.max), step: e.step === 'any' ? null : Number(e.step || '1'), minLength: e.minLength, maxLength: e.maxLength, pattern: e.pattern ?? '', readOnly: e.readOnly ?? false });
     }
     return out;
-  }, {wrappedUploadTitle:titleReader,inlineUploadLabel:inlineReader}).finally(() => Promise.all([titleReader.dispose(),inlineReader.dispose()]));
+  }, {wrappedUploadTitle:titleReader,inlineUploadLabel:inlineReader,consentContext:consentReader}).finally(() =>
+    Promise.all([titleReader.dispose(),inlineReader.dispose(),consentReader.dispose()]));
   if (fields === null) throw new ApplicationPause('A required choice has ambiguous controls. Inspect the application before retrying.');
   const owners = fields.some(field=>field.kind==='file')
     ? await page.locator('input[type=file][data-c3-hosted]').evaluateAll(readUploadOwnerLabels) : [];
