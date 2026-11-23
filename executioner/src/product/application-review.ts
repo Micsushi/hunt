@@ -65,7 +65,9 @@ export async function restoreSavedReview(page: Page, reviewedUrl: string): Promi
 export function checkWorkdayAttachment(outcome: WorkdayAttachmentObservation) {
   switch (outcome) {
     case "missing": throw new ApplicationPause("The employer shows that the resume is missing. Check the attachment before reviewing.");
-    case "mismatch": throw new ApplicationPause("The employer attachment differs from the selected resume. Check the file before reviewing.");
+    case "filename_mismatch": throw new ApplicationPause("The employer shows a different resume filename. PDF contents unverified. Check the attachment before reviewing.");
+    case "picker_mismatch": throw new ApplicationPause("The PDF in the local file picker does not match the selected resume. Check the attachment before reviewing.");
+    case "mismatch": throw new ApplicationPause("The downloaded employer attachment differs from the selected resume (SHA-256 mismatch). Check the file before reviewing.");
     case "ambiguous": throw new ApplicationPause("C3 could not identify one unchanged resume attachment. Check the employer page.");
     case "download_unavailable": throw new ApplicationPause("The employer shows an attachment action that C3 could not safely check. PDF contents unverified.");
     case "download_failed": throw new ApplicationPause("Resume download failed. PDF contents unverified. Check the employer attachment.");

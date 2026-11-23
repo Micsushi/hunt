@@ -67,7 +67,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
   const url = "https://fixture.wd1.myworkdayjobs.com/External/job/City/Job_R1";
   const pdf = Buffer.from("%PDF-1.4 selected résumé");
   const filename = "c3-attachment-" + createHash("sha256").update(pdf).digest("hex") + ".pdf";
-  let label = "Academic transcript", restored = false, served = pdf, downloads = 0;
+  let label = "Academic transcript", restored = false, served = pdf, downloads = 0, downloadStatus = 200;
   const profile = fixtureApplicantProfile({given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid"});
   const fill = () => fillApplication(page, {url, profile, resume:pdf}, AbortSignal.timeout(15000), () => {});
   await page.route(url, route => {
@@ -83,7 +83,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
       root.querySelector('button').onclick=review;`);
     return route.fulfill({contentType:"text/html",body:fixture});
   });
-  await page.route("**/attachment.pdf", route => {downloads++;return route.fulfill({contentType:"application/pdf",body:served});});
+  await page.route("**/attachment.pdf", route => {downloads++;return route.fulfill({status:downloadStatus,contentType:"application/pdf",body:served});});
   try {
     await page.goto(url);
     await assert.rejects(fill(),/required attachment needs your review/);
@@ -156,6 +156,63 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
         const label=document.createElement("label");label.textContent="Resume";label.append(input);node.append(label);
       },[...pdf]);
       assert.deepEqual((await reviewSnapshot(page,sha)).workdayResumeEvidence,{upload:undefined,review:"picker"});
+      const group = review.locator('#evidence-fixture');
+      await review.evaluate(node=>node.insertAdjacentHTML('beforeend','<div role="group"><h4>Supporting documents</h4><p>No attachments</p></div>'));
+      await review.evaluate(node=>node.insertAdjacentHTML('beforeend','<section role="group" id="evidence-fixture"><h4>Resume/CV</h4></section>'));
+      const display = (content: string, wrapped = true) => group.evaluate((node,{content,wrapped})=>{
+        node.innerHTML='<h4>Resume/CV</h4>'+(wrapped?'<div data-automation-id="file-upload-item" style="display:contents">'+content+'</div>':content);
+      },{content,wrapped});
+      for (const html of [
+        '<a href="/attachment.pdf" download>Download</a>',
+        '<a href="/attachment.pdf"><span>'+filename+'</span></a>',
+        '<a data-automation-id="file-upload-item-name" href="/attachment.pdf">Preview</a>',
+      ]) {
+        await display(html);
+        assert.equal((await reviewSnapshot(page,sha)).workdayResumeEvidence?.review,'download');
+      }
+      await display('<span data-automation-id="file-upload-item-name">renamed.pdf</span><button aria-label="Delete renamed.pdf">Delete</button>');
+      await assert.rejects(reviewSnapshot(page,sha),/different resume filename.*PDF contents unverified/);
+      await display('<a href="/attachment.pdf" data-automation-id="file-upload-item-name">renamed.pdf</a>');
+      assert.equal((await reviewSnapshot(page,sha)).workdayResumeEvidence?.review,'download');
+      await refresh();
+      assert.equal(job!.workdayResumeEvidence?.review,'download');
+      downloadStatus = 403;
+      await assert.rejects(reviewSnapshot(page,sha),/download failed/i);
+      downloadStatus = 200;
+      served = Buffer.from('%PDF-different');
+      await assert.rejects(reviewSnapshot(page,sha),/differs from the selected resume/);
+      served = Buffer.from('unavailable');
+      await assert.rejects(reviewSnapshot(page,sha),/download failed/i);
+      served = pdf;
+      const downloadsBeforeUnsafe = downloads;
+      for (const [html,wrapped] of [
+        ['<button type="button">Download</button>',true],
+        ['<a download href="https://other.example/attachment.pdf">Download</a>',true],
+        ['<a href="/attachment.pdf">View another page</a>',true],
+        ['<div role="group"><h4>Academic transcript</h4><a href="/attachment.pdf" download>Download</a></div>',true],
+        ['<a href="/attachment.pdf" aria-label="Delete file" download>Download</a>',true],
+        ['<a href="/attachment.pdf" download>Download</a>',false],
+      ] as const) {
+        await display(html,wrapped);
+        await assert.rejects(reviewSnapshot(page,sha),/could not safely check/);
+      }
+      await display('<span data-automation-id="file-upload-item-name">one.pdf</span><span data-automation-id="file-upload-item-name">two.pdf</span><a href="/attachment.pdf" download>Download</a>');
+      await assert.rejects(reviewSnapshot(page,sha),/one unchanged resume attachment/);
+      await display('<a href="/attachment.pdf" download>Download</a><button>Preview</button>');
+      await assert.rejects(reviewSnapshot(page,sha),/one unchanged resume attachment/);
+      await display('<a href="/attachment.pdf" download>Download</a>');
+      await group.locator('h4').evaluate(node=>node.remove());
+      await assert.rejects(reviewSnapshot(page,sha),/could not safely check/);
+      assert.equal(downloads,downloadsBeforeUnsafe);
+      await display('<p>No attachments</p>',false);
+      await assert.rejects(reviewSnapshot(page,sha),/resume is missing/);
+      await group.evaluate(node => {const h=document.createElement('h4'),p=document.createElement('p');h.textContent='Resume/CV';p.textContent='No attachments';node.replaceChildren();node.after(h,p);});
+      await assert.rejects(reviewSnapshot(page,sha),/resume is missing/);
+      await group.evaluate(node => {node.nextElementSibling?.remove();node.nextElementSibling?.remove();node.innerHTML='<h4>Resume/CV</h4><p>No attachments</p>';});
+      await group.evaluate(node=>node.insertAdjacentHTML('beforeend','<div data-automation-id="file-upload-item"><a href="/attachment.pdf" download>Download</a></div>'));
+      await assert.rejects(reviewSnapshot(page,sha),/one unchanged resume attachment/);
+      assert.equal(downloads,downloadsBeforeUnsafe);
+
       assert.equal(await page.evaluate("submits"),0);
     } finally {await queue.close();rmSync(queueRoot,{recursive:true,force:true});}
     // The empty form inserts the attribute-only row in the file change handler. Restored forms start with a success child.
