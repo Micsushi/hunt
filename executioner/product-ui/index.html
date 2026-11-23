@@ -46,6 +46,10 @@
   </section>
   <section id="settings-panel" data-panel="settings" hidden aria-label="Settings and backup"><section class="connection-settings" aria-labelledby="connection-heading"><h2 id="connection-heading">Browser connection</h2><p id="connection-details" role="status">Checking the connected browser</p><p id="connection-version" class="note"></p><button id="check-connection" type="button" class="secondary">Check connection</button></section></section>
   <section data-panel="applications" hidden aria-label="Application progress"><div class="queue-heading"><h2 id="queue-title" tabindex="-1">Your applications</h2><span id="summary" role="status"></span></div>
+    <details id="link-recovery" hidden><summary>Repair a saved link</summary>
+      <p class="note">Paste the original employer posting link to reconnect its saved application.</p>
+      <form id="repair-link-form"><label>Employer posting URL<input id="repair-link-url" type="url" required maxlength="4096" autocomplete="off"></label><button id="repair-link" type="submit" class="secondary">Repair link</button></form>
+    </details>
     <div class="queue-filters"><label>Find an application<input id="job-search" type="search" placeholder="Company, job title or link"></label><label>Status<select id="job-filter"><option value="all">All applications</option><option value="attention">Needs attention</option><option value="review">At review</option><option value="active">Queued or running</option><option value="paused">Paused</option><option value="submitted">Submitted</option></select></label></div>
     <p id="filter-summary" role="status" class="note"></p><p id="empty">Add job links above, or choose “Prepare this job” in the browser extension.</p><p id="no-matches" hidden>No applications match. <button id="clear-filters" type="button" class="secondary">Clear filters</button></p><ol id="jobs"></ol></section>
   <div id="history" class="actions"><button id="undo" class="secondary" disabled>Undo</button><button id="redo" class="secondary" disabled>Redo</button><span id="notice" role="status"></span></div>

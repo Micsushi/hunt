@@ -33,7 +33,10 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
 
   const stateFile=join(root,'jobs.json');
   const saved=JSON.parse(readFileSync(stateFile,'utf8'));
-  const invalid={...saved.jobs[0],url:'javascript:private-legacy-evidence',title:'private-legacy-evidence',status:'submitting',tabId:23,submissionAllowed:true};
+  const invalid={...saved.jobs[0],url:'javascript:private-legacy-evidence',title:'Job at javascript:private-legacy-evidence',
+    sourceJobId:72,status:'submitting',tabId:23,selectedDocument:'stale-doc',selectedApplicationUrl:first!.url,
+    reviewDigest:'stale',reviewUrl:first!.url,submissionAllowed:true,resumeExpected:true,resumeUpload:{kind:'picker'},
+    workdayResumeEvidence:{upload:'filename'},error:'stale employer text'};
   saved.jobs[0]=invalid;
   writeFileSync(stateFile,JSON.stringify(saved));
   const inputFile=join(root,invalid.id+'.input.json');
@@ -65,12 +68,76 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
     assert.deepEqual(JSON.parse(readFileSync(stateFile,'utf8')).jobs.find((job:{id:string})=>job.id===invalid.id),invalid);
     assert.deepEqual(readFileSync(inputFile),originalInput);
   }
-  saved.jobs[0]={...invalid,url:first!.url};
+  const service=await startProductServer({root,port:0});
+  try {
+    const headers={Authorization:'Bearer '+readFileSync(service.tokenPath,'utf8').trim(),'Content-Type':'application/json',Origin:service.origin};
+    const repair=(body:unknown, origin=service.origin)=>fetch(service.origin+'/repair-saved-link',{
+      method:'POST',headers:{...headers,Origin:origin},body:JSON.stringify(body)});
+    for (const request of [{url:invalid.url},{url:second!.url},{url:first!.url.toLowerCase()},
+      {url:'https://example.invalid/jobs/1'},{url:first!.url,sourceJobId:72}]) {
+      const response=await repair(request); assert.equal(response.status,400);
+      assert.ok(!(await response.text()).includes('private-legacy-evidence'));
+    }
+    assert.equal((await repair({url:first!.url},'chrome-extension://'+'a'.repeat(32))).status,400);
+    const peer=service.queue.jobs.find(job=>job.id===second!.id)!;
+    for (const conflict of [{sourceJobId:72},{tabId:23},{selectedDocument:'stale-doc'},{selectedApplicationUrl:first!.url}]) {
+      Object.assign(peer,conflict); assert.equal((await repair({url:first!.url})).status,400);
+      for(const field of Object.keys(conflict)) delete peer[field as keyof typeof peer];
+    }
+    const originalQueueBeforeDamage=readFileSync(stateFile);
+    writeFileSync(inputFile,JSON.stringify({...JSON.parse(originalInput.toString()),resume:Buffer.from('%PDF-other').toString('base64')}));
+    try {
+      const missing=await repair({url:first!.url});
+      assert.equal(missing.status,400); assert.match((await missing.json()).error,/original saved profile or resume/);
+      assert.deepEqual(readFileSync(stateFile),originalQueueBeforeDamage);
+    } finally {writeFileSync(inputFile,originalInput);}
+    // A failed disk write must not publish a repaired row in memory.
+    const originalQueue=readFileSync(stateFile);
+    unlinkSync(stateFile); mkdirSync(stateFile);
+    assert.equal((await repair({url:first!.url})).status,400);
+    assert.equal(service.queue.snapshot().unavailableJobCount,1);
+    rmdirSync(stateFile);writeFileSync(stateFile,originalQueue);service.queue.recoverStorage();
+    const originalNeighbor=JSON.stringify(peer);
+    assert.equal((await repair({url:first!.url})).status,200);
+    const result=service.queue.snapshot();
+    assert.equal(result.unavailableJobCount,0);
+    const repaired=result.jobs.find(job=>job.id===invalid.id)!;
+    assert.equal(repaired.status,'submission_uncertain');
+    assert.equal(repaired.sourceJobId,72); assert.equal(repaired.resumeSha256,invalid.resumeSha256); assert.equal(repaired.resumeExpected,true);
+    for (const field of ['tabId','selectedDocument','selectedApplicationUrl','reviewDigest','reviewUrl','resumeUpload','workdayResumeEvidence','error']) {
+      assert.ok(!Object.hasOwn(repaired,field));
+    }
+    assert.ok(!JSON.stringify(result).includes('private-legacy-evidence'));
+    assert.deepEqual(readFileSync(inputFile),originalInput);
+    const repairedQueue=readFileSync(stateFile);
+    assert.equal((await repair({url:first!.url})).status,400);
+    assert.deepEqual(readFileSync(stateFile),repairedQueue);
+    assert.equal(JSON.stringify(peer),originalNeighbor);
+    await assert.rejects(service.queue.action(invalid.id,'retry'));
+  } finally {await service.close();}
+
+  for (const oldStatus of ['queued','running','review','paused','submission_uncertain','submitted']) {
+    saved.jobs[0]={...invalid,status:oldStatus};
+    writeFileSync(stateFile,JSON.stringify(saved));
+    const recovered=new ApplicationQueue(root,bridge);
+    try {
+      recovered.repairSavedLink(first!.url,new Map());
+      assert.equal(recovered.jobs.find(job=>job.id===invalid.id)?.status,
+        ['submission_uncertain','submitted'].includes(oldStatus)?oldStatus:'paused');
+      await assert.rejects(recovered.action(invalid.id,'submit','stale',true));
+    } finally {await recovered.close();}
+  }
+  // A merely similar active key prevents repair, even when the other row is also unreadable.
+  saved.jobs[0]=invalid;
+  const other=saved.jobs[1];
+  saved.jobs[1]={...other,url:'broken',key:invalid.key.toLowerCase()};
   writeFileSync(stateFile,JSON.stringify(saved));
-  const recovered=new ApplicationQueue(root,bridge);
-  assert.equal(recovered.snapshot().unavailableJobCount,0);
-  assert.equal(recovered.jobs.find(job=>job.id===invalid.id)?.status,'submission_uncertain');
-  await recovered.close();
+  const ambiguous=new ApplicationQueue(root,bridge);
+  try {
+    assert.throws(()=>ambiguous.repairSavedLink(first!.url,new Map()),/could not match/);
+    assert.equal(ambiguous.snapshot().unavailableJobCount,2);
+  } finally {await ambiguous.close();}
+  saved.jobs[1]=other;
   saved.jobs[0]={...invalid,url:first!.url,key:'tampered'};
   writeFileSync(stateFile,JSON.stringify(saved));
   assert.throws(()=>new ApplicationQueue(root,bridge),/Saved C3 queue is invalid/);
@@ -103,6 +170,15 @@ test("restoring a replaced job and silently changing its selected resume are rej
     const originalInput = readFileSync(inputFile);
     const oldKey = 'www.amazon.jobs/jobs/7654'; // Written by the released www-host parser.
     const canonicalUrl = url.replace('www.amazon.jobs','amazon.jobs');
+    await queue.close();
+    const legacyFile=join(root,'jobs.json');
+    const legacy=JSON.parse(readFileSync(legacyFile,'utf8'));
+    Object.assign(legacy.jobs.find((job:{id:string})=>job.id===amazon!.id), {url:'broken',key:oldKey});
+    writeFileSync(legacyFile,JSON.stringify(legacy));
+    queue = new ApplicationQueue(root,bridge);
+    queue.repairSavedLink(canonicalUrl,new Map());
+    assert.equal(queue.jobs.find(job=>job.id===amazon!.id)?.url,canonicalUrl);
+    assert.deepEqual(readFileSync(inputFile),originalInput);
     for (const status of ['paused','removed'] as const) {
       if (status==='removed') await queue.action(amazon!.id,'remove');
       queue.jobs.find(job=>job.id===amazon!.id)!.key = oldKey;

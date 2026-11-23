@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
-import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget } from "./target.ts";
+import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget, savedPostingsMayOverlap } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { aiConsentAuthority, applicantProfile, productSources, effectiveProfileFacts, withCurrentAiConsent } from "./sources.ts";
@@ -71,6 +71,7 @@ function runFailure(error: unknown, stage: string) {
 export interface ProductJob {
   id: string; url: string; key: string; title: string; status: JobStatus; stage: string;
   pageHandoff?: true; selectedDocument?: string; selectedApplicationUrl?: string; tabId?: number; sourceJobId?: number; error?: string; reviewDigest?: string; reviewUrl?: string; submissionAllowed?: boolean;
+  host?: string; posting?: string; ats?: string;
   componentFailure?: ComponentFailure;
   createdAt: string; updatedAt: string;
   workdayResumeEvidence?: ProductInput['workdayResumeEvidence'];
@@ -171,6 +172,63 @@ export class ApplicationQueue {
          key && typeof job.key==='string' && possiblePostingAlias(job.key)===possiblePostingAlias(key)))) {
       throw new Error('A saved application with an unreadable link needs recovery before using this posting.');
     }
+  }
+  repairSavedLink(url: string, tabBindings: ReadonlyMap<number, {jobId:string; url:string; documentId:string}>) {
+    if (this.closed || this.storageError) throw new Error('Restore the local service and retry saving progress before repairing a link.');
+    const target = /^https:\/\//i.test(url) && !/[\\\s]/u.test(url) ? savedTarget(url) : undefined;
+    if (!target) throw new Error('Paste the full HTTPS link to the original employer posting.');
+    const active = this.records.filter(job => job.status !== 'removed');
+    const matches = active.filter(job => typeof job.key === 'string' && savedPostingsMayOverlap(job.key,target.key));
+    const held = matches[0];
+    const mismatch = 'C3 could not match this link to one unreadable application. Check the original employer posting or recover a known-good backup.';
+    if (matches.length !== 1 || !held || canonicalPostingKey(held.key) !== target.key || savedTarget(held.url)) throw new Error(mismatch);
+    if (held.ats !== undefined && held.ats !== target.ats || held.posting !== undefined && held.posting !== target.posting ||
+        held.host !== undefined && held.host !== target.host && canonicalPostingKey(held.host + held.posting) !== target.key ||
+        held.sourceJobId !== undefined && (!Number.isSafeInteger(held.sourceJobId) || held.sourceJobId < 1)) throw new Error(mismatch);
+    const ownsLink = (link?: string) => !!link && savedPostingsMayOverlap(savedTarget(link)?.key ?? '',target.key);
+    if ([held.selectedApplicationUrl,held.reviewUrl].some(link => {
+      const bound = link && savedTarget(link);
+      return bound && bound.key !== target.key;
+    })) throw new Error(mismatch);
+    if (active.some(other => other !== held && (
+        held.sourceJobId !== undefined && held.sourceJobId === other.sourceJobId ||
+        held.tabId !== undefined && held.tabId === other.tabId ||
+        held.selectedDocument !== undefined && held.selectedDocument === other.selectedDocument ||
+        ownsLink(other.selectedApplicationUrl) || ownsLink(other.reviewUrl))) ||
+        [...tabBindings].some(([id,binding]) => held.tabId === id || held.id === binding.jobId ||
+          held.selectedDocument === binding.documentId || ownsLink(binding.url))) throw new Error(mismatch);
+
+    try {
+      const input = JSON.parse(readFileSync(join(this.root, held.id + '.input.json'), 'utf8'));
+      const pdf = Buffer.from(input.resume,'base64');
+      if (held.resumeSha256 !== undefined && createHash('sha256').update(pdf).digest('hex') !== held.resumeSha256) throw new Error();
+      disposeResumeArtifact(productSources(input.profile,pdf).resumeIntent.artifact);
+    } catch {
+      throw new Error('The original saved profile or resume could not be verified. Recover a known-good backup before repairing this application.');
+    }
+    const repaired = {...held, ...target, updatedAt:new Date().toISOString()};
+    if (typeof repaired.title !== 'string' || typeof held.url === 'string' && held.url && repaired.title.includes(held.url)) repaired.title = target.posting;
+    delete repaired.tabId; delete repaired.selectedDocument; delete repaired.selectedApplicationUrl;
+    delete repaired.reviewDigest; delete repaired.reviewUrl; delete repaired.resumeUpload; delete repaired.workdayResumeEvidence;
+    delete repaired.componentFailure; delete repaired.error;
+    if (held.status === 'submitted') repaired.stage = 'Submitted';
+    else if (held.status === 'submitting' || held.status === 'submission_uncertain') {
+      repaired.status = 'submission_uncertain'; repaired.stage = 'Check the employer site before doing anything else';
+    } else {
+      repaired.status = 'paused';
+      repaired.stage = target.ats === 'generic' ? 'Link repaired. Open the posting to continue on the employer page.' : 'Link repaired. Retry when ready.';
+    }
+    // Legacy rows may retain unrecognized metadata. Never publish a copy of the unreadable URL.
+    if (typeof held.url === 'string' && held.url) {
+      const retainsLink = (value:unknown):boolean => typeof value === 'string'
+        ? value === held.url || /[:/]/u.test(held.url) && value.includes(held.url)
+        : !!value && typeof value === 'object' && Object.values(value).some(retainsLink);
+      if (Object.entries(repaired).some(([field,value]) => !Object.hasOwn(target,field) &&
+          !['title','stage','updatedAt'].includes(field) && retainsLink(value))) throw new Error(mismatch);
+    }
+    const next = this.records.map(job => job === held ? repaired : job);
+    this.save(next);
+    this.records = next;
   }
   private jobInput(job: ProductJob) {
     const input = JSON.parse(readFileSync(join(this.root, job.id + '.input.json'), 'utf8'));

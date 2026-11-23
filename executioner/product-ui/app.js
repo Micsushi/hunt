@@ -76,7 +76,7 @@ async function perform(action, jobId, label) {
   }
   finally { busy = false; pendingJob = undefined; historyButtons(); renderJobs(); }
 }
-function historyButtons() { $('undo').disabled = busy || historyBusy || !stateFresh || !undo.length; $('redo').disabled = busy || historyBusy || !stateFresh || !redo.length; $('retry-connection').disabled = busy || historyBusy; $('retry-profile').disabled = busy || historyBusy; $('check-account').disabled=busy||historyBusy||!stateFresh||!(accountStatus?.gmail?.configured||accountStatus?.gmail?.saved); $('check-connection').disabled=busy||historyBusy; $('refresh-profile').disabled=busy||historyBusy||!stateFresh; $('save-profile').disabled=busy||historyBusy||!profileLoaded||!stateFresh||!profileDirty; $('save-account').disabled=busy||historyBusy||!stateFresh; handoffControls(); }
+function historyButtons() { $('repair-link').disabled=busy||historyBusy||!stateFresh||!!state?.storageError; $('undo').disabled = busy || historyBusy || !stateFresh || !undo.length; $('redo').disabled = busy || historyBusy || !stateFresh || !redo.length; $('retry-connection').disabled = busy || historyBusy; $('retry-profile').disabled = busy || historyBusy; $('check-account').disabled=busy||historyBusy||!stateFresh||!(accountStatus?.gmail?.configured||accountStatus?.gmail?.saved); $('check-connection').disabled=busy||historyBusy; $('refresh-profile').disabled=busy||historyBusy||!stateFresh; $('save-profile').disabled=busy||historyBusy||!profileLoaded||!stateFresh||!profileDirty; $('save-account').disabled=busy||historyBusy||!stateFresh; handoffControls(); }
 function remember(entry) { undo.push(entry); if(undo.length > 20) undo.shift(); redo.length = 0; historyButtons(); }
 async function reverse(from, to, direction) {
   if(busy || historyBusy || !stateFresh || !from.length) return;
@@ -85,6 +85,14 @@ async function reverse(from, to, direction) {
   catch(e) { error(e.message); } finally { historyBusy = false; historyButtons(); renderJobs(); if(document.activeElement===active||document.activeElement===document.body)(from.length&&!$(direction).disabled ? $(direction) : document.querySelector('[data-view][aria-current]')).focus(); }
 }
 $('undo').onclick = () => reverse(undo, redo, 'undo'); $('redo').onclick = () => reverse(redo, undo, 'redo');
+$('repair-link-form').onsubmit = event => {
+  event.preventDefault();
+  void perform(async () => {
+    await api('repair-saved-link', {url:$('repair-link-url').value.trim()});
+    $('repair-link-url').value=''; $('link-recovery').open=false;
+    $('notice').textContent='Application link repaired.'; $('queue-title').focus();
+  });
+};
 $('recover-storage').onclick = () => perform(() => api('recover-storage', {}));
 $('retry-connection').onclick = $('retry-profile').onclick = () => perform(async () => {});
 $('job-search').oninput = $('job-filter').onchange = () => renderJobs();
@@ -321,7 +329,8 @@ async function refresh() {
   $('start').disabled=!state.configured || !state.connected; $('concurrency').disabled=false; $('concurrency').value=String(state.concurrency);
   renderProfileStatus();
   $('summary').textContent=`${state.jobs.filter(j=>j.status==='review').length} at review · ${state.jobs.filter(needsAttention).length} need attention · ${state.jobs.filter(j=>j.status==='running').length} running`;
-  if(state.unavailableJobCount) $('summary').textContent+=` · ${state.unavailableJobCount} saved ${state.unavailableJobCount===1?'application has an unreadable link':'applications have unreadable links'}`;
+  $('link-recovery').hidden=proxied || !state.unavailableJobCount;
+  if(state.unavailableJobCount) $('summary').textContent+=` · ${state.unavailableJobCount} saved ${state.unavailableJobCount===1?'application has an unreadable link':'applications have unreadable links'}${proxied ? '. Open local Applications to repair.' : ''}`;
   $('empty').hidden=state.jobs.length>0;
   historyButtons(); renderJobs();
   if(!profileLoaded) {

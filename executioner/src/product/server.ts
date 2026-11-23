@@ -294,6 +294,13 @@ export async function startProductServer(options: { root?: string; port?: number
       } else if (path === "/jobs" && Object.hasOwn(body,'documentId')) {
         throw new Error('This Prepare request is from an older extension. Reload Hunt and choose Fill current page on this application.');
       } else if (path === "/jobs") result = queue.add(body.jobs);
+      else if (path === '/repair-saved-link') {
+        if (requestOrigin !== origin || !body || Object.keys(body).length !== 1 || typeof body.url !== 'string' || body.url.length > 4096) {
+          throw new Error('Open local Applications and paste the full original employer posting link.');
+        }
+        if (pageActions.size) throw new Error('Wait for the current page action to finish, then repair the link.');
+        queue.repairSavedLink(body.url, pageBindings);
+      }
       else if (path === "/recover-storage") queue.recoverStorage();
       else if (path === "/concurrency") queue.setConcurrency(body.value);
       else if (/^\/jobs\/[a-f0-9-]+\/action$/.test(path) && activeHandoffs.has(path.split('/')[2]!)) throw new Error('Wait for the current page operation to finish before changing this application.');

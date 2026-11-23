@@ -10,6 +10,18 @@ export function possiblePostingAlias(key: string): string {
   return canonicalPostingKey(key).toLowerCase().replace(/^ats\.us1\.rippling\.com\//u, 'ats.rippling.com/');
 }
 
+// Conservative collision check only. A similar key never establishes a repair match.
+export function savedPostingsMayOverlap(key: string, otherKey: string): boolean {
+  const normalize = (value:string) => possiblePostingAlias(value).replace(/^boards\.greenhouse\.io\//u,'job-boards.greenhouse.io/');
+  const a = normalize(key), b = normalize(otherKey);
+  if (a === b) return true;
+  // SmartRecruiters public postings and OneClick publications have different identifiers.
+  const publicCompany = /^jobs\.smartrecruiters\.com\/([\w-]+)\/\d+$/u;
+  const publicationCompany = /^jobs\.smartrecruiters\.com\/oneclick-ui\/company\/([\w-]+)\/publication\/[^/]+$/u;
+  const company = publicCompany.exec(a)?.[1] ?? publicCompany.exec(b)?.[1];
+  return !!company && company === (publicationCompany.exec(a)?.[1] ?? publicationCompany.exec(b)?.[1]);
+}
+
 /** Explicit unfamiliar application targets. These never use the hosted Review or Submit path. */
 export function genericApplicationTarget(input: string): {
   url: string; key: string; host: string; posting: string; ats: "generic";
