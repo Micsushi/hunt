@@ -232,6 +232,12 @@ repeat on the new page. If an older queued entry owns that application, finish
 the saved draft manually with its selected résumé. The extension protects the
 draft from having its selected PDF replaced by the default.
 
+If a later employer page opens in another tab and C3 cannot identify the saved
+job, reopen the job from **Applications**. If the extension reports that an
+existing attachment differs from this job's selected résumé, compare the two
+files on the employer page. Replace the attachment there if needed, then use
+**Inspect** to check what the employer shows.
+
 If C3 reports a different résumé filename or PDF, open the saved Workday
 employer draft and compare its attachment with the PDF selected for this job.
 If you decide to replace it, use the employer's attachment control. Choose
