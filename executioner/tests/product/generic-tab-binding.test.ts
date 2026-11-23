@@ -25,7 +25,8 @@ test('unfamiliar applications stay on the current page and old selected inputs r
   writeFileSync(inputPath,input);
   writeFileSync(join(root,'jobs.json'),JSON.stringify({concurrency:1,jobs:[
     {...productApplicationTarget(url),id,url,status:'queued',sourceJobId:123,resumeVersion:'v18',submissionAllowed:false},
-    {...productApplicationTarget(postingUrl),id:smartId,url:postingUrl,status:'paused',tabId:4,selectedDocument:'original-loader',selectedApplicationUrl}
+    {...productApplicationTarget(postingUrl),id:smartId,url:postingUrl,status:'paused',tabId:4,selectedDocument:'original-loader',selectedApplicationUrl},
+    {...productApplicationTarget('https://held.bamboohr.com/careers/123'),id:randomUUID(),url:'unreadable',status:'paused',pageHandoff:true,sourceJobId:456,resumeVersion:'v18'}
   ]}));
   const app=await startProductServer({root,port:0});
   const post=(path:string,body:unknown)=>fetch(app.origin+path,{method:'POST',headers:{
@@ -110,24 +111,43 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal(selected.submissionAllowed,false);
     assert.equal((await (await post('/handoff/import-paused',bundle)).json())[0].id,selected.id);
     const bridge=(app.queue as unknown as {bridge:ExtensionBridge}).bridge;
-    const documentId='c'.repeat(64),observedPdfs:string[]=[];
+    const documentId='c'.repeat(64),observedPdfs:string[]=[],defaultPdfs:string[]=[];
     let latestDocument=documentId,filesInHistory=false;
     bridge.call=async(method,params={})=>{
       if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','selected-page-handoff-v1','consent-redo-v1']};
       if(method==='pageTabs')return [{tabId:9,url:selectedUrl}];
-      assert.equal(method,'pageAction');assert.equal(params.pageHandoff,selected.id);
+      assert.equal(method,'pageAction');
+      if(params.pageHandoff) assert.equal(params.pageHandoff,selected.id);
       if(params.operation==='fill') {
         const resume=params.resume as {base64:string};
         const facts=params.facts as {factId:string;value:unknown}[];
-        observedPdfs.push(resume.base64);
-        assert.equal(facts.find(fact=>fact.factId==='given_name')?.value,'Fixture');
+        (params.pageHandoff ? observedPdfs : defaultPdfs).push(resume.base64);
+        assert.equal(facts.find(fact=>fact.factId==='given_name')?.value,params.pageHandoff ? 'Fixture' : 'Changed');
         filesInHistory=true;
       }
       if(params.operation==='undo')filesInHistory=false;
-      return {url:selectedUrl,tabId:params.tabId,documentId:latestDocument,filled:[],matching:[],skipped:[],canUndo:filesInHistory,canRedo:!filesInHistory};
+      return {url:params.expectedUrl,tabId:params.tabId,documentId:latestDocument,filled:[],matching:[],skipped:[],canUndo:filesInHistory,canRedo:!filesInHistory};
     };
     const operate=(operation:string,tabId=9,url=selectedUrl,doc=latestDocument)=>post('/browser/page',{tabId,expectedUrl:url,operation,...(operation!=='inspect'&&{documentId:doc})});
     app.queue.configure(applicantProfile({given_name:'Changed',family_name:'Tester',email_address:'changed@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
+    const later='https://jobs.jobvite.com/fixture/application/screening';
+    for (const ordinary of ['https://other.example.invalid/application','https://jobs.jobvite.com/another/job/other/apply',
+        'https://jobs.jobvite.com/fixture/job/other/apply/screening']) {
+      assert.equal((await operate('inspect',35,ordinary)).status,200);
+      assert.equal((await operate('fill',35,ordinary)).status,200);
+    }
+    assert.equal((await operate('inspect',36,later)).status,200);
+    for (const op of ['fill','redo']) {
+      const response=await operate(op,36,later);
+      assert.equal(response.status,400,'possible selected draft received default PDF: '+defaultPdfs.length);
+      assert.match((await response.json()).error,/Applications/);
+    }
+    const heldLater='https://held.bamboohr.com/application/step-2';
+    assert.equal((await operate('inspect',37,heldLater)).status,200);
+    const heldFill=await operate('fill',37,heldLater);
+    assert.equal(heldFill.status,400,'a quarantined handoff can never be allowed to receive default bytes');
+    assert.match((await heldFill.json()).error,/repair/i);
+    assert.deepEqual(defaultPdfs,Array(3).fill(Buffer.from('%PDF-default').toString('base64')));
     assert.equal((await operate('fill')).status,400,'a prior default or another tab cannot fill before inspecting its saved handoff');
     assert.equal((await operate('inspect')).status,200);
     assert.equal((await operate('inspect',12,selectedUrl.replace('/fixture/','/Fixture/'))).status,400,'uncertain posting aliases cannot acquire the default PDF');

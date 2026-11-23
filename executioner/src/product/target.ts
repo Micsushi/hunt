@@ -22,6 +22,20 @@ export function savedPostingsMayOverlap(key: string, otherKey: string): boolean 
   return !!company && company === (publicationCompany.exec(a)?.[1] ?? publicationCompany.exec(b)?.[1]);
 }
 
+/** An unrecognized step can rule out a saved job, but cannot establish ownership. */
+export function possibleUnmappedStep(key:string, page:URL):boolean {
+  const portal = (host:string) => host === 'www.amazon.jobs' ? 'amazon.jobs'
+    : host === 'ats.us1.rippling.com' ? 'ats.rippling.com' : host;
+  if (portal(key.split('/')[0]!.toLowerCase()) !== portal(page.hostname)) return false;
+  const parent = new URL(page);
+  while (parent.pathname.lastIndexOf('/') > 0) {
+    parent.pathname = parent.pathname.slice(0,parent.pathname.lastIndexOf('/'));
+    try { return savedPostingsMayOverlap(key,genericApplicationTarget(parent.href).key); }
+    catch { /* This path does not identify a posting. Try its parent. */ }
+  }
+  return true;
+}
+
 /** Explicit unfamiliar application targets. These never use the hosted Review or Submit path. */
 export function genericApplicationTarget(input: string): {
   url: string; key: string; host: string; posting: string; ats: "generic";

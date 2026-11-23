@@ -165,6 +165,7 @@ export async function startProductServer(options: { root?: string; port?: number
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
         queue.assertAvailableLink(url.href);
         const owner = await currentPageOwner(queue.jobs, body.tabId, url);
+        if (writesProfile && !owner) queue.assertDefaultPageInput(url);
         const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
         if (prior && !selected && prior.url !== url.href &&
             queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused')) {
@@ -299,7 +300,7 @@ export async function startProductServer(options: { root?: string; port?: number
           throw new Error('Open local Applications and paste the full original employer posting link.');
         }
         if (pageActions.size) throw new Error('Wait for the current page action to finish, then repair the link.');
-        queue.repairSavedLink(body.url, pageBindings);
+        await queue.repairSavedLink(body.url, pageBindings, pageActions);
       }
       else if (path === "/recover-storage") queue.recoverStorage();
       else if (path === "/concurrency") queue.setConcurrency(body.value);

@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { writePrivateFileAtomic } from "../composition/private/s2-application-source-preparation.ts";
-import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget, savedPostingsMayOverlap } from "./target.ts";
+import { applicationTarget, canonicalPostingKey, possiblePostingAlias, productApplicationTarget, savedPostingsMayOverlap, possibleUnmappedStep } from "./target.ts";
 import { ApplicationPause, fillApplication, restoreSavedReview, reviewDigest, reviewSnapshot, submitReviewedApplication, type ProductInput } from "./engine.ts";
 import { accountJournal, employerAccountPolicy } from "./account-journal.ts";
 import { aiConsentAuthority, applicantProfile, productSources, effectiveProfileFacts, withCurrentAiConsent } from "./sources.ts";
@@ -87,6 +87,12 @@ export interface BrowserConnection {
 function savedTarget(url: string) {
   try { return productApplicationTarget(url); }
   catch { return undefined; }
+}
+function verifiedSavedPublication(posting:string, link:string) {
+  const selected = URL.parse(link), publication = selected && smartRecruitersPublication(selected);
+  if (!selected || !publication || link !== selected.origin + selected.pathname + selected.search ||
+      selected.search && selected.search !== '?dcr_ci=' + publication.company) return false;
+  return verifySmartRecruitersApplication(posting,selected.href);
 }
 export class ApplicationQueue {
   // Keep unreadable legacy links on disk, outside every operational job lookup.
@@ -173,29 +179,44 @@ export class ApplicationQueue {
       throw new Error('A saved application with an unreadable link needs recovery before using this posting.');
     }
   }
-  repairSavedLink(url: string, tabBindings: ReadonlyMap<number, {jobId:string; url:string; documentId:string}>) {
+  assertDefaultPageInput(url: URL) {
+    const target = savedTarget(url.href);
+    for (const job of this.records) {
+      if (job.status === 'removed' || typeof job.key !== 'string') continue;
+      const saved = savedTarget(job.url);
+      if (!job.pageHandoff && !(job.sourceJobId && job.resumeVersion && (saved?.ats ?? job.ats) === 'generic')) continue;
+      const possible = target ? !saved && savedPostingsMayOverlap(job.key,target.key) : possibleUnmappedStep(job.key,url);
+      if (!possible) continue;
+      if (!saved) throw new Error('A saved application may own this step. Repair its unreadable link in local Applications before filling.');
+      throw new Error('This step may belong to a saved application with a selected resume. Reopen the original posting from Applications before filling.');
+    }
+  }
+  async repairSavedLink(url: string, tabBindings: ReadonlyMap<number, {jobId:string; url:string; documentId:string}>, pageActions?: ReadonlySet<number>) {
     if (this.closed || this.storageError) throw new Error('Restore the local service and retry saving progress before repairing a link.');
     const target = /^https:\/\//i.test(url) && !/[\\\s]/u.test(url) ? savedTarget(url) : undefined;
     if (!target) throw new Error('Paste the full HTTPS link to the original employer posting.');
-    const active = this.records.filter(job => job.status !== 'removed');
-    const matches = active.filter(job => typeof job.key === 'string' && savedPostingsMayOverlap(job.key,target.key));
-    const held = matches[0];
+    const held = this.records.find(job => job.status !== 'removed' && typeof job.key === 'string' && canonicalPostingKey(job.key) === target.key);
     const mismatch = 'C3 could not match this link to one unreadable application. Check the original employer posting or recover a known-good backup.';
-    if (matches.length !== 1 || !held || canonicalPostingKey(held.key) !== target.key || savedTarget(held.url)) throw new Error(mismatch);
+    if (!held || savedTarget(held.url)) throw new Error(mismatch);
     if (held.ats !== undefined && held.ats !== target.ats || held.posting !== undefined && held.posting !== target.posting ||
         held.host !== undefined && held.host !== target.host && canonicalPostingKey(held.host + held.posting) !== target.key ||
         held.sourceJobId !== undefined && (!Number.isSafeInteger(held.sourceJobId) || held.sourceJobId < 1)) throw new Error(mismatch);
     const ownsLink = (link?: string) => !!link && savedPostingsMayOverlap(savedTarget(link)?.key ?? '',target.key);
-    if ([held.selectedApplicationUrl,held.reviewUrl].some(link => {
-      const bound = link && savedTarget(link);
-      return bound && bound.key !== target.key;
-    })) throw new Error(mismatch);
-    if (active.some(other => other !== held && (
+    for (const link of new Set([held.selectedApplicationUrl,held.reviewUrl])) {
+      if (!link) continue;
+      const bound = savedTarget(link);
+      if (bound?.key !== target.key && (bound || link === held.selectedApplicationUrl) &&
+          !await verifiedSavedPublication(target.url,link)) throw new Error(mismatch);
+    }
+    // A metadata lookup may have yielded. Recheck current owners before committing, and discard the old session's tab ID.
+    if (this.closed || this.storageError || pageActions?.size) throw new Error('Wait for the service and current page action to finish, then repair the link.');
+    const active = this.records.filter(job => job.status !== 'removed');
+    if (!active.includes(held) || active.some(other => other !== held && (
+        typeof other.key === 'string' && savedPostingsMayOverlap(other.key,target.key) ||
         held.sourceJobId !== undefined && held.sourceJobId === other.sourceJobId ||
-        held.tabId !== undefined && held.tabId === other.tabId ||
         held.selectedDocument !== undefined && held.selectedDocument === other.selectedDocument ||
         ownsLink(other.selectedApplicationUrl) || ownsLink(other.reviewUrl))) ||
-        [...tabBindings].some(([id,binding]) => held.tabId === id || held.id === binding.jobId ||
+        [...tabBindings.values()].some(binding => held.id === binding.jobId ||
           held.selectedDocument === binding.documentId || ownsLink(binding.url))) throw new Error(mismatch);
 
     try {
@@ -389,11 +410,7 @@ export class ApplicationQueue {
     if (!job) throw new Error("Job not found.");
     if (action === "open") {
       if (!job.tabId && job.status === 'paused' && job.selectedDocument && job.selectedApplicationUrl && productApplicationTarget(job.url).ats === 'generic') {
-        const selected = URL.parse(job.selectedApplicationUrl);
-        const publication = selected && smartRecruitersPublication(selected);
-        if (selected && publication && job.selectedApplicationUrl === selected.origin + selected.pathname + selected.search &&
-            (!selected.search || selected.search === '?dcr_ci=' + publication.company) &&
-            await verifySmartRecruitersApplication(job.url, selected.href)) return {url:selected.href};
+        if (await verifiedSavedPublication(job.url,job.selectedApplicationUrl)) return {url:job.selectedApplicationUrl};
         throw new Error('The saved application link could not be verified. Open the posting using its title.');
       }
       if (!job.tabId || !this.bridge.focus) {

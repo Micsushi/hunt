@@ -80,7 +80,7 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
     }
     assert.equal((await repair({url:first!.url},'chrome-extension://'+'a'.repeat(32))).status,400);
     const peer=service.queue.jobs.find(job=>job.id===second!.id)!;
-    for (const conflict of [{sourceJobId:72},{tabId:23},{selectedDocument:'stale-doc'},{selectedApplicationUrl:first!.url}]) {
+    for (const conflict of [{sourceJobId:72},{selectedDocument:'stale-doc'},{selectedApplicationUrl:first!.url}]) {
       Object.assign(peer,conflict); assert.equal((await repair({url:first!.url})).status,400);
       for(const field of Object.keys(conflict)) delete peer[field as keyof typeof peer];
     }
@@ -97,6 +97,7 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
     assert.equal((await repair({url:first!.url})).status,400);
     assert.equal(service.queue.snapshot().unavailableJobCount,1);
     rmdirSync(stateFile);writeFileSync(stateFile,originalQueue);service.queue.recoverStorage();
+    peer.tabId=23; // Chrome reused the quarantined row's pre-restart tab number for a different posting.
     const originalNeighbor=JSON.stringify(peer);
     assert.equal((await repair({url:first!.url})).status,200);
     const result=service.queue.snapshot();
@@ -121,7 +122,7 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
     writeFileSync(stateFile,JSON.stringify(saved));
     const recovered=new ApplicationQueue(root,bridge);
     try {
-      recovered.repairSavedLink(first!.url,new Map());
+      await recovered.repairSavedLink(first!.url,new Map());
       assert.equal(recovered.jobs.find(job=>job.id===invalid.id)?.status,
         ['submission_uncertain','submitted'].includes(oldStatus)?oldStatus:'paused');
       await assert.rejects(recovered.action(invalid.id,'submit','stale',true));
@@ -134,7 +135,7 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
   writeFileSync(stateFile,JSON.stringify(saved));
   const ambiguous=new ApplicationQueue(root,bridge);
   try {
-    assert.throws(()=>ambiguous.repairSavedLink(first!.url,new Map()),/could not match/);
+    await assert.rejects(async()=>ambiguous.repairSavedLink(first!.url,new Map()),/could not match/);
     assert.equal(ambiguous.snapshot().unavailableJobCount,2);
   } finally {await ambiguous.close();}
   saved.jobs[1]=other;
@@ -176,7 +177,7 @@ test("restoring a replaced job and silently changing its selected resume are rej
     Object.assign(legacy.jobs.find((job:{id:string})=>job.id===amazon!.id), {url:'broken',key:oldKey});
     writeFileSync(legacyFile,JSON.stringify(legacy));
     queue = new ApplicationQueue(root,bridge);
-    queue.repairSavedLink(canonicalUrl,new Map());
+    await queue.repairSavedLink(canonicalUrl,new Map());
     assert.equal(queue.jobs.find(job=>job.id===amazon!.id)?.url,canonicalUrl);
     assert.deepEqual(readFileSync(inputFile),originalInput);
     for (const status of ['paused','removed'] as const) {
