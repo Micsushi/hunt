@@ -439,6 +439,13 @@ ready for an explicit retry. Undo history lasts only in the current tab until
 reload or eviction by 20 later changes; there is no durable removed-entry list
 in the UI. Removal is not permanent deletion of applicant data.
 
+If **Applications** reports an unreadable saved link, paste the original
+employer posting into the local **Repair link** form. C3 checks the posting
+against the saved draft and its selected PDF. After a successful repair, inspect
+the draft before retrying. If two saved drafts identify the same posting, keep
+both copies and consult a known-good backup to establish which entry owns each
+application. Other drafts remain available.
+
 If a request cannot be confirmed, refresh progress and inspect its result before
 retrying. A timeout does not cancel work already accepted by C3. Handoff results
 keep confirmed, unconfirmed and unsent jobs separate; select only unsent jobs
