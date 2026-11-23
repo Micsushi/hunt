@@ -27,6 +27,11 @@ export function createLegacyAnswerReader({
     'what would be your salary expectations for the position?':'salary_expectations',
   };
   const fact = id => facts.find(f => f.factId === id)?.value;
+  const fullName = /^(full name|legal name|full legal name|name|first (?:&|and) last name|legal first and last name|nom complet|nom complet \/ name)$/;
+  const applicantName = label => {
+    const key = norm(label);
+    return fullName.test(key) || ['given_name','family_name','preferred_name'].includes(aliases[key]);
+  };
   const canadaEligibility = label => {
     if (norm(label)!=='are you legally eligible to work in canada without sponsorship?') return undefined;
     const authorized=fact('work_authorization_canada'),sponsorship=fact('sponsorship_required_canada');
@@ -40,7 +45,7 @@ export function createLegacyAnswerReader({
       const parts=['city','region','country'].map(fact);
       return parts.every(value=>typeof value==='string' && value.trim()) ? parts.join(', ') : undefined;
     }
-    if (/^(full name|legal name|full legal name|name|first (?:&|and) last name|legal first and last name|nom complet|nom complet \/ name)$/.test(key)) {
+    if (fullName.test(key)) {
       return typeof fact('given_name') === 'string' && typeof fact('family_name') === 'string' ? `${fact('given_name')} ${fact('family_name')}` : undefined;
     }
     if (key === 'full address') {
@@ -51,5 +56,5 @@ export function createLegacyAnswerReader({
     }
     return fact(aliases[key]);
   };
-  return { choiceAliases, fact, canadaEligibility, answer };
+  return { choiceAliases, fact, canadaEligibility, answer, applicantName };
 }

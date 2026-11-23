@@ -153,7 +153,15 @@ test('extension page actions verify Jobvite file history and the final SmartRecr
       assert.equal(after.observation.screeningSubmissionControl,['hidden','transparent','zero'].includes(mode) ? 'unknown' : mode,mode);
       assert.equal(after.skipped.some((item:{reason:string})=>item.reason==='employer_submission_disabled'),mode==='disabled');
       if (mode==='unknown')assert.equal(after.observation.kind,'unknown');
-      if (mode==='disabled')assert.equal(after.incomplete,true);
+      if (mode==='disabled') {
+        assert.equal(after.incomplete,true);
+        for (const operation of ['undo','redo']) {
+          const replay=await run(operation,{documentId:before.documentId});
+          assert.ok(replay.skipped.some((item:{reason:string})=>item.reason==='employer_submission_disabled'));
+          assert.equal(replay.incomplete,false);
+          assert.equal(await page.locator('input').inputValue(),operation==='undo'?'':'Fixture');
+        }
+      }
       assert.equal(await page.evaluate('window.clicks'),0);
     }
   } finally {await context.close();}

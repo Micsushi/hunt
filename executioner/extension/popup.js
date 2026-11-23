@@ -75,6 +75,13 @@ async function pageReply(operation){
   if(reply.result.accountPage)$('partial-help').textContent='Uses your saved account and approved terms.';
   return reply.result;
 }
+function showSubmissionWarning(result){
+  if(!result.skipped?.some(item=>item.reason==='employer_submission_disabled'))return false;
+  const status=$('status');
+  status.dataset.error='true';
+  status.textContent+=(status.textContent?' ':'')+'The employer still has submission disabled.';
+  return true;
+}
 async function partial(action){
   historyVersion++;
   if(!pageDocumentId)await pageReply('inspect');
@@ -95,11 +102,7 @@ async function partial(action){
     $('status').dataset.error = 'true';
     $('status').textContent += ' Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').';
   }
-  const submissionDisabled = result.skipped?.some(item => item.reason === 'employer_submission_disabled');
-  if (submissionDisabled) {
-    $('status').dataset.error = 'true';
-    $('status').textContent += ' The employer still has submission disabled.';
-  }
+  const submissionDisabled = showSubmissionWarning(result);
   if (result.frames?.some(frame => frame.status === 'unavailable')) {
     $('status').dataset.error = 'true';
     $('status').textContent += ' A frame could not be reached. Check it before retrying.';
@@ -112,6 +115,7 @@ $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…')
 $('undo').onclick=()=>run(()=>partial('undo'));
 $('redo').onclick=()=>run(()=>partial('redo'));
 if(canPartial)void(async()=>{const version=historyVersion;try{const result=await pageReply('inspect');if(version!==historyVersion)return;canUndo=result.canUndo;canRedo=result.canRedo;
+  if(!busy&&!$('status').textContent)showSubmissionWarning(result);
   controls();}catch{}})();
 async function connectWithToken(token){
   if(!token)throw new Error('Enter a pairing key, or use Connect to local app.');

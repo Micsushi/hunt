@@ -65,20 +65,57 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     assert.equal(isolated.result.canUndo,false);
     await page.evaluate(fillVisibleFields,{action:'undo' as const});
     assert.equal(await page.locator('input').first().inputValue(),'');
+    const submit=page.locator('button[type=submit]');
+    const reportsDisabled=(reply: typeof inspect)=>reply.result.skipped.some((row:{reason:string})=>row.reason==='employer_submission_disabled');
+    await submit.evaluate(button=>button.toggleAttribute('disabled',true));
+    assert.equal(reportsDisabled(await send('inspect')),true);
     const allowed=await send('fill',inspect.result.documentId);assert.equal(allowed.ok,true,JSON.stringify(allowed));
+    assert.equal(reportsDisabled(allowed),true);
     assert.equal(allowed.result.resume,'verified');
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
     assert.equal(await page.locator('input[type=file]').evaluate((el:any)=>el.files.length),1);
     assert.equal(allowed.result.canUndo,true);
     const history=await send('inspect');
+    assert.equal(reportsDisabled(history),true);
     assert.equal(history.result.canUndo,true,'the popup and public page actions share standalone page history');
     const undone=await send('undo',history.result.documentId);
     assert.equal(undone.ok,true,JSON.stringify(undone));
+    assert.equal(reportsDisabled(undone),true);
+    assert.equal(undone.result.incomplete,false,'the successful replay is separate from submission readiness');
+    assert.equal(reportsDisabled(await send('inspect')),true);
     assert.equal(undone.result.canRedo,true);
     assert.equal(await page.locator('input').first().inputValue(),'');
     const redone=await send('redo',history.result.documentId);
     assert.equal(redone.ok,true,JSON.stringify(redone));
+    assert.equal(reportsDisabled(redone),true);
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
+    await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
+    const [view]=await Promise.all([context.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]);
+    const warning='The employer still has submission disabled.';
+    await view.getByText(warning,{exact:true}).waitFor();
+    for(const [action,verb] of [['undo','undone'],['redo','restored']]) {
+      await view.locator('#'+action).click();
+      await view.locator('#status').filter({hasText:'field changes '+verb+'. '+warning}).waitFor();
+    }
+    await view.close();
+    await submit.evaluate((button:HTMLButtonElement)=>{button.disabled=false;});
+    for(const action of ['undo','redo']) {
+      const replayed=await send(action,history.result.documentId);
+      assert.equal(replayed.ok,true);
+      assert.equal(reportsDisabled(replayed),false);
+    }
+    for(const mode of ['enabled','hidden','aria-hidden','other-form','absent']) {
+      await submit.evaluate((button:HTMLButtonElement,mode)=>{
+        button.disabled=mode!=='enabled';
+        button.hidden=mode==='hidden';
+        button.setAttribute('aria-hidden',String(mode==='aria-hidden'));
+        if(mode==='other-form')button.setAttribute('form','unrelated');
+        else button.removeAttribute('form');
+        if(mode==='absent')button.type='button';
+      },mode);
+      assert.equal(reportsDisabled(await send('inspect')),false,mode);
+    }
+    await page.locator('form button').evaluate((button:HTMLButtonElement)=>{button.type='submit';button.disabled=false;});
     // Some sites clear the picker after accepting a file. Its C3 receipt belongs to this application URL.
     await nativeFile.evaluate((e:HTMLInputElement)=>{e.value='';});
     assert.equal((await send('inspect')).result.resume,'unverified');

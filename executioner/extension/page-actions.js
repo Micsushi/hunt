@@ -170,13 +170,13 @@ export async function pageAction(params, attached) {
         }
         const response = await send('Runtime.callFunctionOn', {
           executionContextId,
-          functionDeclaration: `async function(input) { const observe=(${observePageSource}); const observation=observe(input.action==='status'||input.action==='fill'?input.expectedUrl:undefined); const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input);
+          functionDeclaration: `async function(input) { const observe=(${observePageSource}); const observation=observe(input.expectedUrl); const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input);
             const result=await (${pageFillSource})(input);
             if ((input.action==='status' || observation.screeningSubmissionControl) && location.href!==input.expectedUrl) throw new Error('The inspected frame changed.');
             if (result.componentFailure?.component==='page_state') return {observation,...result};
             const current=observation.screeningSubmissionControl?observe(input.expectedUrl):observation;
             if (current.screeningSubmissionControl==='disabled') {
-              if (input.action==='status' || !input.matchingRunId) result.incomplete=true;
+              if (input.action==='status' || input.action==='fill' && !input.matchingRunId) result.incomplete=true;
               (result.skipped??=[]).push({label:'Application',reason:'employer_submission_disabled'});
             }
             return {observation:current,...result}; }`,

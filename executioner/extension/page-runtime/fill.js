@@ -229,9 +229,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if(preservedRemote && (action==='undo' || action==='redo')) {
       result.resume='verified';result.skipped.push({label:'Resume',reason:state.resumeAttempt?.clientOnly?'client_attachment_preserved':'remote_upload_preserved'});
     }
-    if (action === 'undo' || action === 'redo') {
+    const historyAction = action === 'undo' || action === 'redo';
+    async function replayHistory() {
       const from = historyState[action], to = historyState[action === 'undo' ? 'redo' : 'undo'], entry = from.at(-1);
-      if (!entry) return result;
+      if (!entry) return;
       if (action === 'redo' && entry.some(change => change.aiConsentDecision === undefined
           ? /\b(?:ai|artificial intelligence|automated)\b/i.test(change.label)
           : change.aiConsentDecision !== null && change.aiConsentDecision !== aiConsentDecision)) {
@@ -291,10 +292,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         throw error;
       }
       syncUploadHistory(changes,next);
-      from.pop(); to.push(chronological(changes)); result.filled = changes.map(c => c.label); return result;
+      from.pop(); to.push(chronological(changes)); result.filled = changes.map(c => c.label);
     }
-    if (action !== 'fill' && action !== 'status') throw new Error('Unknown field action.');
-    const { choiceAliases, fact, canadaEligibility, answer } = createLegacyAnswerReader({
+    if (!historyAction && action !== 'fill' && action !== 'status') throw new Error('Unknown field action.');
+    const { choiceAliases, fact, canadaEligibility, answer, applicantName } = createLegacyAnswerReader({
       facts, norm
     });
     const dialComposite = e => {
@@ -412,7 +413,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     }
     const scopedControl = e => {
       if (!applicationStep || insideStep(e,applicationStep)) return true;
-      if (e.type === 'radio' && !result.skipped.some(row=>row.reason==='radio_group_outside_application_step')) {
+      if (!historyAction && e.type === 'radio' && !result.skipped.some(row=>row.reason==='radio_group_outside_application_step')) {
         result.incomplete = true;
         addSkip(labelFor(e), 'radio_group_outside_application_step', 'field_recognition', 'identify_option');
       }
@@ -425,12 +426,13 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return { element, identity:identity(element), controlIdentity:controlIdentity(element), boundLabels:[...element.labels??[]], region:regionFor(element), label,
         expected:['desired salary','what would be your salary expectations for the position?'].includes(norm(label)) && element.type!=='text' ? undefined : answer(label), initialValue:element.value };
     });
-    let fields = collectFields();
     // A newsletter or account form must not receive application data.
-    const identifyApplicationRegions = fields => {
+    const identifyApplicationRegions = (fields, readOnly = false) => {
       if (applicationStep) return [applicationStep.closest('form')];
       if (checkedForm && (checkedForm.screening ? checkedForm.current() : checkedForm.personalReady())) return [checkedForm.owner];
-      const regions = new Set(fields.filter(f => /name|prénom|nom de famille/i.test(f.label) && f.expected !== undefined).map(f => f.region));
+      // Standalone inspection and history receive no profile answers.
+      const regions = new Set(fields.filter(f => readOnly ? applicantName(f.label) :
+        /name|prénom|nom de famille/i.test(f.label) && f.expected !== undefined).map(f => f.region));
       return [...regions].filter(region => {
       if (customForm && region !== customForm.owner) return false;
       const own = fields.filter(f => f.region === region);
@@ -444,6 +446,29 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         deepQuery(document, 'input[type=file]').some(input => verifiedDialogUpload(input)?.region === region));
     });
     };
+    if (historyAction) await replayHistory();
+    let fields = collectFields();
+    const reportDisabledSubmission = regions => {
+      const [form] = regions;
+      if (regions.length !== 1 || !(form instanceof HTMLFormElement) || !form.isConnected) return;
+      const submitters = [...form.getRootNode().querySelectorAll('button,input')].filter(e => {
+        if (e.form !== form || e.type !== 'submit' || composedClosest(e,'[hidden],[inert],[aria-hidden="true"]')) return false;
+        const {width,height} = e.getBoundingClientRect();
+        return width > 0 && height > 0 && e.checkVisibility({opacityProperty:true,visibilityProperty:true});
+      });
+      const [button] = submitters;
+      if (submitters.length === 1 &&
+          [button.innerText, button.value, button.getAttribute('aria-label')].some(label =>
+            /^(?:apply|submit(?: application)?|send application|envoyer la candidature)$/i.test(label?.trim() ?? '')) &&
+          (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
+        if (action==='status' || action==='fill' && !matchingRunId) result.incomplete = true;
+        addSkip('Application', 'employer_submission_disabled');
+      }
+    };
+    if (historyAction) {
+      reportDisabledSubmission(identifyApplicationRegions(fields,true));
+      return result;
+    }
     let applicationRegions = identifyApplicationRegions(fields);
     const finalReport = () => {
       if (result.resume === 'verified' && state.resumeAttempt?.attachmentEvidence) result.resumeEvidence = state.resumeAttempt.attachmentEvidence();
@@ -456,20 +481,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           addSkip(attachment.label,attachment.reason);
         }
       }
-      // Read the employer's final action after filling. Never activate it to test readiness.
-      const [form] = applicationRegions;
-      if (applicationRegions.length === 1 && form instanceof HTMLFormElement && form.isConnected) {
-        const submitters = [...form.getRootNode().querySelectorAll('button,input')].filter(e => e.form === form && e.type === 'submit' && visible(e));
-        const [button] = submitters;
-        if (submitters.length === 1 &&
-            [button.innerText, button.value, button.getAttribute('aria-label')].some(label =>
-              /^(?:apply|submit(?: application)?|send application|envoyer la candidature)$/i.test(label?.trim() ?? '')) &&
-            (button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true')) {
-          // The matched workflow decides completeness from its last observation.
-          if (action==='status' || !matchingRunId) result.incomplete = true;
-          addSkip('Application', 'employer_submission_disabled');
-        }
-      }
+      reportDisabledSubmission(action==='status' ? identifyApplicationRegions(fields,true) : applicationRegions);
       return result;
     };
     const { isRequired, unresolvedAttachment } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
