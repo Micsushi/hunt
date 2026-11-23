@@ -102,6 +102,23 @@ test("profile reconciliation preserves optional values and reads choices reveale
   assert.equal(continuation.kind, "verified");
   assert.deepEqual(resumed.commits.map(commit => commit.value), ["Mobile"]);
   assert.equal(resumed.snapshot.controls[0]?.readback, "Mobile");
+
+  for (const [hasOwnerAnswer, readback, accepted, writes] of [
+    [true, null, true, ["Mobile"]], [true, "Mobile", true, []],
+    [true, "Home", false, []], [false, null, false, []],
+  ] as const) {
+    const live = new MemoryProfilePage({pageType:"profile", controls:[{...phone, readback}], rows:[]});
+    const inspect = live.inspect.bind(live);
+    live.inspect = async () => {
+      const current = await inspect();
+      return live.inspections === 1 ? {...current, controls:[]} : current;
+    };
+    const ownerField = field("phone.device_type", "phone", "single_select", "Mobile", "owner_provided", "Mobile");
+    const outcome = await completeWorkdayProfilePage({mode:"live", pageType:"profile",
+      fields:hasOwnerAnswer ? [ownerField] : [], repeatables:[]}, live, AbortSignal.any([]), "owner_facts_only");
+    assert.equal(outcome.kind, accepted ? "verified" : "blocked", JSON.stringify(outcome));
+    assert.deepEqual(live.commits.map(commit => commit.value), writes);
+  }
 });
 
 test("binds heterogeneous rows but stops for unmatched foreign history", async () => {

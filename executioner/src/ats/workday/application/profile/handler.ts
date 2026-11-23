@@ -339,8 +339,35 @@ async function reconcileObservedProfile(
     effectivePlan = withGeneratedSyntheticFields(effectivePlan, synthetic.generatedFields);
   }
 
-  const final = await inspectAndPreflight(effectivePlan, page, signal);
+  let final = await inspectAndPreflight(effectivePlan, page, signal);
   if (final.kind === "blocked") return final;
+  if (!fallbackEnabled) {
+    // A resumed page can reveal an owner-planned scalar after the last field was processed.
+    // Reconcile only those previously untouched controls, then verify the whole page again.
+    const finalControls = final.snapshot.controls;
+    const lateFields = effectivePlan.fields.filter(field => field.answer.kind === "answered" &&
+      !initialSnapshot.controls.some(control => control.fieldId === field.fieldId && control.required) &&
+      finalControls.some(control => control.fieldId === field.fieldId && control.required) &&
+      !verified.some(item => item.fieldId === field.fieldId && item.rowKey === undefined));
+    for (const field of lateFields) {
+      const shown = finalControls.find(control => control.fieldId === field.fieldId)!;
+      if (shown.readback !== null && normalize(shown.readback) !== "" &&
+          !readbackMatches(field, shown.readback, visibleValue(field), shown.uiBehavior)) {
+        return blocked("profile_commit_unverified", {fieldId:field.fieldId});
+      }
+      const result = await reconcileField(field, async () => {
+        const current = await page.inspect(signal, false);
+        if (preflightSnapshot(effectivePlan, current)) return [];
+        return current.controls;
+      }, page, signal);
+      if (result.kind === "blocked") return result;
+      if (result.kind === "verified") verified.push(result.field);
+    }
+    if (lateFields.length) {
+      final = await inspectAndPreflight(effectivePlan, page, signal);
+      if (final.kind === "blocked") return final;
+    }
+  }
   if (ownedDuplicateCount(final.snapshot.rows.filter(row => row.controls.some(control => control.required))) !== 0) {
     return blocked("profile_row_unverified");
   }
