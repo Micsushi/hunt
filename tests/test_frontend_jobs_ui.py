@@ -32,6 +32,28 @@ assert.equal(activeResumeRun(inactive, 42), undefined);
 assert.equal(activeResumeRun([...inactive, queued], 42), queued);
 assert.equal(activeResumeRun([queued, running], 42), running);
 assert.equal(activeResumeRun([queued, cancelling], 42), cancelling);
+const c3 = {};
+const c3Source = ts.transpileModule(fs.readFileSync('src/api/c3.ts', 'utf8'), {
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+});
+vm.runInNewContext(c3Source.outputText,{exports:c3,require:()=>({}),URL});
+const numeric = 'https://jobs.smartrecruiters.com/GDMSI/123-test';
+const publication = 'https://jobs.smartrecruiters.com/oneclick-ui/company/GDMSI/publication/f1bc5065-8ef4-443c-99c0-f2b132115e4a';
+for(const url of [numeric,publication,publication+'/screening']) {
+  assert.equal(c3.isGenericApplicationUrl(url+'/?dcr_ci=GDMSI'),true);
+  for(const query of ['?dcr_ci=gdmsi','?dcr_ci=GDMSI&dcr_ci=Other','?DCR_CI=Other']) {
+    assert.equal(c3.isGenericApplicationUrl(url+query),false);
+    assert.equal(c3.isManualApplicationUrl(url+query),false);
+  }
+}
+assert.equal(c3.isManualApplicationUrl('https://ordinary.example/careers/823'),true);
+for(const url of ['https://solace.bamboohr.com.evil.example/careers/823','https://user@foo.example/apply',
+  'https://company.example:444/apply','http://company.example/apply','https://jobs.jobvite.com/company/job/%2f']) {
+  assert.equal(c3.isManualApplicationUrl(url),false);
+  assert.equal(c3.isGenericApplicationUrl(url),false);
+}
+assert.match(c3.handoffMessage({status:'not_sent',reason:'Check the link.'}),/Not sent.*Check the link/);
+
 """
     subprocess.run(["node", "-e", script], cwd=ROOT / "frontend", check=True)
 

@@ -157,36 +157,67 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
             job["resumeSha256"] == hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
         )
     assert calls == [], "export must not queue anything or require a local C3 service"
-    for unknown in [
-        "https://untrusted.example/apply",
-        "https://solace.bamboohr.com.evil.example/careers/823",
-    ]:
+    if ats == "smartrecruiters":
+        numeric = "https://jobs.smartrecruiters.com/GDMSI/12345-developer"
+        publication = "https://jobs.smartrecruiters.com/oneclick-ui/company/GDMSI/publication/f1bc5065-8ef4-443c-99c0-f2b132115e4a"
+        for route in (numeric, numeric + "/", publication + "/screening/?dcr_ci=GDMSI"):
+            assert c3.current_page_posting(route)
+        for suffix in ("?dcr_ci=gdmsi", "?dcr_ci=GDMSI&dcr_ci=Other", "?DCR_CI=Other"):
+            assert not c3.current_page_posting(publication + suffix)
+            assert not c3.current_page_posting(numeric + suffix)
+    if ats == "greenhouse":
+        safe_manual = "https://careers.example.org/engineering/apply"
+        for link in (
+            safe_manual,
+            "https://solace.bamboohr.com.evil.example/careers/823",
+            "http://solace.bamboohr.com/careers/823",
+            "https://user:password@solace.bamboohr.com/careers/823",
+            "https://solace.bamboohr.com:444/careers/823",
+            "https://solace.bamboohr.com/careers/823%2fapply",
+            "https://solace.bamboohr.com/careers/../elsewhere",
+            "https://solace.bamboohr.com/careers/not-a-job-id",
+            "https://[malformed/careers/823",
+            "https://jobs.smartrecruiters.com/oneclick-ui/company/GDMSI/publication/f1bc5065-8ef4-443c-99c0-f2b132115e4a?dcr_ci=Other",
+        ):
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE jobs SET apply_url=? WHERE id=1", (link,))
+            expected = (
+                {"sourceJobId": 1, "status": "current_page"}
+                if link == safe_manual
+                else {
+                    "sourceJobId": 1,
+                    "status": "not_sent",
+                    "reason": c3.INVALID_POSTING,
+                }
+            )
+            exported = browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]})
+            safe_bundle = {**bundle, "jobs": [bundle["jobs"][1]]}
+            assert exported.json() == safe_bundle
+            reported = browser.post(
+                "/api/c3/handoff/export", json={"job_ids": [1, 2], "include_outcomes": True}
+            )
+            assert reported.json() == {"bundle": safe_bundle, "omitted": [expected]}
+            mixed = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
+            assert mixed.status_code == 200
+            assert mixed.json()["outcomes"] == [expected, {"sourceJobId": 2, "status": "confirmed"}]
+            assert [row["sourceJobId"] for row in calls] == [2]
+            assert base64.b64decode(calls[0]["resumeBase64"]) == b"%PDF-1.4 selected resume 2"
+            calls.clear()
+            for endpoint in ("/api/c3/handoff", "/api/c3/handoff/export"):
+                single = browser.post(endpoint, json={"job_ids": [1]})
+                assert single.status_code == 409
+                assert single.json()["outcomes"] == [expected]
+                assert "password" not in single.text
+                if link != safe_manual:
+                    assert "open" not in single.json()["detail"].lower()
         with sqlite3.connect(database) as connection:
-            connection.execute("UPDATE jobs SET apply_url=? WHERE id=1", (unknown,))
-        exported = browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]})
-        assert [row["sourceJobId"] for row in exported.json()["jobs"]] == [2]
-        mixed = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
-        assert mixed.json()["outcomes"] == [
-            {"sourceJobId": 1, "status": "current_page"},
-            {"sourceJobId": 2, "status": "confirmed"},
-        ]
-        assert [row["sourceJobId"] for row in calls] == [2]
-        calls.clear()
+            connection.execute("UPDATE jobs SET apply_url=? WHERE id=1", (records[1]["apply_url"],))
     with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE jobs SET apply_url=? WHERE id=1", (records[1]["apply_url"],))
-    for field, value in [
-        ("enrichment_status", "pending"),
-        ("apply_url", "https://user:password@solace.bamboohr.com/careers/823"),
-        ("apply_url", "https://solace.bamboohr.com:444/careers/823"),
-        ("apply_url", "https://solace.bamboohr.com/careers/823%2fapply"),
-        ("apply_url", "https://[malformed/careers/823"),
-    ]:
-        with sqlite3.connect(database) as connection:
-            connection.execute(f"UPDATE jobs SET {field}=? WHERE id=1", (value,))
-        assert browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]}).status_code == 409
-        assert calls == []
-        with sqlite3.connect(database) as connection:
-            connection.execute(f"UPDATE jobs SET {field}=? WHERE id=1", (records[1][field],))
+        connection.execute("UPDATE jobs SET enrichment_status='pending' WHERE id=1")
+    assert browser.post("/api/c3/handoff/export", json={"job_ids": [1, 2]}).status_code == 409
+    assert calls == []
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE jobs SET enrichment_status='done_verified' WHERE id=1")
     for statement, parameters in [
         ("UPDATE jobs SET selected_resume_version_id='2' WHERE id=1", ()),
         (
@@ -332,7 +363,7 @@ def test_partial_handoff_preserves_confirmed_jobs_and_never_retries(
     monkeypatch.setattr(
         c3,
         "prepared_jobs",
-        lambda ids: [
+        lambda ids, **options: [
             {"sourceJobId": i, "url": f"https://boards.greenhouse.io/test/jobs/{i}"} for i in ids
         ],
     )

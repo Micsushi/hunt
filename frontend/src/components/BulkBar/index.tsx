@@ -4,20 +4,15 @@ import { bulkSelection } from '@/api/jobs'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './BulkBar.module.css'
 import { ApiError, post } from '@/api/client'
-import { downloadApplicationHandoff, sendApplicationsToBrowser } from '@/api/c3'
+import {
+  downloadApplicationHandoff,
+  sendApplicationsToBrowser,
+  handoffMessage,
+  type HandoffOutcome,
+} from '@/api/c3'
 import { usesBrowserC3 } from '@/api/browserC3'
 import { Link, useNavigate } from 'react-router-dom'
 
-type HandoffOutcome = {
-  sourceJobId: number
-  status:
-    | 'confirmed'
-    | 'unconfirmed'
-    | 'not_sent'
-    | 'rejected'
-    | 'current_page'
-    | 'bound_current_page'
-}
 type HandoffResult = { selection: Set<number>; outcomes: HandoffOutcome[]; message: string }
 
 const STATUS_CHOICES = [
@@ -62,8 +57,9 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
 
   const awaitingReview = action === 'apply' && result?.selection === selectedIds
   const unsent =
-    result?.outcomes.filter((item) => item.status === 'not_sent').map((item) => item.sourceJobId) ??
-    []
+    result?.outcomes
+      .filter((item) => item.status === 'not_sent' && !item.reason)
+      .map((item) => item.sourceJobId) ?? []
 
   if (n === 0 && !loading && !result) return null
 
@@ -86,8 +82,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
     if (action === 'apply') setResult(null)
     try {
       if (action === 'download-applications') {
-        const exported = await downloadApplicationHandoff(ids)
-        const skipped = ids.filter((id) => !exported.some((job) => job.id === id))
+        const { jobs: exported, omitted } = await downloadApplicationHandoff(ids)
         const pageOnly = exported.filter((job) => job.currentPage).map((job) => job.id)
         if (active.current) {
           showToast(
@@ -96,9 +91,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
               pageOnly.length
                 ? `Use Fill current page with the selected résumé for jobs ${pageOnly.join(', ')}.`
                 : '',
-              skipped.length
-                ? `Jobs ${skipped.join(', ')} were left out. Open them on the employer site.`
-                : '',
+              ...omitted.map((row) => `Job #${row.sourceJobId}: ${handoffMessage(row)}`),
             ]
               .filter(Boolean)
               .join(' '),
@@ -112,14 +105,15 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
           if (active.current) {
             setResult({
               selection: selectedIds,
-              outcomes: ids.map((sourceJobId) => ({
-                sourceJobId,
-                status: transferred.jobs.some((job) => job.sourceJobId === sourceJobId)
-                  ? transferred.currentPageIds.includes(sourceJobId)
-                    ? 'bound_current_page'
-                    : 'confirmed'
-                  : 'current_page',
-              })),
+              outcomes: ids.map(
+                (sourceJobId) =>
+                  transferred.omitted.find((row) => row.sourceJobId === sourceJobId) ?? {
+                    sourceJobId,
+                    status: transferred.currentPageIds.includes(sourceJobId)
+                      ? 'bound_current_page'
+                      : 'confirmed',
+                  },
+              ),
               message: transferred.workspaceOpened
                 ? 'Applications added paused. Continue in the local C3 workspace.'
                 : 'Applications added paused. In Hunt C3, choose Open workspace.',
@@ -271,20 +265,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
             {result.outcomes.map((item) => (
               <li key={item.sourceJobId}>
                 <Link to={`/jobs/${item.sourceJobId}`}>Job #{item.sourceJobId}</Link>:{' '}
-                <span>
-                  {
-                    {
-                      confirmed: 'Confirmed in Applications',
-                      unconfirmed: 'Not confirmed. Check Applications.',
-                      not_sent: 'Not sent',
-                      current_page:
-                        'Left out of the handoff. Open the employer site and use Fill current page.',
-                      bound_current_page:
-                        'Saved in Applications with the selected résumé. Open the draft and use Fill current page.',
-                      rejected: 'Rejected. Open the job to resolve the issue.',
-                    }[item.status]
-                  }
-                </span>
+                <span>{handoffMessage(item)}</span>
               </li>
             ))}
           </ul>

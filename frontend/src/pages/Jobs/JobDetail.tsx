@@ -29,6 +29,9 @@ import {
   sendApplicationsToBrowser,
   supportsQueuedApplication,
   isGenericApplicationUrl,
+  isManualApplicationUrl,
+  handoffMessage,
+  type HandoffOutcome,
 } from '@/api/c3'
 import { browserC3, usesBrowserC3, type BrowserC3Status } from '@/api/browserC3'
 
@@ -384,7 +387,9 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     : job.discovery_suppressed_reason
       ? 'This job is excluded from discovery.'
       : !supported
-        ? 'Open the employer application and choose Fill current page in the Hunt extension.'
+        ? isManualApplicationUrl(job.apply_url)
+          ? 'Open the employer application and choose Fill current page in the Hunt extension.'
+          : 'Check the saved employer posting link before filling.'
         : job.apply_type !== 'external_apply'
           ? 'An external application is required.'
           : !['done', 'done_verified'].includes(job.enrichment_status ?? '')
@@ -450,9 +455,30 @@ function ApplicationActions({ job }: { job: JobDetail }) {
               ? 'Added paused. Continue in the local C3 workspace.'
               : 'Added paused. In Hunt C3, choose Open workspace to continue.',
           )
-      } else await post('/api/c3/handoff', { job_ids: [job.id] })
+      } else {
+        const result = await post<
+          | { queued: { sourceJobId: number }[]; outcomes: HandoffOutcome[] }
+          | { sourceJobId: number }[]
+        >('/api/c3/handoff', { job_ids: [job.id] })
+        const queued = Array.isArray(result) ? result : result.queued
+        const outcome = Array.isArray(result)
+          ? undefined
+          : result.outcomes.find((row) => row.sourceJobId === job.id)
+        if (outcome && !['confirmed', 'bound_current_page'].includes(outcome.status))
+          throw new Error(handoffMessage(outcome))
+        if (
+          (!Array.isArray(result) && !outcome) ||
+          queued.length !== 1 ||
+          queued[0].sourceJobId !== job.id
+        ) {
+          throw new Error('Transfer not confirmed. Check Applications.')
+        }
+        if (active.current) {
+          if (outcome?.status === 'bound_current_page') setDownloadMessage(handoffMessage(outcome))
+          else navigate('/executioner')
+        }
+      }
       void qc.invalidateQueries({ queryKey: ['c3-job', job.id] })
-      if (active.current && !browserConnection) navigate('/executioner')
     } catch (error) {
       if (active.current)
         setHandoffError(error instanceof Error ? error.message : 'Could not queue application')

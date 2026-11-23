@@ -97,18 +97,18 @@ def current_page_posting(url: str) -> bool:
         "amazon.jobs": r"(?i:/(?:[a-z-]+/)?(?:applicant/)?jobs/\d+/[\w-]+)",
     }
     if host == "jobs.smartrecruiters.com":
-        if re.fullmatch(r"/[\w-]+/\d+(?:-[\w-]+)?/?", route, re.ASCII):
-            return True
-        match = re.fullmatch(
+        match = re.fullmatch(r"/([\w-]+)/\d+(?:-[\w-]+)?/?", route, re.ASCII) or re.fullmatch(
             r"/oneclick-ui/company/([\w-]+)/publication/[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}(/screening)?/?",
             route,
             re.ASCII | re.I,
         )
+        query = parse_qs(target.query, keep_blank_values=True)
         return bool(
             match
             and all(
-                company == match[1]
-                for company in parse_qs(target.query, keep_blank_values=True).get("dcr_ci", [])
+                key == "dcr_ci" and all(company == match[1] for company in values)
+                for key, values in query.items()
+                if key.lower() == "dcr_ci"
             )
         )
     if host.endswith(".bamboohr.com"):
@@ -122,7 +122,17 @@ def current_page_posting(url: str) -> bool:
     return bool(pattern and re.fullmatch(pattern + r"/?", route, re.ASCII))
 
 
-def prepared_jobs(job_ids: list[int]) -> list[dict]:
+# Recognized employer services must identify an actual posting. A nested service domain
+# (for example, tenant.bamboohr.com.example.org) belongs to a different authority.
+POSTING_DOMAINS = re.compile(
+    r"(?:^|\.)(?:myworkdayjobs\.com|myworkdaysite\.com|greenhouse\.io|lever\.co|ashbyhq\.com|"
+    r"workable\.com|rippling\.com|bamboohr\.com|applytojob\.com|recruitee\.com|jobvite\.com|"
+    r"smartrecruiters\.com|canonical\.com|amazon\.jobs|forms-formulaires\.alpha\.canada\.ca)(?=\.|$)"
+)
+INVALID_POSTING = "Check the saved employer posting link before filling."
+
+
+def prepared_jobs(job_ids: list[int], *, omitted: dict | None = None) -> list[dict]:
     from fletcher.resume.review_store import read_selected_resume_pdf
     from hunter.db import get_connection, get_job_by_id
 
@@ -146,13 +156,32 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
             )
         if job.get("enrichment_status") not in ("done", "done_verified"):
             raise HTTPException(409, f"Finish discovery verification for job {job_id} first.")
+        link = job.get("apply_url")
         try:
-            target = urlsplit(job.get("apply_url") or "")
-        except ValueError:
-            raise HTTPException(
-                409, f"Job {job_id} needs a verified supported posting link."
-            ) from None
-        host, route = target.hostname or "", target.path
+            target = urlsplit(link if isinstance(link, str) else "")
+            host, route = target.hostname or "", target.path
+            safe = (
+                isinstance(link, str)
+                and link == link.strip()
+                and not re.search(r"[\x00-\x1f\x7f\\]", link)
+                and target.scheme == "https"
+                and bool(host)
+                and target.netloc == host
+                and not re.search(r"%2f|%5c", route, re.I)
+                and not re.search(r"[/](?:\.|%2e){1,2}(?:/|$)", route, re.I)
+                and re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*", host) is not None
+            )
+        except (TypeError, ValueError):
+            safe = False
+        if not safe:
+            if omitted is None:
+                raise HTTPException(409, f"Job {job_id}: {INVALID_POSTING}")
+            omitted[job_id] = {
+                "sourceJobId": job_id,
+                "status": "not_sent",
+                "reason": INVALID_POSTING,
+            }
+            continue
         supported = (
             family == "workday"
             and re.fullmatch(
@@ -175,16 +204,13 @@ def prepared_jobs(job_ids: list[int]) -> list[dict]:
             )
             and re.fullmatch(r"/[^/]+/[a-fA-F0-9-]{36}(?:/(?:apply|application))?/?", route)
         )
-        if (
-            not host
-            or target.scheme != "https"
-            or target.username
-            or target.password
-            or target.netloc != host
-            or re.search(r"%2f|%5c", route, re.I)
-        ):
-            raise HTTPException(409, f"Job {job_id} needs a verified supported posting link.")
-        if not supported and not current_page_posting(job["apply_url"]):
+        if not supported and not current_page_posting(link):
+            if omitted is not None:
+                omitted[job_id] = (
+                    {"sourceJobId": job_id, "status": "not_sent", "reason": INVALID_POSTING}
+                    if POSTING_DOMAINS.search(host)
+                    else {"sourceJobId": job_id, "status": "current_page"}
+                )
             continue
         if job.get("selected_resume_ready_for_c3") != 1 or not job.get("selected_resume_pdf_path"):
             raise HTTPException(409, f"Prepare and select a C2 resume for job {job_id} first.")
@@ -269,16 +295,26 @@ def selected_job_ids(body: object) -> list[int]:
 @router.post("/handoff/export")
 async def export_handoff(request: Request):
     require_same_origin(request)
+    body = await request.json()
+    omitted = {}
     jobs = [
         portable_job(job)
-        for job in await run_in_threadpool(prepared_jobs, selected_job_ids(await request.json()))
+        for job in await run_in_threadpool(prepared_jobs, selected_job_ids(body), omitted=omitted)
     ]
     if not jobs:
-        raise HTTPException(
-            409, "Open these applications on their employer sites and choose Fill current page."
+        detail = (
+            INVALID_POSTING
+            if any(row["status"] == "not_sent" for row in omitted.values())
+            else ("Open these applications on their employer sites and choose Fill current page.")
         )
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"detail": detail, "outcomes": list(omitted.values())}, status_code=409)
+    bundle = {"format": "hunt-c3-handoff", "version": 1, "jobs": jobs}
     content = json.dumps(
-        {"format": "hunt-c3-handoff", "version": 1, "jobs": jobs},
+        {"bundle": bundle, "omitted": list(omitted.values())}
+        if body.get("include_outcomes") is True
+        else bundle,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -303,7 +339,8 @@ async def handoff(request: Request):
     ids = selected_job_ids(await request.json())
     outcomes = [{"sourceJobId": job_id, "status": "not_sent"} for job_id in dict.fromkeys(ids)]
     try:
-        jobs = await run_in_threadpool(prepared_jobs, ids)
+        omitted = {}
+        jobs = await run_in_threadpool(prepared_jobs, ids, omitted=omitted)
         transfers = {}
         for job in jobs:
             page_only = current_page_posting(job["url"])
@@ -325,18 +362,20 @@ async def handoff(request: Request):
     queued = []
     for outcome in outcomes:
         if outcome["sourceJobId"] not in transfers:
-            outcome["status"] = "current_page"
+            outcome.update(omitted[outcome["sourceJobId"]])
     if not transfers:
         return JSONResponse(
             {
-                "detail": "Open these applications on their employer sites and choose Fill current page.",
+                "detail": INVALID_POSTING
+                if any(row["status"] == "not_sent" for row in outcomes)
+                else "Open these applications on their employer sites and choose Fill current page.",
                 "queued": [],
                 "outcomes": outcomes,
             },
             status_code=409,
         )
     for outcome in outcomes:
-        if outcome["status"] == "current_page":
+        if outcome["sourceJobId"] not in transfers:
             continue
         route, payload = transfers[outcome["sourceJobId"]]
 
