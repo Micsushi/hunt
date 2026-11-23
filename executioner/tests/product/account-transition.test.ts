@@ -100,7 +100,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
     assert.equal(await page.locator('[data-automation-id=applyFlowReviewPage]').count(),1);
     assert.equal(await page.evaluate("writes"),0);
 
-    assert.equal(downloads,0, "a saved transcript row never authorizes a résumé fetch");
+    assert.equal(downloads,0, "a saved transcript row never authorizes a resume fetch");
     label = "Resume";
     restored = false;
     for (const primary of ["missing-primary", "empty-hint", "other-title"]) {
