@@ -313,8 +313,11 @@ export function createQuestionnairePageHandler(
         if (category === "consent") {
           if (field.state === 'populated') continue;
           const aiScreening = isAiEvaluationConsent(fullQuestion);
-          const factId = aiScreening && isAiConsentControl(field.behavior, field.rawOptions ?? field.options.map(option => option.label))
-            ? 'ai_evaluation_consent' : isRecruitmentTermsConsent(fullQuestion) ? 'terms_consent' : undefined;
+          if (aiScreening && !isAiConsentControl(field.behavior, field.rawOptions ?? field.options.map(option => option.label))) {
+            recordUnset();
+            return blocked("protected_answer_denied", field.fieldId, category);
+          }
+          const factId = aiScreening ? 'ai_evaluation_consent' : isRecruitmentTermsConsent(fullQuestion) ? 'terms_consent' : undefined;
           const decision = factId && await (dependencies.profileQuery as ApplicationProfileQuery).query({
             profileId:request.profileId, profileRevision:request.profileRevision, factId,
           }, signal);

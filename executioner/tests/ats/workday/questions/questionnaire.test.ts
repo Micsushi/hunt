@@ -280,6 +280,25 @@ test("preserved consent skips mutations and unknown consent cannot become an inj
   assert.deepEqual(new Set(queried),new Set(["ai_evaluation_consent"]));
   assert.equal(approved.calls.driven,1);
   assert.equal(approved.calls.verified,1);
+  const terms = field("terms","Applicant Privacy Notice","checkbox");
+  const denied = dependencies({
+    profile:{async query(){assert.fail("An unsupported consent shape must not query any saved decision");}},
+    resolver:{async resolve(){assert.fail("An injected resolver must not see an unsupported consent shape");}},
+  });
+  for (const observed of [
+    {...terms,rawQuestion:aiConsent.label,rawOptions:["I decline"]},
+    field("mixed","I agree to the recruitment privacy notice and AI screening of my application.","checkbox"),
+  ]) {
+    const result = await denied.handler.complete(request([observed]),new AbortController().signal);
+    assert.ok(result.ok && result.value.kind === "blocked" && result.value.code === "protected_answer_denied");
+    assert.equal(denied.calls.driven,0);
+  }
+  queried.length = 0;
+  const acceptedTerms = await approved.handler.complete(request([terms]),new AbortController().signal);
+  assert.ok(acceptedTerms.ok && acceptedTerms.value.kind === "verified");
+  assert.deepEqual(new Set(queried),new Set(["terms_consent"]));
+  assert.equal(approved.calls.driven,2);
+
   for (const choice of [undefined, false] as const) {
     const withheld = dependencies({profile:{async query() {
       return choice === undefined ? {ok:true,value:{kind:"profile_answer_missing"}} :
