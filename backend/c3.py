@@ -132,6 +132,37 @@ POSTING_DOMAINS = re.compile(
 INVALID_POSTING = "Check the saved employer posting link before filling."
 
 
+def queued_posting_family(host: str, route: str) -> str | None:
+    if re.fullmatch(r"[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com", host):
+        posting = re.search(r"/job/(.+)", route, re.I)
+        if posting:
+            path = re.sub(r"(?:/(?:apply|applyManually))+/?$", "", posting[1], flags=re.I)
+            if path.removesuffix("/").rsplit("/", 1)[-1]:
+                return "workday"
+    if host == "apply.workable.com" and re.fullmatch(r"/[^/]+/j/[A-Za-z0-9]+(?:/apply)?/?", route):
+        return "workable"
+    if host in ("job-boards.greenhouse.io", "boards.greenhouse.io", "job-boards.eu.greenhouse.io"):
+        if re.fullmatch(r"/[^/]+/jobs/[0-9]+/?", route):
+            return "greenhouse"
+    if re.fullmatch(r"/[^/]+/[a-fA-F0-9-]{36}(?:/(?:apply|application))?/?", route):
+        if host == "jobs.ashbyhq.com":
+            return "ashby"
+        if host in ("jobs.lever.co", "jobs.eu.lever.co"):
+            return "lever"
+    return None
+
+
+def omitted_detail(omitted: dict) -> str:
+    manual = "Open these applications on their employer sites and choose Fill current page."
+    reasons = {row.get("reason", manual) for row in omitted.values()}
+    if len(reasons) == 1:
+        return reasons.pop()
+    return " ".join(
+        f"Job #{job_id}: {row.get('reason', 'Open the employer site and choose Fill current page.')}"
+        for job_id, row in omitted.items()
+    )
+
+
 def prepared_jobs(job_ids: list[int], *, omitted: dict) -> list[dict]:
     from fletcher.resume.review_store import read_selected_resume_pdf
     from hunter.db import get_connection, get_job_by_id
@@ -181,29 +212,18 @@ def prepared_jobs(job_ids: list[int], *, omitted: dict) -> list[dict]:
                 "reason": INVALID_POSTING,
             }
             continue
-        supported = (
-            family == "workday"
-            and re.fullmatch(
-                r"[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com", host, re.I
-            )
-            and re.search(r"/job/.+", route, re.I)
-            or family == "workable"
-            and host == "apply.workable.com"
-            and re.fullmatch(r"/[^/]+/j/[A-Za-z0-9]+(?:/apply)?/?", route)
-            or family == "greenhouse"
-            and host
-            in ("job-boards.greenhouse.io", "boards.greenhouse.io", "job-boards.eu.greenhouse.io")
-            and re.fullmatch(r"/[^/]+/jobs/\d+/?", route)
-            or family in ("lever", "ashby")
-            and host
-            in (
-                ("jobs.lever.co", "jobs.eu.lever.co")
-                if family == "lever"
-                else ("jobs.ashbyhq.com",)
-            )
-            and re.fullmatch(r"/[^/]+/[a-fA-F0-9-]{36}(?:/(?:apply|application))?/?", route)
-        )
-        if not supported and not current_page_posting(link):
+        posting_family = queued_posting_family(host, route)
+        if posting_family and family != posting_family:
+            omitted[job_id] = {
+                "sourceJobId": job_id,
+                "status": "not_sent",
+                "reason": (
+                    f"This {posting_family.capitalize()} posting does not match the saved ATS type. "
+                    "Recheck the ATS type in discovery before sending."
+                ),
+            }
+            continue
+        if not posting_family and not current_page_posting(link):
             omitted[job_id] = (
                 {"sourceJobId": job_id, "status": "not_sent", "reason": INVALID_POSTING}
                 if POSTING_DOMAINS.search(host)
@@ -300,14 +320,12 @@ async def export_handoff(request: Request):
         for job in await run_in_threadpool(prepared_jobs, selected_job_ids(body), omitted=omitted)
     ]
     if not jobs:
-        detail = (
-            INVALID_POSTING
-            if any(row["status"] == "not_sent" for row in omitted.values())
-            else ("Open these applications on their employer sites and choose Fill current page.")
-        )
         from fastapi.responses import JSONResponse
 
-        return JSONResponse({"detail": detail, "outcomes": list(omitted.values())}, status_code=409)
+        return JSONResponse(
+            {"detail": omitted_detail(omitted), "outcomes": list(omitted.values())},
+            status_code=409,
+        )
     bundle = {"format": "hunt-c3-handoff", "version": 1, "jobs": jobs}
     content = json.dumps(
         {"bundle": bundle, "omitted": list(omitted.values())}
@@ -364,9 +382,7 @@ async def handoff(request: Request):
     if not transfers:
         return JSONResponse(
             {
-                "detail": INVALID_POSTING
-                if any(row["status"] == "not_sent" for row in outcomes)
-                else "Open these applications on their employer sites and choose Fill current page.",
+                "detail": omitted_detail(omitted),
                 "queued": [],
                 "outcomes": outcomes,
             },

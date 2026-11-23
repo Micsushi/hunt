@@ -27,7 +27,7 @@ import { get, post } from '@/api/client'
 import {
   downloadApplicationHandoff,
   sendApplicationsToBrowser,
-  supportsQueuedApplication,
+  queuedPostingFamily,
   isGenericApplicationUrl,
   isManualApplicationUrl,
   handoffMessage,
@@ -357,7 +357,8 @@ function ApplicationActions({ job }: { job: JobDetail }) {
   }, [])
   // Match the handoff gateway's families; it also validates the posting URL and resume.
   const pageOnly = isGenericApplicationUrl(job.apply_url)
-  const supported = pageOnly || supportsQueuedApplication(job.ats_type, job.apply_url)
+  const postingFamily = queuedPostingFamily(job.apply_url)
+  const supported = pageOnly || (!!postingFamily && job.ats_type === postingFamily)
   const connection = useQuery({
     queryKey: ['c3-job', job.id],
     queryFn: () =>
@@ -386,14 +387,16 @@ function ApplicationActions({ job }: { job: JobDetail }) {
     ? 'This job is already applied or cancelled.'
     : job.discovery_suppressed_reason
       ? 'This job is excluded from discovery.'
-      : !supported
-        ? isManualApplicationUrl(job.apply_url)
-          ? 'Open the employer application and choose Fill current page in the Hunt extension.'
-          : 'Check the saved employer posting link before filling.'
-        : job.apply_type !== 'external_apply'
-          ? 'An external application is required.'
-          : !['done', 'done_verified'].includes(job.enrichment_status ?? '')
-            ? 'Finish discovery verification first.'
+      : job.apply_type !== 'external_apply'
+        ? 'An external application is required.'
+        : !['done', 'done_verified'].includes(job.enrichment_status ?? '')
+          ? 'Finish discovery verification first.'
+          : !supported
+            ? postingFamily
+              ? `This ${postingFamily[0].toUpperCase() + postingFamily.slice(1)} posting does not match the saved ATS type. Recheck the ATS type in discovery before sending.`
+              : isManualApplicationUrl(job.apply_url)
+                ? 'Open the employer application and choose Fill current page in the Hunt extension.'
+                : 'Check the saved employer posting link before filling.'
             : job.selected_resume_ready_for_c3 !== 1 ||
                 !job.selected_resume_pdf_path ||
                 !job.selected_resume_version_id

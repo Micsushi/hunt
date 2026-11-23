@@ -157,6 +157,51 @@ def test_handoff_preserves_each_selected_resume_and_validates_whole_selection(
             job["resumeSha256"] == hashlib.sha256(base64.b64decode(job["resumeBase64"])).hexdigest()
         )
     assert calls == [], "export must not queue anything or require a local C3 service"
+    if ats in ("workday", "greenhouse", "lever", "ashby", "workable"):
+        reason = (
+            f"This {ats.capitalize()} posting does not match the saved ATS type. "
+            "Recheck the ATS type in discovery before sending."
+        )
+        missing = {"sourceJobId": 1, "status": "not_sent", "reason": reason}
+        for stale_type in ("greenhouse" if ats == "workday" else "workday", None):
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE jobs SET ats_type=? WHERE id=1", (stale_type,))
+            for endpoint in ("/api/c3/handoff", "/api/c3/handoff/export"):
+                only = browser.post(endpoint, json={"job_ids": [1]})
+                assert only.status_code == 409
+                assert only.json()["detail"] == reason and only.json()["outcomes"] == [missing]
+            assert not calls
+            exported = browser.post(
+                "/api/c3/handoff/export", json={"job_ids": [1, 2], "include_outcomes": True}
+            )
+            assert exported.json() == {
+                "bundle": {**bundle, "jobs": [bundle["jobs"][1]]},
+                "omitted": [missing],
+            }
+            mixed = browser.post("/api/c3/handoff", json={"job_ids": [1, 2]})
+            assert mixed.json()["outcomes"] == [missing, {"sourceJobId": 2, "status": "confirmed"}]
+            assert [row["sourceJobId"] for row in calls] == [2]
+            assert base64.b64decode(calls[0]["resumeBase64"]) == b"%PDF-1.4 selected resume 2"
+            calls.clear()
+        if ats == "workday":
+            invalid_link = "https://fixture.wd1.myworkdayjobs.com/en-US/Test/jobs"
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE jobs SET apply_url=? WHERE id=2", (invalid_link,))
+            for endpoint in ("/api/c3/handoff", "/api/c3/handoff/export"):
+                rejected = browser.post(endpoint, json={"job_ids": [1, 2]})
+                assert rejected.status_code == 409
+                assert rejected.json()["detail"] == f"Job #1: {reason} Job #2: {c3.INVALID_POSTING}"
+                assert rejected.json()["outcomes"] == [
+                    missing,
+                    {"sourceJobId": 2, "status": "not_sent", "reason": c3.INVALID_POSTING},
+                ]
+            assert not calls
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "UPDATE jobs SET apply_url=? WHERE id=2", (records[2]["apply_url"],)
+                )
+        with sqlite3.connect(database) as connection:
+            connection.execute("UPDATE jobs SET ats_type=? WHERE id=1", (ats,))
     if ats == "smartrecruiters":
         numeric = "https://jobs.smartrecruiters.com/GDMSI/12345-developer"
         publication = "https://jobs.smartrecruiters.com/oneclick-ui/company/GDMSI/publication/f1bc5065-8ef4-443c-99c0-f2b132115e4a"

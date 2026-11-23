@@ -85,39 +85,34 @@ export function isGenericApplicationUrl(value: string | null | undefined) {
   return false
 }
 
-export function supportsQueuedApplication(
-  family: string | null | undefined,
-  value: string | null | undefined,
-) {
+export function queuedPostingFamily(value: string | null | undefined) {
   const url = postingUrl(value)
-  if (!url) return false
+  if (!url) return
   const { hostname: host, pathname: path } = url
-  switch (family) {
-    case 'workday':
-      return (
-        /^[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com$/i.test(host) &&
-        /\/job\/.+/i.test(path)
-      )
-    case 'workable':
-      return host === 'apply.workable.com' && /^\/[^/]+\/j\/[A-Za-z0-9]+(?:\/apply)?\/?$/.test(path)
-    case 'greenhouse':
-      return (
-        [
-          'job-boards.greenhouse.io',
-          'boards.greenhouse.io',
-          'job-boards.eu.greenhouse.io',
-        ].includes(host) && /^\/[^/]+\/jobs\/\d+\/?$/.test(path)
-      )
-    case 'lever':
-    case 'ashby':
-      return (
-        (family === 'ashby'
-          ? host === 'jobs.ashbyhq.com'
-          : ['jobs.lever.co', 'jobs.eu.lever.co'].includes(host)) &&
-        /^\/[^/]+\/[A-Fa-f0-9-]{36}(?:\/(?:apply|application))?\/?$/.test(path)
-      )
+  if (/^[a-z0-9-]+\.[a-z0-9.-]+\.(myworkdayjobs|myworkdaysite)\.com$/i.test(host)) {
+    const posting = /\/job\/(.+)/i.exec(path)?.[1]
+    if (
+      posting
+        ?.replace(/(?:\/(?:apply|applyManually))+\/?$/i, '')
+        .replace(/\/$/, '')
+        .split('/')
+        .pop()
+    )
+      return 'workday'
   }
-  return false
+  if (host === 'apply.workable.com' && /^\/[^/]+\/j\/[A-Za-z0-9]+(?:\/apply)?\/?$/.test(path))
+    return 'workable'
+  if (
+    ['job-boards.greenhouse.io', 'boards.greenhouse.io', 'job-boards.eu.greenhouse.io'].includes(
+      host,
+    ) &&
+    /^\/[^/]+\/jobs\/\d+\/?$/.test(path)
+  )
+    return 'greenhouse'
+  if (/^\/[^/]+\/[A-Fa-f0-9-]{36}(?:\/(?:apply|application))?\/?$/.test(path)) {
+    if (host === 'jobs.ashbyhq.com') return 'ashby'
+    if (['jobs.lever.co', 'jobs.eu.lever.co'].includes(host)) return 'lever'
+  }
 }
 
 async function exportApplications(jobIds: number[]) {
