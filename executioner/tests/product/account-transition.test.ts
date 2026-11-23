@@ -68,10 +68,15 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
   const pdf = Buffer.from("%PDF-1.4 selected rÃ©sumÃ©");
   const filename = "c3-attachment-" + createHash("sha256").update(pdf).digest("hex") + ".pdf";
   let label = "Academic transcript", restored = false, served = pdf, downloads = 0, downloadStatus = 200;
+  let attachmentAction = "download", retainPicker = false;
   const profile = fixtureApplicantProfile({given_name:"Fixture",family_name:"Applicant",email_address:"fixture@example.invalid"});
   const fill = () => fillApplication(page, {url, profile, resume:pdf}, AbortSignal.timeout(15000), () => {});
   await page.route(url, route => {
-    const item = `<div data-automation-id="file-upload-item" ${restored ? '' : 'data-upload-state="success"'}><a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a>${restored ? '<span data-automation-id="file-upload-successful">Uploaded</span>' : ''}</div>`;
+    const visibleName = `<span data-automation-id="file-upload-item-name">${filename}</span>`;
+    const receipt = attachmentAction === "none" ? visibleName + '<a href="/remove">Remove</a>' : attachmentAction === "unsafe" ?
+      visibleName + '<button type="button">Preview</button>' :
+      `<a href="/attachment.pdf" data-automation-id="file-upload-item-name">${filename}</a>`;
+    const item = `<div data-automation-id="file-upload-item" ${restored ? '' : 'data-upload-state="success"'}>${receipt}${restored ? '<span data-automation-id="file-upload-successful">Uploaded</span>' : ''}</div>`;
     const fixture = applicationFixture.replace("profile();", `questions();
       root.querySelector('section').innerHTML = '<div role="group" aria-label="Other application documents"><label>Other details<input></label>' +
         '<div data-automation-id="formField-attachment"><label id="file-title" for="picker">${label}</label>' +
@@ -79,7 +84,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
         '${restored ? item : ""}</div></div></div><button>Save and Continue</button>';
       window.writes = 0;
       const picker=document.getElementById('picker');
-      picker.onchange=()=>{window.writes++; picker.insertAdjacentHTML('afterend',${JSON.stringify(item)});picker.value='';};
+      picker.onchange=()=>{window.writes++; picker.insertAdjacentHTML('afterend',${JSON.stringify(item)});if(!${retainPicker})picker.value='';};
       root.querySelector('button').onclick=review;`);
     return route.fulfill({contentType:"text/html",body:fixture});
   });
@@ -95,6 +100,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
     assert.equal(await page.locator('[data-automation-id=applyFlowReviewPage]').count(),1);
     assert.equal(await page.evaluate("writes"),0);
 
+    assert.equal(downloads,0, "a saved transcript row never authorizes a résumé fetch");
     label = "Resume";
     restored = false;
     for (const primary of ["missing-primary", "empty-hint", "other-title"]) {
@@ -107,6 +113,26 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
       await assert.rejects(fill(), /required attachment needs your review/);
       assert.equal(await page.evaluate("writes"), 0);
     }
+    for (const [action, status, bytes, reason] of [
+      ["download", 403, pdf, /download failed.*contents unverified/i],
+      ["download", 200, Buffer.from("not a PDF"), /download failed.*contents unverified/i],
+      ["unsafe", 200, pdf, /could not safely check/],
+      ["none", 200, pdf, /filename but offers no download.*contents unverified/],
+      ["download", 200, Buffer.from("%PDF-different"), /SHA-256 mismatch/],
+    ] as const) {
+      attachmentAction = action; downloadStatus = status; served = bytes;
+      await page.reload();
+      const before: number = downloads;
+      await assert.rejects(fill(), reason);
+      assert.equal(await page.evaluate("writes"),1, "the selected file is attached only once");
+      assert.equal(await page.evaluate("submits"),0);
+      if (action !== "download") assert.equal(downloads,before);
+    }
+    attachmentAction = "none"; retainPicker = true;
+    await page.reload();
+    assert.deepEqual((await fill()).workdayResumeEvidence,{upload:"filename",review:"not_shown"});
+    assert.equal(await page.evaluate("writes"),1);
+    attachmentAction = "download"; downloadStatus = 200; served = pdf; retainPicker = false;
     await page.reload();
     const filled = await fill();
     assert.deepEqual(filled.workdayResumeEvidence,{upload:"download",review:"not_shown"});
@@ -170,6 +196,10 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
         await display(html);
         assert.equal((await reviewSnapshot(page,sha)).workdayResumeEvidence?.review,'download');
       }
+      await group.locator('h4').evaluate(node => {const heading=document.createElement('div');heading.setAttribute('role','heading');heading.textContent='Resume/CV';node.replaceWith(heading);});
+      assert.equal((await reviewSnapshot(page,sha)).workdayResumeEvidence?.review,'download');
+      await group.locator('[role=heading]').evaluate(node => {node.textContent='Academic transcript';});
+      assert.equal((await reviewSnapshot(page,sha)).workdayResumeEvidence?.review,'picker');
       await display('<span data-automation-id="file-upload-item-name">renamed.pdf</span><button aria-label="Delete renamed.pdf">Delete</button>');
       await assert.rejects(reviewSnapshot(page,sha),/different resume filename.*PDF contents unverified/);
       await display('<a href="/attachment.pdf" data-automation-id="file-upload-item-name">renamed.pdf</a>');

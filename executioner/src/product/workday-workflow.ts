@@ -127,6 +127,10 @@ export async function fillApplicationAttempt(page: Page, input: ProductInput, si
 
       if (diagnostics.failureCode === 'employee_relationship_needs_review') throw new ApplicationPause("Complete the question about your relationship to an employee on the employer page, then retry.");
       if (diagnostics.failureCode === 'salary_readback_needs_review') throw new ApplicationPause("Check the salary on the employer page. C3 could not confirm that the retained value matches your saved compensation.");
+      if (diagnostics.failureCode === 'questionnaire_attachment_no_download') throw new ApplicationPause('The employer shows the resume filename but offers no download. PDF contents unverified. Check the attachment before continuing.');
+      for (const issue of ["download_failed", "download_unavailable", "mismatch", "picker_mismatch"] as const) {
+        if (diagnostics.failureCode === "questionnaire_attachment_" + issue) checkWorkdayAttachment(issue);
+      }
       if (diagnostics.failureCode === 'questionnaire_attachment_needs_review') throw new ApplicationPause('A required attachment needs your review. Check the requested document and the attached file on the employer page before continuing.');
       if ((diagnostics.failureCode ?? result.error.failure.code) === 'profile_row_unverified') throw new ApplicationPause('Profile history could not be verified against your saved details. Review the existing entries in the tab; C3 has preserved rows it does not own.');
       if ((diagnostics.failureCode ?? result.error.failure.code)==="protected_answer_denied") throw new ApplicationPause("This application requires your decision. Complete the question on the employer page, then retry.");

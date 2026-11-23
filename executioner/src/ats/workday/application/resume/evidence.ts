@@ -35,7 +35,7 @@ export async function inspectWorkdayResume(page: Page, sha256: string, artifactI
 
     // Workday may lay out a visible attachment without giving its wrapper a box.
     const visibleWrapper = (node: Element) => shown(node) ||
-      getComputedStyle(node).display === "contents" && [...node.querySelectorAll("h2,h3,h4," + nameSelector + "," + controlSelector)].some(shown);
+      getComputedStyle(node).display === "contents" && [...node.querySelectorAll("h2,h3,h4,[role=heading]," + nameSelector + "," + controlSelector)].some(shown);
     const active = () => [...document.querySelectorAll(selector)].filter(visibleWrapper);
     const roots = active();
     if (roots.length !== 1) return roots.length ? "ambiguous" : "not_shown";
@@ -66,7 +66,7 @@ export async function inspectWorkdayResume(page: Page, sha256: string, artifactI
         }
         if (labels.some(s => /transcript|cover[ -]letter|supporting document|writing sample|passport|portfolio/i.test(s ?? ""))) return "other";
         if (/^formField-resume$/i.test(region.getAttribute("data-automation-id") ?? "") ||
-            labels.some(isResumeLabel)) resume = true;
+            region === reviewOwner || labels.some(isResumeLabel)) resume = true;
       }
       // The visible heading and row establish filename display, but a broken
       // association must never authorize following an employer link.

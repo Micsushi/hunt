@@ -41,7 +41,7 @@ import {
 import type { Stage2ApplicationWalkRuntimeBindingRequest } from
   "../../../composition/s2-application-walk-runner.ts";
 import { PlaywrightBrowserSession } from "../../session.ts";
-import type { UploadedArtifactReadback } from "../../adapter.ts";
+import type { UploadedArtifactReadback, UploadReadbackIssue } from "../../adapter.ts";
 import { questionnaireUploadFileName, clickWorkdayApplicationHeading, expandWorkdayPromptCategory, workdayPromptOpener } from "../../adapter.ts";
 import {
   annotateCheckboxGroups,
@@ -1298,12 +1298,12 @@ export class OwnedWorkdayApplicationRuntime {
         `browser_session_${randomBytes(12).toString("hex")}` as BrowserSessionId;
       const uploadedArtifacts = this.#questionnaireUploads.get(input.pageId) ?? new Map<string, UploadedArtifactReadback>();
       this.#questionnaireUploads.set(input.pageId, uploadedArtifacts);
+      const uploadIssues = new Map<string, UploadReadbackIssue>();
+      const expectedArtifacts = new Map<string, UploadedArtifactReadback>();
+      const expectedResume = {resumeId:request.ownerSources.resumeIntent.artifact.resumeId,
+        sha256:sha256Digest(request.ownerSources.resumeIntent.artifact.sha256)};
       const createSemanticBrowser = () => new PlaywrightBrowserSession({
-        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId, uploadedArtifacts,
-          expectedArtifact: {
-            resumeId: request.ownerSources.resumeIntent.artifact.resumeId,
-            sha256: sha256Digest(request.ownerSources.resumeIntent.artifact.sha256),
-          } },
+        attached: { page, sessionId: activeSemanticSessionId, pageId: input.pageId, uploadedArtifacts, expectedArtifacts, uploadIssues },
         ids: createGeneratedIdAllocator({ next: () => randomBytes(8).toString("hex") }),
         timeoutMs: this.#timeoutMs,
       });
@@ -1331,15 +1331,25 @@ export class OwnedWorkdayApplicationRuntime {
         },
       });
       const observeCoverage = async () => {
+        expectedArtifacts.clear();
         const semanticObservationStartedAt = performance.now();
-        const observed = await semantic!.observe(signal);
+        let observed = await semantic!.observe(signal);
         this.#trace?.("questionnaire_semantic_observation_completed", {
           durationMs: monotonicDuration(semanticObservationStartedAt),
           status: observed.ok ? "succeeded" : "failed",
         });
         if (!observed.ok) throw new TypeError("questionnaire semantic observation unavailable");
         const discovered = discoverFields(observed.value.targets);
-        const applicationFields = await enrichQuestionnaireFields(page, discovered);
+        let applicationFields = await enrichQuestionnaireFields(page, discovered);
+        // A completed employer row can hold a different document with the same filename.
+        for (const field of applicationFields) {
+          if (field.behavior === "file_upload" && field.filePurpose === "resume") expectedArtifacts.set(field.target, expectedResume);
+        }
+        if (observed.value.targets.some(target => expectedArtifacts.has(target.token) && target.readback.kind === "unavailable")) {
+          observed = await semantic!.observe(signal);
+          if (!observed.ok) throw new TypeError("questionnaire upload observation unavailable");
+          applicationFields = await enrichQuestionnaireFields(page, discoverFields(observed.value.targets));
+        }
         const snapshot = createSemanticSnapshot(
           { kind: "workday", page: "questionnaire" }, applicationFields,
         );
@@ -1661,6 +1671,15 @@ export class OwnedWorkdayApplicationRuntime {
           underlyingError: questionnaireReconciliationError(error),
         });
         throw error;
+      }
+      const failedFieldId = !completed.ok ? reconciliationContext.fieldId :
+        completed.value.kind === "blocked" ? completed.value.fieldId : undefined;
+      const failedUpload = snapshot.fields.find(field => field.fieldId === failedFieldId &&
+        field.behavior === "file_upload" && "filePurpose" in field && field.filePurpose === "resume");
+      const uploadIssue = failedUpload && uploadIssues.get(failedUpload.target);
+      if (uploadIssue) {
+        this.#trace?.("questionnaire_attachment_unverified", {issue:uploadIssue, fieldId:failedFieldId});
+        return applicationFailure("page_incomplete", "question_control", "question");
       }
       if (!completed.ok && new Set([
         "browser_effect_uncertain", "browser_session_invalidated", "browser_target_stale",

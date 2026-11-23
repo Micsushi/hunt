@@ -82,6 +82,8 @@ export interface UploadedArtifactReadback {
   readonly sha256: ReturnType<typeof sha256Digest>;
 }
 
+export type UploadReadbackIssue = "download_failed" | "download_unavailable" | "no_download" | "mismatch" | "picker_mismatch";
+
 export { questionnaireUploadFileName };
 
 export interface PageInspection {
@@ -94,7 +96,8 @@ export async function inspectPage(
   sessionId: BrowserSessionId,
   pageId: BrowserPageId,
   uploads: ReadonlyMap<string, UploadedArtifactReadback>,
-  expectedArtifact?: UploadedArtifactReadback,
+  expectedArtifacts?: ReadonlyMap<string, UploadedArtifactReadback>,
+  uploadIssues?: Map<string, UploadReadbackIssue>,
 ): Promise<PageInspection> {
   await annotateCheckboxGroups(page);
   const raw = await inspectControls(page);
@@ -109,9 +112,9 @@ export async function inspectPage(
     const control = normalizeControl(item.control, item.declaredToken);
     const name = boundedControlName(item.name, item.declaredToken);
     const token = browserTargetToken(item.declaredToken);
-    const uploaded = uploads.get(token) ?? expectedArtifact;
+    const uploaded = expectedArtifacts ? expectedArtifacts.get(token) : uploads.get(token);
     let readback = item.control.kind === "file"
-      ? await inspectUploadReadback(page, item.index, token, uploaded)
+      ? await inspectUploadReadback(page, item.index, token, uploaded, uploadIssues)
       : normalizeReadback(item.readback, item.declaredToken);
     if (
       item.interaction === "composite-date" && readback.kind === "text" &&
@@ -179,7 +182,9 @@ async function inspectUploadReadback(
   index: number,
   token: string,
   uploaded: UploadedArtifactReadback | undefined,
+  issues?: Map<string, UploadReadbackIssue>,
 ): Promise<BrowserReadback> {
+  issues?.delete(token);
   let live: unknown;
   try {
     live = await page.locator(controlSelector).nth(index).evaluate(
@@ -192,6 +197,7 @@ async function inspectUploadReadback(
         const owner = element.closest('[data-automation-id$="-FileUpload"]');
         const sameInput = () => element.isConnected && element.getAttribute('data-hunt-target-token') === token;
         let ownsCompletedItem = sameInput;
+        let hasDownload = () => false;
         if (owner !== null) {
           const items = owner.querySelectorAll('[data-automation-id="file-upload-item"]');
           if (items.length === 0 && element.files.length === 0) return { kind: "empty" };
@@ -200,44 +206,61 @@ async function inspectUploadReadback(
           const successSelector = '[data-automation-id="file-upload-successful"],[data-automation-id="file-upload-success"]';
           const complete = () => item.matches('[data-upload-state=success]') ? item : item.querySelector(successSelector);
           const success = complete();
-          const shown = (node: Element) => node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden";
+          const shown = (node: Element) => node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) &&
+            !node.closest('[hidden],[inert],[aria-hidden=true]');
+          const names = () => item.querySelectorAll('[data-automation-id="file-upload-item-name"]');
           ownsCompletedItem = () => sameInput() && element.closest('[data-automation-id$="-FileUpload"]') === owner &&
             owner.querySelectorAll('input[type=file]').length === 1 && owner.querySelectorAll('[data-automation-id="file-upload-item"]').length === 1 &&
             owner.contains(item) && shown(item) && success !== null && complete() === success && shown(success) &&
-            item.querySelector('[data-automation-id="file-upload-item-name"]')?.textContent?.trim() === expectedName &&
+            names().length === 1 && names()[0]!.textContent?.trim() === expectedName &&
             !owner.querySelector('[aria-busy=true],[role=progressbar],[data-automation-id="file-upload-error"],[aria-invalid=true]');
           if (!ownsCompletedItem()) return {kind:"unavailable"};
           // A completed employer receipt can disagree with the file still in the picker.
-          const links = item.querySelectorAll<HTMLAnchorElement>('a[href]');
-          if (links.length > 0 || element.files.length === 0) {
+          const actions = () => [...item.querySelectorAll('a[href],button,[role=button],[role=link]')].filter(node => {
+            if (!shown(node)) return false;
+            const labels = [node.textContent,node.getAttribute('aria-label'),node.getAttribute('title')];
+            return node.hasAttribute('download') || labels.some(text => /\b(?:download|preview|view)\b/i.test(text ?? "")) ||
+              node.matches('a[href]') && !labels.some(text => /^(?:remove|delete)\b/i.test(text?.trim() ?? ""));
+          });
+          const links = actions();
+          hasDownload = () => actions().length > 0;
+          if (links.length === 0 && element.files.length === 0) {
+            return {kind:shown(names()[0]!) ? "no_download" : "unavailable"};
+          }
+          if (links.length) {
             const link = links[0];
-            if (links.length !== 1 || !link || !shown(link) ||
+            if (links.length !== 1 || !(link instanceof HTMLAnchorElement) || !link.getAttribute('href')?.trim() ||
+                [link.textContent,link.getAttribute('aria-label'),link.getAttribute('title')].some(
+                  text => /\b(?:delete|remove|submit|withdraw|transcript|passport|cover[ -]letter)\b/i.test(text ?? "")) ||
                 !(link.hasAttribute('download') || link.closest('[data-automation-id="file-upload-item-name"]') ||
-                  link.querySelector('[data-automation-id="file-upload-item-name"]'))) return {kind:"unavailable"};
-            const url = new URL(link.href);
-            if (url.protocol !== 'https:' || url.origin !== location.origin || url.username || url.password) return {kind:"unavailable"};
-            const response = await fetch(url, {credentials:'same-origin', mode:'same-origin', redirect:'error',
-              cache:'no-store', signal:AbortSignal.timeout(5000)});
-            if (!response.ok || !response.body || Number(response.headers.get('content-length')) > maximumBytes ||
-                !/^(?:application\/(?:pdf|octet-stream))(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
-              await response.body?.cancel();
-              return {kind:"unavailable"};
-            }
-            const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = [];
-            let size = 0;
+                  link.querySelector('[data-automation-id="file-upload-item-name"]'))) return {kind:"download_unavailable"};
+            const url = URL.parse(link.href);
+            if (!url || url.protocol !== 'https:' || url.origin !== location.origin || url.username || url.password) return {kind:"download_unavailable"};
             try {
-              for (;;) {
-                const {done, value} = await reader.read();
-                if (done) break;
-                size += value.byteLength;
-                if (size > maximumBytes) { await reader.cancel(); return {kind:"unavailable"}; }
-                chunks.push(value);
+              const response = await fetch(url, {credentials:'same-origin', mode:'same-origin', redirect:'error',
+                cache:'no-store', signal:AbortSignal.timeout(5000)});
+              if (!response.ok || !response.body || Number(response.headers.get('content-length')) > maximumBytes ||
+                  !/^(?:application\/(?:pdf|octet-stream))(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
+                await response.body?.cancel();
+                return {kind:"download_failed"};
               }
-              const digest = await crypto.subtle.digest('SHA-256', await new Blob(chunks).arrayBuffer());
-              if (!size || !ownsCompletedItem() || item.querySelectorAll('a[href]').length !== 1 ||
-                  !item.contains(link) || !shown(link) || link.href !== url.href) return {kind:"unavailable"};
+              const reader = response.body.getReader(), chunks: Uint8Array<ArrayBuffer>[] = [];
+              let size = 0;
+              try {
+                for (;;) {
+                  const {done, value} = await reader.read();
+                  if (done) break;
+                  size += value.byteLength;
+                  if (size > maximumBytes) { await reader.cancel(); return {kind:"download_failed"}; }
+                  chunks.push(value);
+                }
+              } finally { reader.releaseLock(); }
+              const bytes = await new Blob(chunks).arrayBuffer();
+              if (new TextDecoder().decode(bytes.slice(0,5)) !== "%PDF-") return {kind:"download_failed"};
+              const digest = await crypto.subtle.digest('SHA-256', bytes);
+              if (!ownsCompletedItem() || actions().length !== 1 || actions()[0] !== link || link.href !== url.href) return {kind:"download_unavailable"};
               return {kind:'employer-digest', size, sha256:[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')};
-            } finally { reader.releaseLock(); }
+            } catch { return {kind:"download_failed"}; }
           }
         }
         if (element.files.length === 0) return { kind: "empty" };
@@ -258,7 +281,7 @@ async function inspectUploadReadback(
           const size = bytes.byteLength;
           const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
           if (
-            !ownsCompletedItem() || owner?.querySelector('[data-automation-id="file-upload-item"] a[href]') || element.files.length !== 1 ||
+            !ownsCompletedItem() || hasDownload() || element.files.length !== 1 ||
             element.files[0] !== file
           ) {
             return { kind: "unavailable" };
@@ -286,6 +309,10 @@ async function inspectUploadReadback(
     !("kind" in live) ||
     typeof live.kind !== "string"
   ) return { kind: "unavailable" };
+  if (live.kind === "download_failed" || live.kind === "download_unavailable" || live.kind === "no_download") {
+    issues?.set(token, live.kind);
+    return {kind:"unavailable"};
+  }
   if (live.kind === "empty") {
     return { kind: "upload", resumeId: null, sha256: null };
   }
@@ -302,9 +329,9 @@ async function inspectUploadReadback(
     live.size <= 0 ||
     live.size > MAX_RESUME_ARTIFACT_BYTES
   ) return { kind: "unavailable" };
-  return live.sha256 === uploaded.sha256
-    ? { kind: "upload", ...uploaded }
-    : { kind: "unavailable" };
+  if (live.sha256 === uploaded.sha256) return { kind: "upload", ...uploaded };
+  issues?.set(token, live.kind === "employer-digest" ? "mismatch" : "picker_mismatch");
+  return { kind: "unavailable" };
 }
 
 export async function applyMutation(
