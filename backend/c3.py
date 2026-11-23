@@ -132,7 +132,7 @@ POSTING_DOMAINS = re.compile(
 INVALID_POSTING = "Check the saved employer posting link before filling."
 
 
-def prepared_jobs(job_ids: list[int], *, omitted: dict | None = None) -> list[dict]:
+def prepared_jobs(job_ids: list[int], *, omitted: dict) -> list[dict]:
     from fletcher.resume.review_store import read_selected_resume_pdf
     from hunter.db import get_connection, get_job_by_id
 
@@ -174,8 +174,6 @@ def prepared_jobs(job_ids: list[int], *, omitted: dict | None = None) -> list[di
         except (TypeError, ValueError):
             safe = False
         if not safe:
-            if omitted is None:
-                raise HTTPException(409, f"Job {job_id}: {INVALID_POSTING}")
             omitted[job_id] = {
                 "sourceJobId": job_id,
                 "status": "not_sent",
@@ -205,12 +203,11 @@ def prepared_jobs(job_ids: list[int], *, omitted: dict | None = None) -> list[di
             and re.fullmatch(r"/[^/]+/[a-fA-F0-9-]{36}(?:/(?:apply|application))?/?", route)
         )
         if not supported and not current_page_posting(link):
-            if omitted is not None:
-                omitted[job_id] = (
-                    {"sourceJobId": job_id, "status": "not_sent", "reason": INVALID_POSTING}
-                    if POSTING_DOMAINS.search(host)
-                    else {"sourceJobId": job_id, "status": "current_page"}
-                )
+            omitted[job_id] = (
+                {"sourceJobId": job_id, "status": "not_sent", "reason": INVALID_POSTING}
+                if POSTING_DOMAINS.search(host)
+                else {"sourceJobId": job_id, "status": "current_page"}
+            )
             continue
         if job.get("selected_resume_ready_for_c3") != 1 or not job.get("selected_resume_pdf_path"):
             raise HTTPException(409, f"Prepare and select a C2 resume for job {job_id} first.")
