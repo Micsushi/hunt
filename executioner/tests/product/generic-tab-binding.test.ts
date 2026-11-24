@@ -151,7 +151,12 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     const selection={tabId:9,expectedUrl:selectedUrl};
     const metadata=await (await post('/browser/page-resume',selection)).json();
     const hash=createHash('sha256').update(resume).digest('hex');
-    assert.deepEqual(metadata,{supportsQueue:false,currentPage:{name:'Selected.pdf',source:'selected',version:'v17',sha256:hash},queued:null});
+    const currentPage={name:'Selected.pdf',source:'selected',version:'v17',sha256:hash};
+    const defaultHash=createHash('sha256').update('%PDF-default').digest('hex');
+    assert.deepEqual(metadata,{supportsQueue:false,currentPage,queued:null,resumes:[
+      {id:'default',name:'Default resume · '+defaultHash.slice(0,8),source:'default',sha256:defaultHash},
+      {...currentPage,id:hash,jobId:selected.id},
+    ]});
     const preview=await post('/browser/page-resume',{...selection,workflow:'currentPage',sha256:hash});
     assert.equal(preview.headers.get('content-type'),'application/pdf');
     assert.deepEqual(Buffer.from(await preview.arrayBuffer()),resume);
