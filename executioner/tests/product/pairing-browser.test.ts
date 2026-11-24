@@ -4,13 +4,10 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { chromium, type BrowserContext } from 'playwright';
+import { chromium, type BrowserContext, type Page } from 'playwright';
 import { startProductServer } from '../../src/product/server.ts';
 
-test('local full-menu history selects the originating page and browses closed pages without exposing URL secrets or answers',async()=>{
-  const root=mkdtempSync(join(tmpdir(),'c3-history-ui-'));
-  const service=await startProductServer({root,port:0});
-  const token=readFileSync(service.tokenPath,'utf8').trim();
+async function verifyWorkspaceHistory(page: Page, service: Awaited<ReturnType<typeof startProductServer>>, root: string, token: string) {
   const save=(url:string,pageSteps:object[],pageRequired?:object[])=>{
     const id=createHash('sha256').update(url).digest('hex').slice(0,24);
     const run=join(root,'learning','page-'+id,randomUUID());
@@ -27,38 +24,33 @@ test('local full-menu history selects the originating page and browses closed pa
   const second=save('https://hiring.example/jobs/75/secret-path',[
     {label:'City',outcome:'changed',reason:'field_changed'}
   ]);
-  let browser;
-  try{
-    assert.equal((await fetch(service.origin+'/fill-history')).status,401);
-    assert.equal((await fetch(service.origin+'/fill-history/'+id)).status,401);
-    const index=await (await fetch(service.origin+'/fill-history',{headers:{Authorization:'Bearer '+token}})).text();
-    assert.doesNotMatch(index,/private-fixture|secret-path|candidate\?/);
-    browser=await chromium.launch({channel:'chromium',headless:true,...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{})});
-    const page=await browser.newPage({viewport:{width:1080,height:740}});
-    await page.goto(service.origin+'/#token='+token+'&page='+id);
-    await page.getByRole('button',{name:'Fill history',exact:true}).click();
-    const panel=page.getByRole('region',{name:'Fill history'});
-    await panel.getByText('Email/Login',{exact:true}).waitFor();
-    assert.match(await panel.locator('li').filter({hasText:'Password'}).innerText(),/Required field was empty after filling\. Enter this password yourself\./);
-    assert.equal(await panel.getByLabel('Application page').inputValue(),id);
-    await page.screenshot({path:join(root,'full-menu-history.png')});
-    await panel.getByLabel('Application page').selectOption(second);
-    await panel.getByText('City',{exact:true}).waitFor();
-    assert.equal(await panel.getByText('Email/Login',{exact:true}).count(),0);
-    await page.goto('about:blank');
-    await page.goto(service.origin+'/#token='+token+'&page='+'0'.repeat(24));
-    await page.getByRole('button',{name:'Fill history',exact:true}).click();
-    await panel.getByText('No fills recorded for this page.').waitFor();
-    await page.reload();
-    await page.getByRole('button',{name:'Fill history',exact:true}).click();
-    await panel.locator('li').first().waitFor();
-    await page.setViewportSize({width:320,height:500});
-    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    console.log('Full-menu history evidence:',join(root,'full-menu-history.png'));
-  }finally{await browser?.close();await service.close();}
-});
+  assert.equal((await fetch(service.origin+'/fill-history')).status,401);
+  assert.equal((await fetch(service.origin+'/fill-history/'+id)).status,401);
+  const index=await (await fetch(service.origin+'/fill-history',{headers:{Authorization:'Bearer '+token}})).text();
+  assert.doesNotMatch(index,/private-fixture|secret-path|candidate\?/);
+  await page.goto(service.origin+'/#token='+token+'&page='+id);
+  await page.getByRole('button',{name:'Fill history',exact:true}).click();
+  const panel=page.getByRole('region',{name:'Fill history'});
+  await panel.getByText('Email/Login',{exact:true}).waitFor();
+  assert.match(await panel.locator('li').filter({hasText:'Password'}).innerText(),/Required field was empty after filling\. Enter this password yourself\./);
+  assert.equal(await panel.getByLabel('Application page').inputValue(),id);
+  await page.screenshot({path:join(root,'full-menu-history.png')});
+  await panel.getByLabel('Application page').selectOption(second);
+  await panel.getByText('City',{exact:true}).waitFor();
+  assert.equal(await panel.getByText('Email/Login',{exact:true}).count(),0);
+  await page.goto('about:blank');
+  await page.goto(service.origin+'/#token='+token+'&page='+'0'.repeat(24));
+  await page.getByRole('button',{name:'Fill history',exact:true}).click();
+  await panel.getByText('No fills recorded for this page.').waitFor();
+  await page.reload();
+  await page.getByRole('button',{name:'Fill history',exact:true}).click();
+  await panel.locator('li').first().waitFor();
+  await page.setViewportSize({width:320,height:500});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  console.log('Full-menu history evidence:',join(root,'full-menu-history.png'));
+}
 
-test('popup pairs from the workspace, preserves saved keys on failure, and reconnects after restart', { timeout: 90_000 }, async () => {
+test('workspace preserves pairing across failure and restart and opens private per-page fill history', { timeout: 90_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'c3-pairing-'));
   const port = 49191;
   const extension = join(root, 'extension');
@@ -128,6 +120,8 @@ test('popup pairs from the workspace, preserves saved keys on failure, and recon
     assert.equal(service.queue.snapshot().connected, true);
     assert.equal(service.queue.snapshot().jobs.length, 0);
     await popup.screenshot({ path: join(root, 'popup-connected.png'), fullPage: true });
+    const historyPage = await context.newPage();
+    await verifyWorkspaceHistory(historyPage, service, join(root, 'service'), token);
     console.log(`Pairing browser evidence: ${root}`);
   } finally {
     await context?.close();
