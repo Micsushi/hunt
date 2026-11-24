@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdirSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {Page} from 'playwright';
 import type {ExtensionBridge} from '../../src/product/extension-bridge.ts';
 import {fillApplication} from '../../src/product/engine.ts';
 import {startProductServer} from '../../src/product/server.ts';
+import {pageMatchingRoot} from '../../src/product/page-matching.ts';
 import {applicantProfile} from '../../src/product/sources.ts';
 import {productApplicationTarget} from '../../src/product/target.ts';
 
@@ -144,11 +145,36 @@ test('unfamiliar applications stay on the current page and old selected inputs r
         filesInHistory=true;
       }
       if(params.operation==='undo')filesInHistory=false;
-      return {url:params.expectedUrl,tabId:params.tabId,documentId:latestDocument,filled:[],matching:[],skipped:[],canUndo:filesInHistory,canRedo:!filesInHistory};
+      return {url:params.expectedUrl,tabId:params.tabId,documentId:latestDocument,filled:params.operation==='fill'?['Email','City']:[],matching:[],
+        skipped:params.operation==='fill'?[
+          {label:'Password (Re-enter)',reason:'password_field_preserved'},
+          {label:'Email',reason:'saved_value_already_present'},
+          {label:'City',reason:'value_changed_after_fill'}
+        ]:[],canUndo:filesInHistory,canRedo:!filesInHistory};
     };
     const operate=(operation:string,tabId=9,url=selectedUrl,doc=latestDocument)=>post('/browser/page',{tabId,expectedUrl:url,operation,...(operation!=='inspect'&&{documentId:doc})});
     app.queue.configure(applicantProfile({given_name:'Changed',family_name:'Tester',email_address:'changed@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
     const selection={tabId:9,expectedUrl:selectedUrl};
+    const historyPath='/browser/page-fill-log';
+    assert.equal((await fetchLocal(app.origin+historyPath,{method:'POST',body:JSON.stringify(selection)})).status,401);
+    assert.equal((await post(historyPath,{...selection,tabId:18})).status,400);
+    assert.equal((await post(historyPath,{...selection,expectedUrl:selectedUrl+'?another=1'})).status,400);
+    assert.deepEqual(await (await post(historyPath,selection)).json(),{runs:[]});
+    const legacyLog=join(pageMatchingRoot(root,selectedUrl),randomUUID());
+    mkdirSync(legacyLog,{recursive:true});
+    const existing={outcome:'verified',reason:'existing_value_confirmed',observedAnswer:'private-value'};
+    writeFileSync(join(legacyLog,'matching-backlog.json'),JSON.stringify({schemaVersion:1,workflow:'C3.2',entries:[
+      {question:'Email',attempts:[existing]},
+      {question:'Email/Login',attempts:[{...existing,reason:'product_readback_confirmed'},existing]},
+      {question:'City',attempts:[{outcome:'attempted',chosenAnswer:'private-value'}]}
+    ]}));
+    const historical=await (await post(historyPath,selection)).json();
+    assert.deepEqual(historical.runs[0].steps,[
+      {label:'Email',outcome:'existing',reason:'existing_value_confirmed'},
+      {label:'Email/Login',outcome:'changed',reason:'product_readback_confirmed'},
+      {label:'City',outcome:'unconfirmed',reason:'outcome_unconfirmed'}
+    ]);
+    assert.doesNotMatch(JSON.stringify(historical),/private-value/);
     const metadata=await (await post('/browser/page-resume',selection)).json();
     const hash=createHash('sha256').update(resume).digest('hex');
     const currentPage={name:'Selected.pdf',source:'selected',version:'v17',sha256:hash};
@@ -190,6 +216,12 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal((await operate('inspect',12,selectedUrl.replace('/fixture/','/Fixture/'))).status,400,'uncertain posting aliases cannot acquire the default PDF');
     assert.equal((await operate('inspect',10)).status,400,'the same posting is already bound to another tab');
     for(const op of ['fill','undo','redo'])assert.equal((await operate(op)).status,200,op);
+    const latestLog=await (await post(historyPath,selection)).json();
+    assert.deepEqual(latestLog.runs[0].steps,[
+      {label:'Email',outcome:'changed',reason:'field_changed'},
+      {label:'Password (Re-enter)',outcome:'skipped',reason:'password_field_preserved'},
+      {label:'City',outcome:'unconfirmed',reason:'value_changed_after_fill'}
+    ]);
     assert.deepEqual(observedPdfs,[resume.toString('base64')]);
     assert.equal((await operate('redo',9,selectedUrl.replace('abc','def'))).status,400,'navigated tab must be inspected again');
     assert.equal((await operate('inspect',9,'https://other.example.invalid/application')).status,400,'an unknown home for the same tab cannot silently switch to the default resume');

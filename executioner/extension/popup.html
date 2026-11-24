@@ -23,10 +23,23 @@
   <main>
     <h2 id="job">Current page</h2>
     <p id="support"></p>
-    <div id="resumes" class="resume-field" hidden>
-      <label for="resume-select">Resume</label>
-      <select id="resume-select"></select>
-      <a id="open-resume" target="_blank" rel="noopener">Open PDF</a>
+    <div id="resumes" hidden>
+      <div class="resume-field">
+        <span id="resume-label">Resume</span>
+        <button id="resume-select" class="secondary" aria-labelledby="resume-label resume-name" aria-expanded="false" aria-controls="resume-picker"><span id="resume-name"></span></button>
+      </div>
+      <section id="resume-picker" aria-label="Saved resumes" hidden>
+        <div class="resume-tools">
+          <input id="resume-search" type="search" autocomplete="off" aria-label="Search saved resumes" placeholder="Search resumes">
+          <select id="resume-sort" aria-label="Sort saved resumes">
+            <option value="name">Name A–Z</option>
+            <option value="version">Version ↓</option>
+            <option value="version-asc">Version ↑</option>
+          </select>
+        </div>
+        <ul id="resume-list" aria-label="Matching resumes"></ul>
+        <p id="no-resumes" role="status" hidden>No matching resumes.</p>
+      </section>
     </div>
     <div id="actions">
       <button id="partial" disabled>Fill current page</button>
@@ -44,5 +57,10 @@
     <span id="message-position" role="status"></span>
     <button id="next-message" class="secondary" aria-label="Next part">Next</button>
   </nav>
+  <details id="fill-log" hidden>
+    <summary>Fill log</summary>
+    <p id="fill-log-status" role="status"></p>
+    <div id="fill-log-runs"></div>
+  </details>
 </body>
 </html>

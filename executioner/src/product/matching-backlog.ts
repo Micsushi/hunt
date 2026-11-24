@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { inspectQuestionMatch } from '../form/questions/catalog.ts';
 import { normalizeCatalogText } from '../form/questions/normalize.ts';
@@ -36,6 +36,12 @@ export function createMatchingBacklog(root:string|undefined, url?:string, facts:
     for (const row of saved.entries) records.set(row.id,row);
   }
   let needsReview=[...records.values()].some(row=>row.provisional);
+  const save = (pageSteps?: FillStep[]) => {
+    if (!file || !root) return;
+    mkdirSync(root,{recursive:true,mode:0o700});
+    writePrivateFileAtomic(file,Buffer.from(JSON.stringify({schemaVersion:1,workflow,...context,
+      entries:[...records.values()],pageSteps},null,2)));
+  };
   return {
     company: context.company,
     get needsReview(){return needsReview;},
@@ -91,11 +97,88 @@ export function createMatchingBacklog(root:string|undefined, url?:string, facts:
       if (value.outcome && value.outcome!=='observed') row.attempts=[...row.attempts,{at:now,
         outcome:value.outcome,chosenAnswer:value.chosenAnswer??null,requestedQuery:value.requestedQuery??null,observedAnswer:value.observedAnswer??null,options:[...value.options],constraints:value.constraints??null,control:value.control,provisional,reason:value.reason??null}];
       records.set(id,row);
-      mkdirSync(root!,{recursive:true,mode:0o700});
-      writePrivateFileAtomic(file,Buffer.from(JSON.stringify({schemaVersion:1,workflow,...context,
-        entries:[...records.values()]},null,2)));
+      save();
+    },
+    finishPageLog(filled: string[], skipped: {label:string;reason:string}[]) {
+      if (!file || workflow !== 'C3.2') return;
+      try {
+        const steps: FillStep[] = filled.slice(0,200).map(label=>({label:fieldLabel(label),outcome:'changed',reason:'field_changed'}));
+        for (const row of skipped.slice(0,200)) steps.push(skipStep(row.label,row.reason));
+        save(steps);
+      } catch { /* Field reporting must never turn a completed fill into a retry. */ }
     },
   };
+}
+
+interface FillStep {
+  label:string;
+  outcome:'changed'|'existing'|'skipped'|'unconfirmed'|'suggested';
+  reason:string;
+}
+const skipReasons = new Set(['password_field_preserved','account_fields_preserved','optional_field','existing_value_preserved',
+  'needs_owner_answer','saved_value_conflict','address_country_conflict','postal_code_requires_review','optional_consent_skipped',
+  'required_attachment_missing','required_resume_missing','resume_control_not_identified','existing_attachment_preserved',
+  'employer_submission_disabled','button_choice_interaction_unsupported','choice_not_unique','field_changed_before_fill']);
+const uncertainReasons = new Set(['page_action_not_confirmed','value_not_accepted','value_changed_after_fill','previous_control_write_unconfirmed',
+  'required_attachment_unconfirmed','screening_choice_not_confirmed','choice_commit_or_reset_unconfirmed','resume_attachment_not_verified']);
+function fieldLabel(value:unknown) {
+  if (typeof value !== 'string' || /https?:|www\.|\S+@\S+|[a-z\d_-]{32,}|[?&](?:code|token|key)=/i.test(value)) return 'Form field';
+  if (/password|passcode/i.test(value)) return /re.enter|confirm|repeat/i.test(value)?'Password (Re-enter)':'Password';
+  return value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/gu,' ').trim().slice(0,140) || 'Form field';
+}
+function skipStep(label:unknown,reason:unknown):FillStep {
+  if (reason==='saved_value_already_present' || reason==='existing_value_confirmed') {
+    return {label:fieldLabel(label),outcome:'existing',reason:'existing_value_confirmed'};
+  }
+  if (reason==='selected_resume_already_present') return {label:fieldLabel(label),outcome:'existing',reason};
+  if (typeof reason==='string' && uncertainReasons.has(reason)) return {label:fieldLabel(label),outcome:'unconfirmed',reason};
+  return {label:fieldLabel(label),outcome:'skipped',reason:typeof reason==='string' && skipReasons.has(reason)?reason:'not_filled'};
+}
+interface LoggedAttempt {outcome?:string;reason?:string;provisional?:boolean}
+function matchingStep(question:unknown, attempts:LoggedAttempt[]):FillStep {
+  const label=fieldLabel(question), last=attempts.at(-1);
+  if (last?.outcome==='verified') {
+    const write = [...attempts].reverse().find(a=>a.outcome==='verified' && a.reason==='product_readback_confirmed');
+    if (write) return write.provisional?{label,outcome:'suggested',reason:'suggested_answer'}:{label,outcome:'changed',reason:'product_readback_confirmed'};
+    if (last.reason==='existing_value_confirmed') return {label,outcome:'existing',reason:last.reason};
+  }
+  if (last?.outcome==='unconfirmed' && last.reason && skipReasons.has(last.reason)) return skipStep(label,last.reason);
+  return {label,outcome:'unconfirmed',reason:last?.reason && uncertainReasons.has(last.reason)?last.reason:'outcome_unconfirmed'};
+}
+
+/** Return only field labels and fixed result codes. The underlying private journal contains answers. */
+export function readPageFillLog(pageRoot:string) {
+  const runs:{at:string;steps:FillStep[]}[]=[];
+  if (!existsSync(pageRoot)) return {runs};
+  const files=readdirSync(pageRoot,{withFileTypes:true}).flatMap(entry=>{
+    if (!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name)) return [];
+    const path=join(pageRoot,entry.name,'matching-backlog.json');
+    const stat=lstatSync(path,{throwIfNoEntry:false});
+    return stat?.isFile()?[{path,at:stat.mtime}]:[];
+  }).sort((a,b)=>b.at.getTime()-a.at.getTime());
+  for (const file of files) {
+    try {
+      const data=JSON.parse(readFileSync(file.path,'utf8'));
+      if (data.schemaVersion!==1 || data.workflow!=='C3.2' || !Array.isArray(data.entries)) continue;
+      const steps:FillStep[]=data.entries.slice(0,200).map((r:{question:unknown;attempts?:LoggedAttempt[]})=>
+        matchingStep(r.question,Array.isArray(r.attempts)?r.attempts:[]));
+      if (Array.isArray(data.pageSteps)) for (const row of data.pageSteps.slice(0,400)) {
+        const label=fieldLabel(row.label);
+        const step:FillStep = row.outcome==='changed'?{label,outcome:'changed',reason:'field_changed'}:skipStep(label,row.reason);
+        if (step.reason==='value_changed_after_fill') {
+          const writes=steps.filter(s=>s.label===label && (s.outcome==='changed'||s.outcome==='suggested'));
+          if (writes.length===1) steps.splice(steps.indexOf(writes[0]!),1);
+        }
+        if (steps.some(s=>s.label===label && (s.reason===step.reason ||
+          step.reason==='field_changed' && ['changed','suggested','unconfirmed'].includes(s.outcome) ||
+          step.outcome==='existing' && ['changed','suggested'].includes(s.outcome)))) continue;
+        steps.push(step);
+      }
+      runs.push({at:file.at.toISOString(),steps});
+      if (runs.length===4) break;
+    } catch { /* A single unreadable historical run must not hide the rest of the page's history. */ }
+  }
+  return {runs};
 }
 
 /** Read one page of private run journals; query data never becomes a filesystem path. */

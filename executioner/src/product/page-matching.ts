@@ -118,6 +118,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
         .map(row => row.question.replace(/[\u2009*✱]/g, '').trim())
         .filter(Boolean)
     )];
+    backlog.finishPageLog([...filled],remaining);
     return {...report, incomplete, filled: [...filled], skipped: remaining, ...(failure ? {componentFailure: failure} : {}),
       ...(reviewFields.length ? {reviewFields} : {}),
       needsOwnerReview: backlog.needsReview || incomplete};

@@ -26,7 +26,8 @@ export function observeFormDocument(attachmentControls = 'input[type=file]') {
     (passwords.some(input => input.autocomplete === 'new-password') ||
       profileName && email.some(input => ownerOf(input) === accountForm) ||
       all('button,input[type=submit]').some(button => ownerOf(button) === accountForm &&
-        /^(?:create (?:an? |your )?(?:account|profile)|sign up|register)$/i.test((button.innerText || button.value || '').trim())));
+        (/^(?:create (?:an? |your )?(?:account|profile)|sign up|register)$/i.test((button.innerText || button.value || '').trim()) ||
+          profileName && passwords.length === 2 && /^submit profile$/i.test((button.innerText || button.value || '').trim()))));
   const separateAccountForm = !!submitOwner && submitOwner !== document.body && (applicationSubmit || identity || attachment) &&
     email.some(input => ownerOf(input) === submitOwner) &&
     email.every(input => ownerOf(input) === submitOwner || accountOwners.has(ownerOf(input))) &&

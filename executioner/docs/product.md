@@ -84,14 +84,23 @@ fill recognized empty fields and supported saved-answer choices on the current
 page. It can attach the saved resume to an unambiguous resume input in the main
 document on job applications. On a general web form it uses recognized profile
 answers and leaves passwords, unrelated uploads and consent decisions to you.
+On a recognized candidate registration form, C3 can fill a separate
+**Email/Login** field from your saved contact email. You enter both passwords.
 The **Resume** dropdown shows the PDF selected for **Fill current page**. It starts
 with your default PDF or an explicit current-page C2 import for this posting.
-Choose another saved PDF to use it on this page with your current profile.
-Choose **Open PDF** to read the exact selected file in a new tab. In that
+Search or sort the saved resumes, then select a filename to use it on this page
+with your current profile. Choose **Open PDF** beside any filename to read it
+in a new tab without changing the selection. In that
 tab, **Browse saved resumes** lets you open other PDFs without changing the
 selection for Fill current page. The local full menu also has this list under
 **Profile → Resume**.
 **Prepare this job** keeps using the job's saved PDF.
+
+Open **Fill log** in the popup (**Result** on small screens) to see the four
+most recent recorded fills for the current page address. Each
+entry names the field and reports what C3 could verify, including fields that
+already matched and fields left for manual entry. Older runs show the field
+observations available at the time. The log omits field values.
 
 On BambooHR, if the form shows United States and your saved country is Canada,
 **Fill current page** preserves that selection and leaves empty State and ZIP fields

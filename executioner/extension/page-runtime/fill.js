@@ -523,8 +523,18 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       return profileRegions.get(region);
     };
-    const passwordRegions = new Set(deepQuery(document,'input[type=password]').filter(visible).map(regionFor));
+    const passwords = deepQuery(document,'input[type=password]').filter(visible);
+    const passwordRegions = new Set(passwords.map(regionFor));
     const registrationRegion = registration && passwordRegions.size===1 ? [...passwordRegions][0] : null;
+    const registrationEmail = (e,label) => registrationRegion && regionFor(e)===registrationRegion &&
+      e.tagName==='INPUT' && ['text','email'].includes(e.type) && /^e-?mail\s*\/\s*login$/.test(norm(label));
+    const acceptedProfileLabel = (e,label) => profileLabel(label) || registrationEmail(e,label);
+    if (registrationRegion && (action==='fill' || action==='status')) {
+      for (const password of passwords) {
+        const confirmation = /re[- ]?enter|confirm|repeat/i.test(rawLabelFor(password));
+        addSkip(confirmation?'Password (Re-enter)':'Password', 'password_field_preserved');
+      }
+    }
     const knownProfileControl = e => e.matches('textarea,select:not([multiple]),input:not([type]),input:is([type=text],[type=email],[type=tel],[type=url],[type=date],[type=number])') &&
       !['listbox','combobox'].includes(e.getAttribute('role'));
     const { isRequired, unresolvedAttachment } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
@@ -576,14 +586,17 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     });
     const observe = (element,label) => {
       const row = screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
-      return profileOnly(regionFor(element)) ? {...row,profileOnly:true,signature:JSON.stringify([row.signature,'profile'])} : row;
+      if (!profileOnly(regionFor(element))) return row;
+      const loginEmail = registrationEmail(element,label);
+      return {...row,profileOnly:true,...(loginEmail && {registrationEmail:true}),
+        signature:JSON.stringify([row.signature,loginEmail?'registration-email':'profile'])};
     };
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {
         if (registration && f.region!==registrationRegion || !registration && passwordRegions.has(f.region)) continue;
         if (profileOnly(f.region) && (!allowProfileForms ||
-            !(knownProfileControl(f.element) && profileLabel(f.label) || dialComposite(f.element)))) continue;
+            !(knownProfileControl(f.element) && acceptedProfileLabel(f.element,f.label) || dialComposite(f.element)))) continue;
         if (scope!=='page' && !applicationRegions.includes(f.region)) continue;
         const row=observe(f.element,f.label); rows.set(row.fieldId,row);
       }
@@ -792,7 +805,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       const personal = profileOnly(f.region);
       if (registration && f.region!==registrationRegion) continue;
       if (personal && !allowProfileForms) continue;
-      if (personal && (!knownProfileControl(e) || !profileLabel(f.label) || !matchingPlans)) {
+      if (personal && (!knownProfileControl(e) || !acceptedProfileLabel(e,f.label) || !matchingPlans)) {
         if (isRequired(e) && (e.validity?.valueMissing || e.getAttribute('aria-invalid')==='true')) {skip('needs_owner_answer');result.incomplete=true;}
         continue;
       }

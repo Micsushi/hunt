@@ -83,6 +83,32 @@ test('validated website rows appear as saved URL answers without rewriting prove
     assert.equal(await page.locator('#linkedin').inputValue(),'');
     await page.evaluate(fillVisibleFields,{action:'redo' as const,scope:'page' as const});
     assert.equal(await page.locator('#linkedin').inputValue(),'https://example.invalid/linkedin');
+
+    await page.setContent(`<form onsubmit="throw Error('Unexpected profile submit')">
+      <label>First Name<input required></label><label>Last Name<input required></label>
+      <label>Email<input id="contact" value="fixture@example.invalid" required></label>
+      <h2>Create a login to access your application</h2>
+      <label>Email/Login*<input id="login" autocomplete="username" required></label>
+      <label>Password*<input type="password" value="private-fixture" required></label>
+      <label>Password (Re-enter)*<input type="password" required></label>
+      <button>Submit Profile</button></form>`);
+    const registered=await currentPage();
+    assert.equal(await page.locator('#login').inputValue(),'fixture@example.invalid');
+    assert.ok(registered.filled.includes('Email/Login*'));
+    assert.ok(!registered.filled.includes('Email'));
+    assert.deepEqual(registered.skipped.filter(item=>item.reason==='password_field_preserved').map(item=>item.label),
+      ['Password','Password (Re-enter)']);
+    assert.doesNotMatch(JSON.stringify(registered),/private-fixture/);
+    assert.deepEqual(await page.locator('input[type=password]').evaluateAll(nodes=>nodes.map(n=>(n as HTMLInputElement).value)),['private-fixture','']);
+    await page.evaluate(fillVisibleFields,{action:'undo' as const,scope:'page' as const});
+    assert.equal(await page.locator('#login').inputValue(),'');
+    assert.equal(await page.locator('#contact').inputValue(),'fixture@example.invalid');
+    await page.locator('#login').fill('existing@example.invalid');
+    await currentPage();
+    assert.equal(await page.locator('#login').inputValue(),'existing@example.invalid');
+    await page.setContent('<form><label>Email/Login<input id="login"></label><label>Password<input type="password" autocomplete="current-password"></label><button>Sign in</button></form>');
+    await currentPage();
+    assert.equal(await page.locator('#login').inputValue(),'');
     await page.goto(url);
     await page.setContent(`<form id="job-application-form"><label>Date Available<input placeholder="mm/dd/yyyy"></label>
       <label>Desired Pay<input></label><label>Website, Blog or Portfolio<input></label><label>LinkedIn URL<input></label>

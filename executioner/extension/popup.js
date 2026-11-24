@@ -40,11 +40,83 @@ async function initializePopup() {
     if(Array.isArray(next?.resumes))for(const item of next.resumes)add(item);
     return list;
   }
+  const picker=$('resume-picker'), resumeButton=$('resume-select'), resumeSearch=$('resume-search'), resumeSort=$('resume-sort');
+  const collator=new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});
+  const resumeLabel=item=>item.version ? item.name+' · '+item.version : item.name;
+  function displayFilename(container,item){
+    const filename=document.createElement('span');
+    filename.className='resume-filename';
+    filename.textContent=item.name;
+    container.replaceChildren(filename);
+    if(item.version){
+      const version=document.createElement('span');
+      version.className='resume-version';
+      version.textContent=' · '+item.version;
+      container.append(version);
+    }
+  }
+  let pickerSignature;
+  function renderPicker(){
+    if(picker.hidden)return;
+    const query=resumeSearch.value.trim().toLocaleLowerCase();
+    const rows=resumeOptions(alternatives).filter(item=>resumeLabel(item).toLocaleLowerCase().includes(query));
+    rows.sort((a,b)=>{
+      const versionOrder=collator.compare(String(a.version||'').replace(/^v(?=\d)/i,''),String(b.version||'').replace(/^v(?=\d)/i,''));
+      if(resumeSort.value!=='name' && versionOrder)return resumeSort.value==='version' ? -versionOrder : versionOrder;
+      return collator.compare(a.name,b.name)||versionOrder;
+    });
+    const signature=JSON.stringify([resumeButton.value,rows.map(item=>[item.sha256,resumeLabel(item)])]);
+    if(signature===pickerSignature)return;
+    pickerSignature=signature;
+    $('no-resumes').hidden=rows.length!==0;
+    $('resume-list').replaceChildren(...rows.map(item=>{
+      const row=document.createElement('li'), choose=document.createElement('button'), preview=document.createElement('a');
+      const label=resumeLabel(item);
+      choose.className='secondary';
+      choose.value=item.sha256;
+      choose.title=label;
+      displayFilename(choose,item);
+      choose.setAttribute('aria-pressed',String(item.sha256===resumeButton.value));
+      choose.onclick=()=>chooseResume(item.sha256);
+      preview.textContent='Open PDF';
+      preview.setAttribute('aria-label','Open PDF: '+label);
+      preview.href='resume-preview.html?pdf='+item.sha256;
+      preview.target='_blank';
+      preview.rel='noopener';
+      row.append(choose,preview);
+      return row;
+    }));
+  }
+  function togglePicker(open){
+    picker.hidden=!open;
+    resumeButton.setAttribute('aria-expanded',String(open));
+    if(open){
+      resumeSearch.value='';
+      renderPicker();
+      resumeSearch.focus();
+    }
+  }
+  resumeButton.onclick=()=>togglePicker(picker.hidden);
+  resumeSearch.oninput=resumeSort.onchange=renderPicker;
+  $('resumes').onkeydown=event=>{
+    if(event.key==='Escape' && !picker.hidden){
+      event.preventDefault();
+      togglePicker(false);
+      resumeButton.focus();
+    }else if(!picker.hidden && (event.key==='ArrowDown'||event.key==='ArrowUp') && event.target!==resumeSort){
+      const buttons=[...$('resume-list').querySelectorAll('button')];
+      const index=buttons.indexOf(event.target.closest('li')?.querySelector('button'));
+      const next=index+(event.key==='ArrowDown'?1:-1);
+      if(buttons[next]){
+        event.preventDefault();
+        buttons[next].focus();
+      }
+    }
+  };
   function renderSelection(next, error=''){
     alternatives=next;
     const options=resumeOptions(next);
     const queued=next?.queued;
-    const select=$('resume-select');
     const prefMatch=preference?.url===tab?.url
       ? options.find(item=>item.sha256===preference.sha256 && (!preference.jobId || item.jobId===preference.jobId || item.sha256===queued?.sha256))
       : null;
@@ -55,22 +127,15 @@ async function initializePopup() {
     selection=next?(activeResume?{...next,currentPage:activeResume}:next):null;
     $('prepare-action').hidden=!next?.supportsQueue;
     $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':next?.supportsQueue?'Full application or current page':'');
-    if(options.length){
-      const signature=options.map(item=>`${item.sha256}:${item.name}:${item.version||''}`).join('|');
-      if(select.dataset.signature!==signature){
-        select.replaceChildren(...options.map(item=>{
-          const opt=document.createElement('option');
-          opt.value=item.sha256;
-          opt.textContent=item.version?`${item.name} · ${item.version}`:item.name;
-          return opt;
-        }));
-        select.dataset.signature=signature;
-      }
-      if(activeResume)select.value=activeResume.sha256;
-    }else{
-      select.replaceChildren();
-      delete select.dataset.signature;
+    resumeButton.value=activeResume?.sha256||'';
+    const title=activeResume?resumeLabel(activeResume):'';
+    if(resumeButton.title!==title){
+      resumeButton.title=title;
+      if(activeResume)displayFilename($('resume-name'),activeResume);
+      else $('resume-name').replaceChildren();
     }
+    if(activeResume)renderPicker();
+    else togglePicker(false);
     $('resumes').hidden=!options.length;
   }
   renderSelection(null);
@@ -84,13 +149,12 @@ async function initializePopup() {
     $('history').hidden=!canUndo&&!canRedo;
     countryAction.hidden=!profileCountryConflict;
     countryAction.disabled=busy||!profileCountryConflict||!serviceReady||!browserReady;
-    $('resume-select').disabled=busy||$('resume-select').options.length<=1;
-    const preview=$('open-resume');
-    if(!busy && selection?.currentPage?.sha256)preview.href='resume-preview.html?pdf='+selection.currentPage.sha256;
-    else preview.removeAttribute('href');
+    resumeButton.disabled=busy||!selection?.currentPage;
+    if(busy)togglePicker(false);
     $('connect-local').disabled=busy;$('batch').disabled=busy;
+    $('fill-log').hidden=!canPartial||!browserReady||!serviceReady;
     if(compact){
-      $('compact-nav').querySelector('[data-panel=result]').disabled=!$('status').textContent;
+      $('compact-nav').querySelector('[data-panel=result]').disabled=!$('status').textContent && $('fill-log').hidden;
     }
   }
   function setStatus({summary='', warnings=[], errors=[]}={}){
@@ -191,8 +255,8 @@ async function initializePopup() {
   new MutationObserver(()=>{
     if(compact){
       const hasResult=Boolean(statusBox.textContent);
-      $('compact-nav').querySelector('[data-panel=result]').disabled=!hasResult;
-      if(hasResult)showPanel('result');
+      $('compact-nav').querySelector('[data-panel=result]').disabled=!hasResult && $('fill-log').hidden;
+      if(hasResult && picker.hidden)showPanel('result');
       else if(document.body.dataset.panel==='result')showPanel('page');
     }
     layoutMessage(true);
@@ -200,6 +264,75 @@ async function initializePopup() {
   window.addEventListener('resize',()=>layoutMessage());
   $('previous-message').onclick=()=>{messagePage--;layoutMessage();};
   $('next-message').onclick=()=>{messagePage++;layoutMessage();};
+  const logReasons={
+    existing_value_confirmed:'Already matched the saved answer.',
+    existing_value_preserved:'Kept the existing entry.',
+    saved_value_conflict:'The existing entry differs from the saved answer.',
+    product_readback_confirmed:'Filled and checked on the page.',
+    optional_field:'Skipped this optional field.',
+    needs_owner_answer:'Needs your answer.',
+    account_fields_preserved:'Account field left for you.',
+    password_field_preserved:'Enter this password yourself.',
+    optional_consent_skipped:'Optional consent was left unchanged.',
+    address_country_conflict:'The country on the form differs from your profile.',
+    postal_code_requires_review:'Check the postal code against the country on the form.',
+    choice_not_unique:'More than one option matched.',
+    button_choice_interaction_unsupported:'C3 could not select this type of option.',
+    employer_submission_disabled:'The employer has disabled submission.',
+    required_attachment_missing:'The required file is missing.',
+    required_resume_missing:'The required resume is missing.',
+    existing_attachment_preserved:'Kept the existing attachment.',
+    resume_control_not_identified:'C3 could not identify the resume field.',
+    field_changed_before_fill:'The control changed before C3 could fill it.',
+    suggested_answer:'Review this suggested answer on the page.',
+    required_attachment_unconfirmed:'C3 could not verify the required attachment.',
+    resume_attachment_not_verified:'C3 could not verify the attached resume.',
+    value_not_accepted:'The page did not keep the intended value.',
+    previous_control_write_unconfirmed:'An earlier change could not be verified.',
+    screening_choice_not_confirmed:'The page did not confirm the choice.',
+    choice_commit_or_reset_unconfirmed:'C3 could not verify the final selection.',
+    value_changed_after_fill:'The value changed after filling.',
+    page_action_not_confirmed:'C3 could not confirm the change.',
+  };
+  const logOutcomes={changed:'Filled',existing:'Already present',skipped:'Skipped',unconfirmed:'Unconfirmed',suggested:'Suggested answer'};
+  let logRequest=0;
+  async function loadFillLog(){
+    const request=++logRequest;
+    if(!$('fill-log').open)return;
+    const box=$('fill-log-runs'),status=$('fill-log-status');
+    status.textContent='Reading fill log…';
+    box.replaceChildren();
+    try{
+      const {token}=await chrome.storage.local.get('token');
+      const response=await fetch(origin+'/browser/page-fill-log',{
+        method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},
+        body:JSON.stringify({tabId:tab.id,expectedUrl:tab.url}),redirect:'error',signal:AbortSignal.timeout(8000)
+      });
+      if(!response.ok)throw new Error();
+      const {runs}=await response.json();
+      if(request!==logRequest)return;
+      status.textContent=runs.length?'':'No recorded fills for this page.';
+      for(const [index,run] of runs.entries()){
+        const entry=document.createElement('details'), heading=document.createElement('summary'), list=document.createElement('ul');
+        entry.open=index===0;
+        heading.textContent=(index===0?'Latest fill · ':'Fill · ')+new Date(run.at).toLocaleString();
+        for(const step of run.steps){
+          const row=document.createElement('li'),label=document.createElement('strong');
+          label.textContent=step.label;
+          const outcome=logOutcomes[step.outcome]||'Unconfirmed';
+          const reason=logReasons[step.reason];
+          row.append(label,reason ? outcome+' · '+reason : outcome);
+          list.append(row);
+        }
+        entry.append(heading,list);
+        if(!run.steps.length)entry.append('No field details were recorded.');
+        box.append(entry);
+      }
+    }catch{
+      if(request===logRequest)status.textContent='Could not read the fill log. Reopen Hunt on the original page.';
+    }
+  }
+  $('fill-log').ontoggle=loadFillLog;
   async function browserReply(promise,message='The browser did not respond. Reopen C3 to retry.'){
     let timer;
     try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),15000);})]);}
@@ -292,7 +425,9 @@ async function initializePopup() {
     }
     setStatus({summary, warnings, errors});
   }
-  $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…');
+  $('partial').onclick=()=>run(async()=>{
+    try{await partial('fill');}finally{void loadFillLog();}
+  },$('partial'),'Filling page…');
   countryAction.onclick=()=>run(()=>partial('use_profile_country'),countryAction,'Updating address…');
   $('undo').onclick=()=>run(()=>partial('undo'));
   $('redo').onclick=()=>run(()=>partial('redo'));
@@ -313,18 +448,23 @@ async function initializePopup() {
     pageDocumentId=undefined;
     await loadHistory();
   }
-  $('resume-select').onchange=()=>run(async()=>{
-    const chosenSha=$('resume-select').value;
-    const isDefault=chosenSha===alternatives?.currentPage?.sha256;
-    const queued=alternatives?.queued;
-    const matchedJobId=queued?.source==='selected' && queued.sha256===chosenSha ? queued.jobId : undefined;
-    const next=!isDefault && chosenSha ? {sha256:chosenSha,...(matchedJobId&&{jobId:matchedJobId}),url:tab.url} : null;
-    if(next)await chrome.storage.session.set({[choiceKey]:next});
-    else await chrome.storage.session.remove(choiceKey);
-    preference=next;
-    renderSelection(alternatives);
-    await refreshHistory();
-  });
+  async function chooseResume(chosenSha){
+    togglePicker(false);
+    resumeButton.focus();
+    if(chosenSha===resumeButton.value)return;
+    await run(async()=>{
+      const isDefault=chosenSha===alternatives?.currentPage?.sha256;
+      const queued=alternatives?.queued;
+      const matchedJobId=queued?.source==='selected' && queued.sha256===chosenSha ? queued.jobId : undefined;
+      const next=!isDefault && chosenSha ? {sha256:chosenSha,...(matchedJobId&&{jobId:matchedJobId}),url:tab.url} : null;
+      if(next)await chrome.storage.session.set({[choiceKey]:next});
+      else await chrome.storage.session.remove(choiceKey);
+      preference=next;
+      renderSelection(alternatives);
+      await refreshHistory();
+    });
+    if(document.activeElement===document.body)resumeButton.focus();
+  }
   async function connectWithToken(token){
     if(!token)throw new Error('Open the full menu in this browser, then connect again.');
     let response;

@@ -32,13 +32,29 @@ p:empty { display: none; }
 #connection-actions button { width: 100%; min-height: 30px; font-size: 12px; padding: 4px 8px; }
 main { padding: 8px 0 0; display: flex; flex-direction: column; gap: 7px; }
 #support { margin-top: -3px; font-size: 11.5px; line-height: 15px; color: #b5c9ba; }
-.resume-field { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; }
-.resume-field label { flex: none; color: #bdcfc1; font-weight: 500; }
-.resume-field a, .pdf-preview a { color: #b4e7ce; }
-.resume-field a { white-space: nowrap; padding: 5px 0; }
-.resume-field select { flex: 1; min-width: 0; min-height: 30px; padding: 4px 8px; background: #14221a; color: #e4f2e7; border-color: #486451; font-size: 12px; cursor: pointer; text-overflow: ellipsis; }
-.resume-field select:hover:not(:disabled) { background: #19291f; border-color: #73927b; }
-.resume-field select:disabled { opacity: .65; cursor: default; }
+.resume-field { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+#resume-label { color: #bdcfc1; }
+#resume-select { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 1; min-width: 0; min-height: 30px; padding: 4px 8px; }
+#resume-select::after { content: ''; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1px 1px 0; transform: rotate(45deg); flex: none; margin-right: 2px; }
+#resume-select[aria-expanded=true]::after { transform: rotate(225deg); }
+#resume-name, #resume-list button { display: flex; align-items: baseline; overflow: hidden; min-width: 0; }
+.resume-filename, .resume-version { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resume-version { flex: none; max-width: 40%; margin-left: 3px; }
+#resumes, #resume-picker { min-width: 0; }
+#resume-picker { margin-top: 5px; padding: 5px; border: 1px solid #486451; border-radius: 6px; background: #14221a; }
+.resume-tools, #resume-list li { display: flex; align-items: center; gap: 4px; }
+.resume-tools input, .resume-tools select { min-width: 0; min-height: 30px; padding: 3px 6px; font: inherit; font-size: 12px; background: #19291f; color: #e4f2e7; border: 1px solid #486451; border-radius: 4px; }
+.resume-tools input { flex: 1; }
+#resume-list { max-height: 184px; overflow: auto; overscroll-behavior: contain; margin: 4px 0 0; list-style: none; padding: 2px; }
+#resume-list li + li { border-top: 1px solid #2b4433; }
+#resume-list button { flex: 1; min-width: 0; min-height: 30px; padding: 4px 6px; text-align: left; font-weight: 400; }
+#resume-list button[aria-pressed=true] { color: #b4e7ce; border-color: #73927b; font-weight: 600; }
+#resume-list button[aria-pressed=true]::before { content: '✓'; margin-right: 3px; }
+#resume-list a, .pdf-preview a { color: #b4e7ce; }
+#resume-list a { white-space: nowrap; padding: 4px; font-size: 12px; }
+#no-resumes { padding: 6px; }
+body[data-panel]:has(#resume-picker:not([hidden])) :is(header,#compact-nav,#job,#support,#actions,#history,#status,#message-pages,#use-profile-country) { display: none; }
+body[data-panel] #resume-list { max-height: 108px; }
 #actions { align-items: stretch; }
 #actions > * { flex: 1; }
 #prepare-action button { width: 100%; height: 100%; }
@@ -72,6 +88,16 @@ body[data-panel=result] #use-profile-country:not([hidden]) + #message-pages { ma
 .pdf-preview li { padding: 3px 0; }
 .pdf-preview iframe { width: 100%; flex: 1; border: 0; }
 .pdf-preview p { padding: 24px; font-size: 15px; }
+#fill-log { margin-top: 6px; border-top: 1px solid #2b4433; }
+#fill-log summary { padding: 5px 0; cursor: pointer; }
+#fill-log-runs { max-height: 220px; overflow-y: auto; overflow-wrap: anywhere; }
+#fill-log-runs summary { color: #bdcfc1; font-size: 12px; }
+#fill-log-runs ul { list-style: none; margin: 0; padding: 0; }
+#fill-log-runs li { padding: 4px 0; border-top: 1px solid #2b4433; }
+#fill-log-runs li strong { display: block; }
+body[data-panel=page] #fill-log { display: none; }
+body[data-panel=result]:has(#fill-log[open]) > :is(header, #status, #message-pages, #use-profile-country) { display: none; }
+body[data-panel=result] #fill-log-runs { max-height: 125px; }
 @media (forced-colors: active) {
   button, select { border: 1px solid ButtonText; }
   button:disabled, select:disabled { color: GrayText; }

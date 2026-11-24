@@ -18,7 +18,7 @@ import { writePrivateFileAtomic } from "../composition/private/s2-application-so
 import { ProductAccountState, prepareAccountUpdate, type ProductAccount } from './account-state.ts';
 import { fillWorkdayAccountCurrentPage } from './workday-sign-in.ts';
 import { fillMatchedPage, pageMatchingRoot, type MatchedPageResult } from './page-matching.ts';
-import { readMatchingBacklog } from './matching-backlog.ts';
+import { readMatchingBacklog, readPageFillLog } from './matching-backlog.ts';
 import { matchingDictionary } from '../form/questions/catalog.ts';
 import { answerDictionary } from '../deterministic/answer-equivalence.ts';
 
@@ -160,15 +160,19 @@ export async function startProductServer(options: { root?: string; port?: number
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) throw new Error('Extension reload accepts no arguments.');
         if (queue.snapshot().jobs.some(job => ['queued','running','submitting'].includes(job.status) || job.actionPending)) throw new Error('Pause active applications before reloading Hunt.');
         result = await bridge.reloadExtension();
-      } else if (path === '/browser/page-resume') {
+      } else if (path === '/browser/page-resume' || path === '/browser/page-fill-log') {
+        const fillLog=path==='/browser/page-fill-log';
         if (!body || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || !supportsCurrentPage(body.expectedUrl,origin) ||
-          Object.keys(body).some(key=>!['tabId','expectedUrl','workflow','sha256','currentPageJobId'].includes(key)) ||
+          Object.keys(body).some(key=>!(fillLog?['tabId','expectedUrl']:['tabId','expectedUrl','workflow','sha256','currentPageJobId']).includes(key)) ||
           (body.workflow !== undefined || body.sha256 !== undefined) && (!['currentPage','queued'].includes(body.workflow) || typeof body.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.sha256))) {
-          throw new Error('Choose a current tab and a valid resume.');
+          throw new Error(fillLog?'Choose the current application tab to read its fill log.':'Choose a current tab and a valid resume.');
         }
         const tabs = await bridge.call('pageTabs');
         if (!Array.isArray(tabs) || !tabs.some(tab => tab.tabId === body.tabId && tab.url === body.expectedUrl && !tab.discarded)) {
-          throw new Error('The original tab changed. Reopen Hunt to check its resume.');
+          throw new Error(fillLog?'The original tab changed. Reopen Hunt to check its fill log.':'The original tab changed. Reopen Hunt to check its resume.');
+        }
+        if (fillLog) {
+          response.end(JSON.stringify(readPageFillLog(pageMatchingRoot(root,body.expectedUrl))));return;
         }
         const url = new URL(body.expectedUrl);
         queue.assertAvailableLink(url.href,undefined,true);

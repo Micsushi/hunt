@@ -28,6 +28,7 @@ function provinceResidenceAnswer(question: string, canadianRegion: string | unde
 
 export interface PageQuestion extends MatchingObservation {
   profileOnly?: boolean;
+  registrationEmail?: boolean;
   resumableProfileQuery?:boolean;
   state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple' | 'rippling-location' | 'smartrecruiters-screening-checkbox'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
@@ -99,7 +100,7 @@ export function createPageAnswerPlanner(
           !protectedQuestionCategory(row.question, undefined, row.options)) {
         const saved = facts.filter(f => f.lane === 'live_owner_fact' &&
           (f.provenance === 'owner_provided' || f.provenance === 'resume_verified'));
-        let answer = profileFieldValue(row.question, saved);
+        let answer = profileFieldValue(row.profileOnly && row.registrationEmail && row.control==='text' ? 'Email' : row.question, saved);
         if (!row.profileOnly && !answer) {
           const id = inspectQuestionMatch(row.question, employerNames).factId;
           if (id === 'salary_expectations' || id === 'earliest_start_date') {
