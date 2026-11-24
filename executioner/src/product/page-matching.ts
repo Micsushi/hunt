@@ -10,6 +10,7 @@ export type { PageAnswerPlan, PageQuestion } from './page-answer-planner.ts';
 export interface FrameReport { frameId: string; status: string; error?: string }
 export interface MatchedPageResult {
   frames?: FrameReport[];
+  requiredIssues?: {fieldId:string;frameId?:string;label:string;section?:string;reason:'required_empty'|'required_invalid'|'required_unconfirmed'}[];
   incomplete?: boolean;
   filled:string[]; skipped:{label:string;reason:string;fieldId?:string;frameId?:string;componentFailure?:ComponentFailure}[]; componentFailure?:ComponentFailure; matching?:PageQuestion[];
   resume?:'verified'|'missing'|'unverified'|'optional'; canUndo:boolean; canRedo:boolean; [key:string]:unknown;
@@ -64,6 +65,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
           ...(observed.observation !== undefined && {observation: observed.observation}),
           ...(typeof observed.profileCountryConflict === 'boolean' && {profileCountryConflict: observed.profileCountryConflict}),
           ...(observed.frames !== undefined && {frames: observed.frames}),
+          ...(observed.requiredIssues !== undefined && {requiredIssues: observed.requiredIssues}),
           ...(observed.componentFailure && {componentFailure: observed.componentFailure}),
           canUndo: observed.canUndo,
           canRedo: observed.canRedo,
@@ -118,7 +120,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
         .map(row => row.question.replace(/[\u2009*✱]/g, '').trim())
         .filter(Boolean)
     )];
-    backlog.finishPageLog([...filled],remaining);
+    backlog.finishPageLog([...filled],remaining,result.requiredIssues);
     return {...report, incomplete, filled: [...filled], skipped: remaining, ...(failure ? {componentFailure: failure} : {}),
       ...(reviewFields.length ? {reviewFields} : {}),
       needsOwnerReview: backlog.needsReview || incomplete};

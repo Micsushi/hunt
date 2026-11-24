@@ -94,16 +94,83 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     const attachmentIds=['fileid','uploadid','attachmentid'];
     const names=new Set([...attachmentIds,...attachmentIds.map(suffix=>compact(label)+suffix)]);
     const pending='[role=progressbar],progress,[aria-busy=true],[data-upload-state=pending],[data-upload-state=uploading]';
+    const target=nativeShown?input:boundLabels[0]??owner;
     if (input.validity.customError || input.getAttribute('aria-invalid')==='true' ||
         owner.matches(pending) && shown(owner) || deepQuery(owner,pending).some(shown)) {
-      return {label,reason:'required_attachment_unconfirmed'};
+      return {label,target,reason:'required_attachment_unconfirmed'};
     }
     const completed='[data-upload-state=success]';
     const retainedId=node=>names.has(compact(node.name)) && !/^(?:|0+|-1|null|undefined|none|false)$/i.test(node.value.trim());
     if (input.files?.length || deepQuery(owner,'input[type=hidden][name]').some(retainedId) ||
         owner.matches(completed) && shown(owner) || deepQuery(owner,completed).some(shown)) return;
     const emptyNotice=deepQuery(owner,'span,p,[role=status]').some(node=>shown(node) && /^no files? selected$/i.test(node.innerText.trim()));
-    return {label,reason:nativeShown || emptyNotice ? 'required_attachment_missing' : 'required_attachment_unconfirmed'};
+    return {label,target,reason:nativeShown || emptyNotice ? 'required_attachment_missing' : 'required_attachment_unconfirmed'};
   };
-  return { isRequired, unresolvedAttachment };
+  // The reviewer also sees controls the filler intentionally excludes, including
+  // account fields. Only a label, a reason and an opaque element id leave the frame.
+  function requiredIssues(root,{visible,labelFor,externalAttachment,selectedChoice,inScope}) {
+    const ids=state.requiredIssueIds ??= new WeakMap();
+    const targets=new Map(), issues=[];
+    const controls=deepQuery(root,'input,select,textarea,button[aria-haspopup=listbox],[role=combobox],[role=listbox],[role=radiogroup],[role=checkbox],[role=switch],[role=textbox],[contenteditable=true]');
+    const shown=e=>visible(e) && !composedClosest(e,'[hidden],[aria-hidden=true],[inert]') && e.checkVisibility({opacityProperty:true,visibilityProperty:true});
+    const placeholder=text=>/^(?:(?:please\s+)?(?:select|choose)(?:\s+(?:(?:a|an|your|one)\s+)?(?:country|state|province|state\/province|region|option|answer|item|one))?|[-–—]+|select\.\.\.)$/i.test(text.trim());
+    const issueFor=e=>{
+      if (!e.isConnected || !inScope(e) || e.matches(':disabled') || e.readOnly || composedClosest(e,'[inert],[aria-disabled=true]') ||
+          ['hidden','submit','reset','button','image'].includes(e.type) && !e.matches('[role=checkbox],[role=switch],[role=combobox],[aria-haspopup=listbox]')) return;
+      const attachment=e.type==='file' && unresolvedAttachment(e);
+      const target=shown(e)?e:e.type==='file' && [attachment?.target,...e.labels??[],fileBinding(e)?.widget].find(node=>node && shown(node));
+      if (!target || (!attachment && !isRequired(e))) return;
+      let label=attachment?.label || labelFor(e) || 'Required field';
+      if(e.type==='password') label=/re[- ]?enter|confirm|repeat/i.test(label)?'Password (Re-enter)':'Password';
+      const role=e.getAttribute('role');
+      let reason;
+      if(attachment) reason=attachment.reason==='required_attachment_missing'?'required_empty':'required_unconfirmed';
+      else if(e.type==='file' && (otherAttachment(label) || externalAttachment(e))) return;
+      else if(e.type==='radio'){
+        const group=composedClosest(e,'[role=radiogroup],fieldset');
+        if(group?.matches('[role=radiogroup][aria-required=true]'))return;
+        const radios=e.name?controls.filter(other=>other.type==='radio' && other.name===e.name && other.form===e.form && other.getRootNode()===e.getRootNode()):[e];
+        if(radios.some(other=>other.checked) || radios.find(other=>shown(other) && !other.matches(':disabled') && isRequired(other))!==e)return;
+        label=group?.querySelector('legend')?.textContent || group?.getAttribute('aria-label') || label;
+        reason='required_empty';
+      } else if(e.validity?.valueMissing) reason='required_empty';
+      else if(e.getAttribute('aria-invalid')==='true' || e.willValidate && !e.validity.valid) reason='required_invalid';
+      else if(e.tagName==='SELECT'){
+        if(![...e.selectedOptions].some(o=>o.value.trim() && !placeholder(o.textContent)))reason='required_empty';
+      } else if(e.type==='file'){if(!e.files?.length)reason='required_empty';}
+      else if(e.type==='password'){
+        // Native validity above reports emptiness without reading the secret.
+        if(!e.required)reason=e.matches(':placeholder-shown')?'required_empty':'required_unconfirmed';
+      }
+      else if(e.type==='checkbox' || role==='checkbox' || role==='switch'){if(!(e.checked || e.getAttribute('aria-checked')==='true'))reason='required_empty';}
+      else if(role==='radiogroup'){if(!e.querySelector('input[type=radio]:checked,[role=radio][aria-checked=true]'))reason='required_empty';}
+      else if(role==='listbox' || role==='combobox' || e.matches('[aria-haspopup=listbox]')){
+        if(!selectedChoice(e,label) && !e.querySelector('[role=option][aria-selected=true]'))reason='required_unconfirmed';
+      } else if(!String(e.value??e.textContent??'').trim())reason='required_empty';
+      if(reason){
+        label=String(label).replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g,' ').replace(/\s*[✱*]\s*$/,'').trim();
+        if(/https?:|www\.|\S+@\S+|[a-z\d_-]{32,}|[?&](?:code|token|key)=/i.test(label))label='Required field';
+        label=label.slice(0,140)||'Required field';
+        const legend=composedClosest(e,'fieldset')?.querySelector(':scope > legend');
+        let section;
+        if(legend && shown(legend) && !legend.querySelector('input,select,textarea,button,a,iframe,[tabindex],[role],[contenteditable]')){
+          const text=legend.textContent.trim();
+          if(text && text.length<=70 && text.toLowerCase()!==label.toLowerCase() &&
+              !/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]|https?:|www\.|\S+@\S+|[a-z\d_-]{32,}|[?&](?:code|token|key)=/i.test(text))section=text;
+        }
+        return {target,reason,label,section};
+      }
+    };
+    for(const control of controls){
+      const issue=issueFor(control);
+      if(!issue)continue;
+      if(ids.get(control)?.label!==issue.label || ids.get(control)?.section!==issue.section)ids.set(control,{label:issue.label,section:issue.section,id:crypto.randomUUID()});
+      const fieldId=ids.get(control).id;
+      issues.push({fieldId,label:issue.label,reason:issue.reason,...(issue.section && {section:issue.section})});
+      targets.set(fieldId,()=>{const now=issueFor(control);return now?.target===issue.target && now.label===issue.label && now.section===issue.section ? now.target : null;});
+    }
+    state.requiredIssueTargets=targets;
+    return issues;
+  }
+  return { isRequired, unresolvedAttachment, requiredIssues };
 }

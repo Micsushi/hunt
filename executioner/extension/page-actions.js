@@ -20,6 +20,7 @@ const pageErrors = new Set([
   'The page action expired. Inspect the draft before retrying.',
   'This frame could not complete the page action. Inspect the draft before retrying.',
   'This page could not be read. Inspect the application before retrying.',
+  'This field changed. Reopen Hunt to review the current page.',
 ]);
 const httpsPage = value => {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.port; }
@@ -121,7 +122,7 @@ export async function pageAction(params, attached, workspaceOrigin) {
   const checkDeadline = () => { if (Date.now() >= expiresAt) throw new Error('The page action expired. Inspect the draft before retrying.'); };
   const { tabId, expectedUrl, documentId, operation } = params;
   const useProfileCountry = operation === 'use_profile_country';
-  if (!Number.isSafeInteger(tabId) || tabId < 1 || !supportsCurrentPage(expectedUrl, workspaceOrigin) || !['inspect','fill','undo','redo','use_profile_country'].includes(operation)) throw new Error('Choose a supported form tab and page action.');
+  if (!Number.isSafeInteger(tabId) || tabId < 1 || !supportsCurrentPage(expectedUrl, workspaceOrigin) || !['inspect','fill','undo','redo','use_profile_country','reveal'].includes(operation)) throw new Error('Choose a supported form tab and page action.');
   if (operation !== 'inspect' && (typeof documentId !== 'string' || !documentId)) throw new Error('Inspect this page before changing fields.');
   if (attached.has(tabId) || pageActionTabs.has(tabId)) throw new Error('C3 is already operating this tab. Wait for it to finish.');
   pageActionTabs.add(tabId);
@@ -140,6 +141,26 @@ export async function pageAction(params, attached, workspaceOrigin) {
     const frames = framesIn(tree.frameTree), binding = await documentKey(frames);
     checkDeadline();
     if (root.url !== expectedUrl || operation !== 'inspect' && binding !== documentId) throw new Error('The page changed. Inspect it again before filling.');
+    if(operation==='reveal'){
+      const frame=frames.find(item=>item.id===params.frameId);
+      if(!frame || typeof params.fieldId!=='string' || !/^[a-f0-9-]{36}$/.test(params.fieldId) ||
+          !supportsCurrentPage(frame.url,workspaceOrigin) || securityWidgetFrame(frame.url)) throw new Error('This field changed. Reopen Hunt to review the current page.');
+      const {executionContextId}=await send('Page.createIsolatedWorld',{frameId:frame.id,worldName:pageFillWorld});
+      if(await documentKey(framesIn((await send('Page.getFrameTree')).frameTree))!==binding)throw new Error('The page changed during this action.');
+      checkDeadline();
+      const revealed=await send('Runtime.callFunctionOn',{executionContextId,returnByValue:true,
+        functionDeclaration:`function(url,id) {
+          if(location.href!==url)return false;
+          const field=globalThis.__huntC3PartialFill?.requiredIssueTargets?.get(id)?.();
+          if(!field?.isConnected)return false;
+          // Explicit reveal leaves focus and open editors untouched.
+          field.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+          field.animate([{outline:'3px solid #185dd0',outlineOffset:'2px'},{outline:'3px solid #185dd0',outlineOffset:'2px'}],1800);
+          return true;
+        }`,arguments:[{value:frame.url},{value:params.fieldId}]});
+      if(revealed.result?.value!==true)throw new Error('This field changed. Reopen Hunt to review the current page.');
+      return {ok:true};
+    }
     const target=(await chrome.debugger.getTargets()).find(target=>target.tabId===tabId);
     if(!target)throw new Error('This page could not be read. Inspect the application before retrying.');
     restoreViewport = await preparePageViewport(send,viewportOwnership(target.id));
@@ -218,6 +239,7 @@ export async function pageAction(params, attached, workspaceOrigin) {
       matching:completed.flatMap(result=>(result.matching??[]).map(row=>({...row,frameId:result.frameId}))),
       ...(operation==='inspect'?{navigationDiagnostics:completed.filter(result=>result.navigationDiagnostics).map(result=>({frameId:result.frameId,...result.navigationDiagnostics}))}:{}),
       filled:completed.flatMap(result=>result.filled || []),skipped:completed.flatMap(result=>(result.skipped || []).map(row=>row.fieldId?{...row,frameId:result.frameId}:row)),
+      requiredIssues:completed.flatMap(result=>(result.requiredIssues || []).map(issue=>({...issue,frameId:result.frameId}))),
       canUndo:completed.some(result=>result.canUndo),canRedo:completed.some(result=>result.canRedo),
       frames:results.map(({frameId,status,error})=>({frameId,status,...(error?{error}: {})}))};
   } catch (error) {

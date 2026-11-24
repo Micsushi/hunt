@@ -253,6 +253,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     })().then(result=>respond({ok:true,result})).catch(error=>respond({ok:false,error:error.message}));
     return true;
   }
+  if (message.action === 'revealIssue' && sender.url === chrome.runtime.getURL('popup.html')) {
+    const {tabId,expectedUrl,documentId,frameId,fieldId}=message;
+    pageAction({operation:'reveal',tabId,expectedUrl,documentId,frameId,fieldId},attached,origin)
+      .then(()=>respond({ok:true})).catch(error=>respond({ok:false,error:error.message}));
+    return true;
+  }
   if (message.action === 'connect') { connect().then(() => respond({ ok: true })).catch(() => respond({ ok: false, error: 'Could not connect to C3.' })); return true; }
 });
 chrome.runtime.onStartup.addListener(connect);

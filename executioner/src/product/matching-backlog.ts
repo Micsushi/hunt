@@ -36,11 +36,11 @@ export function createMatchingBacklog(root:string|undefined, url?:string, facts:
     for (const row of saved.entries) records.set(row.id,row);
   }
   let needsReview=[...records.values()].some(row=>row.provisional);
-  const save = (pageSteps?: FillStep[]) => {
+  const save = (pageSteps?: FillStep[],pageRequired?: {label:string;reason:string}[]) => {
     if (!file || !root) return;
     mkdirSync(root,{recursive:true,mode:0o700});
     writePrivateFileAtomic(file,Buffer.from(JSON.stringify({schemaVersion:1,workflow,...context,
-      entries:[...records.values()],pageSteps},null,2)));
+      entries:[...records.values()],pageSteps,pageRequired},null,2)));
   };
   return {
     company: context.company,
@@ -99,12 +99,12 @@ export function createMatchingBacklog(root:string|undefined, url?:string, facts:
       records.set(id,row);
       save();
     },
-    finishPageLog(filled: string[], skipped: {label:string;reason:string}[]) {
+    finishPageLog(filled: string[], skipped: {label:string;reason:string}[], required?: {label:string;reason:string}[]) {
       if (!file || workflow !== 'C3.2') return;
       try {
         const steps: FillStep[] = filled.slice(0,200).map(label=>({label:fieldLabel(label),outcome:'changed',reason:'field_changed'}));
         for (const row of skipped.slice(0,200)) steps.push(skipStep(row.label,row.reason));
-        save(steps);
+        save(steps,required?.slice(0,200).filter(i=>requirementCodes.has(i.reason)).map(i=>({label:fieldLabel(i.label),reason:i.reason})));
       } catch { /* Field reporting must never turn a completed fill into a retry. */ }
     },
   };
@@ -114,7 +114,9 @@ interface FillStep {
   label:string;
   outcome:'changed'|'existing'|'skipped'|'unconfirmed'|'suggested';
   reason:string;
+  requirement?:string;
 }
+const requirementCodes=new Set(['required_empty','required_invalid','required_unconfirmed']);
 const skipReasons = new Set(['password_field_preserved','account_fields_preserved','optional_field','existing_value_preserved',
   'needs_owner_answer','saved_value_conflict','address_country_conflict','postal_code_requires_review','optional_consent_skipped',
   'required_attachment_missing','required_resume_missing','resume_control_not_identified','existing_attachment_preserved',
@@ -146,10 +148,8 @@ function matchingStep(question:unknown, attempts:LoggedAttempt[]):FillStep {
   return {label,outcome:'unconfirmed',reason:last?.reason && uncertainReasons.has(last.reason)?last.reason:'outcome_unconfirmed'};
 }
 
-/** Return only field labels and fixed result codes. The underlying private journal contains answers. */
-export function readPageFillLog(pageRoot:string) {
-  const runs:{at:string;steps:FillStep[]}[]=[];
-  if (!existsSync(pageRoot)) return {runs};
+function *pageJournals(pageRoot:string) {
+  if (!lstatSync(pageRoot,{throwIfNoEntry:false})?.isDirectory()) return;
   const files=readdirSync(pageRoot,{withFileTypes:true}).flatMap(entry=>{
     if (!entry.isDirectory() || !/^[a-f0-9-]{36}$/.test(entry.name)) return [];
     const path=join(pageRoot,entry.name,'matching-backlog.json');
@@ -160,6 +160,31 @@ export function readPageFillLog(pageRoot:string) {
     try {
       const data=JSON.parse(readFileSync(file.path,'utf8'));
       if (data.schemaVersion!==1 || data.workflow!=='C3.2' || !Array.isArray(data.entries)) continue;
+      yield {at:file.at.toISOString(),data};
+    } catch { /* Continue past an unreadable historical run. */ }
+  }
+}
+
+export function listFillHistoryPages(root:string) {
+  const base=join(root,'learning');
+  if (!existsSync(base)) return [];
+  return readdirSync(base,{withFileTypes:true}).flatMap(entry=>{
+    if (!entry.isDirectory() || !/^page-[a-f0-9]{24}$/.test(entry.name)) return [];
+    const latest=pageJournals(join(base,entry.name)).next().value;
+    if (!latest) return [];
+    // Page paths, queries and fragments may contain sign-in codes. Only show the site and a numeric posting ID.
+    const url=typeof latest.data.url==='string'?URL.parse(latest.data.url):null;
+    const site=url && ['https:','http:'].includes(url.protocol) ? url.hostname : 'Saved page';
+    const job=url?.pathname.match(/\/jobs?\/(\d{1,15})(?:\/|$)/i)?.[1];
+    return [{id:entry.name.slice(5),label:job ? site+' · Job '+job : site,at:latest.at}];
+  }).sort((a,b)=>b.at.localeCompare(a.at));
+}
+
+/** Return only field labels and fixed result codes. The underlying private journal contains answers. */
+export function readPageFillLog(pageRoot:string) {
+  const runs:{at:string;steps:FillStep[]}[]=[];
+  for (const {at,data} of pageJournals(pageRoot)) {
+    try {
       const steps:FillStep[]=data.entries.slice(0,200).map((r:{question:unknown;attempts?:LoggedAttempt[]})=>
         matchingStep(r.question,Array.isArray(r.attempts)?r.attempts:[]));
       if (Array.isArray(data.pageSteps)) for (const row of data.pageSteps.slice(0,400)) {
@@ -174,7 +199,23 @@ export function readPageFillLog(pageRoot:string) {
           step.outcome==='existing' && ['changed','suggested'].includes(s.outcome)))) continue;
         steps.push(step);
       }
-      runs.push({at:file.at.toISOString(),steps});
+      if(Array.isArray(data.pageRequired))for(const issue of data.pageRequired.slice(0,200)){
+        if(!requirementCodes.has(issue?.reason))continue;
+        const label=fieldLabel(issue.label);
+        const normalized=(value:string)=>value.replace(/\s*[✱*]\s*$/,'').trim();
+        const matches=steps.filter(s=>normalized(s.label)===normalized(label));
+        // Keep the recorded reason for a deliberate skip (such as a password).
+        // If several controls shared a label we cannot attribute a stale write.
+        const step=matches.find(s=>s.requirement===issue.reason) ?? (matches.length===1?matches[0]:undefined);
+        if(step){
+          step.requirement=issue.reason;
+          if(['changed','suggested','existing'].includes(step.outcome)){
+            step.outcome='unconfirmed';
+            step.reason='outcome_unconfirmed';
+          }
+        }else steps.push({label,outcome:issue.reason==='required_empty'?'skipped':'unconfirmed',reason:issue.reason,requirement:issue.reason});
+      }
+      runs.push({at,steps});
       if (runs.length===4) break;
     } catch { /* A single unreadable historical run must not hide the rest of the page's history. */ }
   }

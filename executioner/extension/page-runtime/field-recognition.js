@@ -21,7 +21,7 @@ export function createFieldRecognition({ addressGroupLabel, wrappedUploadTitle, 
       const inline=element.type==='file' && inlineUploadLabel(element);
       if (inline) return inline.title;
       const copy = l.cloneNode(true); copy.querySelectorAll('input,textarea,select,button').forEach(e => e.remove()); return copy.textContent;
-    }).join(' ').trim() || addressGroupLabel(element,norm) || ({'given-name':'First name','family-name':'Last name',name:'Full name',email:'Email',tel:'Phone','address-line1':'Address line 1','address-line2':'Address line 2','address-level2':'City','address-level1':'State','postal-code':'Postal code','country-name':'Country'}[element.autocomplete]) || element.name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ') || element.placeholder || '';
+    }).join(' ').trim() || addressGroupLabel(element,norm) || ({'given-name':'First name','family-name':'Last name',name:'Full name',email:'Email',tel:'Phone','address-line1':'Address line 1','address-line2':'Address line 2','address-level2':'City','address-level1':'State','postal-code':'Postal code','country-name':'Country'}[element.autocomplete]) || element.name?.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ') || element.placeholder || '';
   };
   const labelFor = element => element.getAttribute('data-hunt-question-context') ?? rawLabelFor(element);
   const resumeLabel = text => uploadLabelKind(text)==='resume';

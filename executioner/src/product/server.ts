@@ -18,7 +18,7 @@ import { writePrivateFileAtomic } from "../composition/private/s2-application-so
 import { ProductAccountState, prepareAccountUpdate, type ProductAccount } from './account-state.ts';
 import { fillWorkdayAccountCurrentPage } from './workday-sign-in.ts';
 import { fillMatchedPage, pageMatchingRoot, type MatchedPageResult } from './page-matching.ts';
-import { readMatchingBacklog, readPageFillLog } from './matching-backlog.ts';
+import { readMatchingBacklog, readPageFillLog, listFillHistoryPages } from './matching-backlog.ts';
 import { matchingDictionary } from '../form/questions/catalog.ts';
 import { answerDictionary } from '../deterministic/answer-equivalence.ts';
 
@@ -118,6 +118,13 @@ export async function startProductServer(options: { root?: string; port?: number
     if (!authenticate(request.headers.authorization)) { response.writeHead(401).end(JSON.stringify({ error: "Connect with your C3 pairing key." })); return; }
     response.setHeader("Content-Type", "application/json");
     try {
+      if (request.method === 'GET' && path === '/fill-history') {
+        response.end(JSON.stringify(listFillHistoryPages(root)));return;
+      }
+      if (request.method === 'GET' && /^\/fill-history\/[a-f0-9]{24}$/.test(path)) {
+        const id=path.slice('/fill-history/'.length);
+        response.end(JSON.stringify(readPageFillLog(join(root,'learning','page-'+id))));return;
+      }
       if (request.method === 'GET' && path === '/resumes') {
         response.end(JSON.stringify(queue.availableResumes()));return;
       }

@@ -10,7 +10,7 @@ import {startProductServer} from '../../src/product/server.ts';
 import {fixtureApplicantProfile} from './fixture.ts';
 import {bambooAddressForm} from './bamboo-address-fixture.ts';
 
-test('actual popup transport rejects synthetic profiles and keeps queued and current-page resumes independent', {timeout:90000},async()=>{
+test('actual popup transport rejects synthetic profiles and keeps queued and current-page resumes independent', {timeout:150000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-popup-safety-'));
   const service=await startProductServer({root:join(root,'service'),port:0});
   const token=readFileSync(service.tokenPath,'utf8').trim();
@@ -34,6 +34,30 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const openPopup=async()=>{
       await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
       return (await Promise.all([context!.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]))[0];
+    };
+    const runPopupAction=async(view:typeof popup,action:string)=>{
+      if(await view.locator('#back-to-fill').isVisible())await view.locator('#back-to-fill').click();
+      if(['undo','redo','fill'].includes(action) && await view.locator('#other-actions').isHidden())await view.locator('#more-actions').click();
+      await view.locator('#'+action).click();
+      await view.locator('#batch:not(:disabled)').waitFor();
+    };
+    const issueMessages=async(view:typeof popup)=>{
+      await view.locator('#issue-view').waitFor();
+      const previous=view.locator('#previous-message'),next=view.locator('#next-message');
+      while(await previous.isVisible() && await previous.isEnabled())await previous.click();
+      const rows=[await view.locator('#issue-description').innerText()];
+      while(await next.isVisible() && await next.isEnabled()){
+        await next.click();rows.push(await view.locator('#issue-description').innerText());
+      }
+      return rows;
+    };
+    const findIssue=async(view:typeof popup,message:RegExp)=>{
+      const body=view.locator('#issue-description');
+      await body.waitFor();
+      const previous=view.locator('#previous-message'),next=view.locator('#next-message');
+      while(!message.test(await body.innerText()) && await previous.isVisible() && await previous.isEnabled())await previous.click();
+      while(!message.test(await body.innerText()) && await next.isVisible() && await next.isEnabled())await next.click();
+      assert.match(await body.innerText(),message);
     };
     const send=(operation:string,documentId?:string,expectedUrl=url)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage({action:'pageAction',...args,expiresAt:Date.now()+12000}),{operation,documentId,tabId,expectedUrl});
     const inspect=await send('inspect');assert.equal(inspect.ok,true);
@@ -166,16 +190,10 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.equal(await damaged.locator('#resume-list a').count(),1,'a single PDF remains available to open');
     await damaged.getByRole('searchbox',{name:'Search saved resumes'}).press('Escape');
     await damaged.locator('#partial').click();
-    await damaged.locator('#undo:not(:disabled)').waitFor();
-    await damaged.locator('#fill-log > summary').click();
-    const latestLog=damaged.locator('#fill-log-runs details').first();
-    await latestLog.getByText('First name',{exact:true}).waitFor();
-    assert.match(await latestLog.innerText(),/Filled/);
-    assert.doesNotMatch(await latestLog.innerText(),/fixture@example\.invalid|%PDF/);
-    await damaged.locator('#fill-log > summary').click();
+    await damaged.locator('#issue-view').waitFor();
+    assert.equal(await damaged.locator('#fill-log').count(),0);
     assert.equal(await nativeFile.evaluate(async(e:HTMLInputElement)=>btoa(await e.files![0]!.text())),resume);
-    await damaged.locator('#undo').click();
-    await damaged.locator('#redo:not(:disabled)').waitFor();
+    await runPopupAction(damaged,'undo');
     await damaged.close();
     writeFileSync(inputFile,before);
     const allowed=await send('fill',inspect.result.documentId);assert.equal(allowed.ok,true,JSON.stringify(allowed));
@@ -193,6 +211,7 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.equal(undone.ok,true,JSON.stringify(undone));
     assert.equal(reportsDisabled(undone),true);
     assert.equal(undone.result.incomplete,false,'the successful replay is separate from submission readiness');
+    assert.equal(undone.result.requiredIssues.some((issue:{label:string})=>/first name/i.test(issue.label)),true,'Undo leaves the required name empty');
     assert.equal(reportsDisabled(await send('inspect')),true);
     assert.equal(undone.result.canRedo,true);
     assert.equal(await page.locator('input').first().inputValue(),'');
@@ -202,10 +221,10 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
     const view=await openPopup();
     const warning='The employer still has submission disabled.';
-    await view.locator('#status').filter({hasText:warning}).waitFor();
-    for(const [action,verb] of [['undo','undone'],['redo','restored']]) {
-      await view.locator('#'+action).click();
-      await view.locator('#status').filter({hasText:'field changes '+verb+'.'}).filter({hasText:warning}).waitFor();
+    await findIssue(view,/The employer still has submission disabled/);
+    for(const action of ['undo','redo']){
+      await runPopupAction(view,action);
+      assert.ok((await issueMessages(view)).some(row=>row.includes(warning)));
     }
     await view.close();
     await submit.evaluate((button:HTMLButtonElement)=>{button.disabled=false;});
@@ -240,40 +259,52 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
       <button>Submit application</button></form>`}));
     await page.goto(attachmentsUrl);
     const attachments=await openPopup();
-    const status=attachments.locator('#status'), resumeInput=page.locator('input[type=file]').first();
+    const resumeInput=page.locator('input[type=file]').first();
     const transcript=page.getByLabel('Transcript',{exact:true});
     const resumeSelect2=attachments.locator('#resume-select');
     const defaultDigest=createHash('sha256').update(Buffer.from(resume,'base64')).digest('hex');
     await resumeSelect2.waitFor();
     assert.match(await resumeSelect2.innerText(),/Default resume/);
     assert.equal(await resumeSelect2.getAttribute('value'),defaultDigest);
-    const requiredTranscript='The required transcript is missing.';
-    await status.filter({hasText:'The required resume field is empty.'}).filter({hasText:requiredTranscript}).waitFor();
+    assert.equal(await attachments.locator('#issue-view').isVisible(),false,'fresh popup shows no pre-fill issues');
     for(const [action,message] of [
-      ['partial','The local file picker matches the selected PDF. Employer contents unverified.'],
-      ['undo','The required resume field is empty.'],
+      ['partial','Transcript'],
+      ['undo','Resume'],
       ['redo','The local resume picker contains a file.']
-    ]) {
-      await attachments.locator('#'+action).click();
-      await status.filter({hasText:message!}).filter({hasText:requiredTranscript}).waitFor();
+    ]){
+      await runPopupAction(attachments,action!);
+      const issues=(await issueMessages(attachments)).join(' ');
+      assert.match(issues,/Transcript/i);
+      assert.ok(issues.includes(message!),issues);
       assert.equal(await transcript.evaluate((e:HTMLInputElement)=>e.files!.length),0);
       assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files!.length),action==='undo'?0:1);
     }
     service.queue.configure(personal,selected);
     const selectedDigest=createHash('sha256').update(Buffer.from(selected,'base64')).digest('hex');
     await attachments.waitForFunction(digest=>document.querySelector<HTMLButtonElement>('#resume-select')?.value===digest,selectedDigest);
-    await attachments.locator('#partial').click();
-    await status.filter({hasText:'Your selected PDF differs from the earlier resume selection'}).filter({hasText:requiredTranscript}).waitFor();
-    assert.doesNotMatch(await status.innerText(),/picker matches the selected PDF/);
+    await runPopupAction(attachments,'partial');
+    const conflictIssues=(await issueMessages(attachments)).join(' ');
+    assert.match(conflictIssues,/Your selected PDF differs from the earlier resume selection/);
+    assert.match(conflictIssues,/Transcript/i);
+    assert.doesNotMatch(conflictIssues,/picker matches the selected PDF/);
     assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files![0]!.text()),Buffer.from(resume,'base64').toString());
+    await findIssue(attachments,/Transcript/i);
+    await attachments.getByRole('button',{name:'Show field'}).click();
+    await page.waitForFunction(()=>document.querySelectorAll('input[type=file]')[1]?.getAnimations().length);
+    await transcript.setInputFiles({name:'Transcript.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-manual-review')});
     await attachments.close();
+    const resumedReview=await openPopup();
+    await resumedReview.locator('#issue-view').waitFor();
+    assert.doesNotMatch((await issueMessages(resumedReview)).join(' '),/transcript/i,'fixed field disappears after reopening');
+    await resumedReview.close();
     await page.goto(attachmentsUrl);
     await resumeInput.setInputFiles({name:'Previous.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-previous')});
     const occupied=await openPopup();
-    await occupied.locator('#status').filter({hasText:'The local resume picker contains a file.'}).waitFor();
-    await occupied.locator('#partial').click();
-    await occupied.locator('#status').filter({hasText:'A resume is already present.'}).waitFor();
-    assert.doesNotMatch(await occupied.locator('#status').innerText(),/picker matches the selected PDF/);
+    assert.equal(await occupied.locator('#issue-view').isVisible(),false);
+    await runPopupAction(occupied,'partial');
+    const occupiedIssues=(await issueMessages(occupied)).join(' ');
+    assert.match(occupiedIssues,/A resume is already present/);
+    assert.doesNotMatch(occupiedIssues,/picker matches the selected PDF/);
     assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files![0]!.text()),'%PDF-previous');
     await occupied.close();
     await page.goto(attachmentsUrl);
@@ -284,13 +315,14 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
       input.addEventListener('change',()=>{input.dataset.changed='yes';});
     });
     const retained=await openPopup();
-    await retained.locator('#status').filter({hasText:'The employer shows a resume filename.'}).filter({hasText:requiredTranscript}).waitFor();
-    await retained.locator('#partial').click();
-    await retained.locator('#status').filter({hasText:'The employer shows a different resume filename.'}).waitFor();
-    assert.doesNotMatch(await retained.locator('#status').innerText(),/picker matches the selected PDF|CV\.pdf/);
+    await runPopupAction(retained,'partial');
+    const retainedIssues=(await issueMessages(retained)).join(' ');
+    assert.match(retainedIssues,/The employer shows a different resume filename/);
+    assert.match(retainedIssues,/Transcript/i);
+    assert.doesNotMatch(retainedIssues,/picker matches the selected PDF|CV\.pdf/);
     await resumeInput.evaluate(input=>{input.nextElementSibling!.textContent='Resume.pdf';});
-    await retained.locator('#partial').click();
-    await retained.locator('#status').filter({hasText:'The employer shows the matching resume filename. PDF contents unverified.'}).waitFor();
+    await runPopupAction(retained,'partial');
+    await findIssue(retained,/The employer shows the matching resume filename. PDF contents unverified/);
     assert.equal(await resumeInput.getAttribute('data-changed'),null);
     assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files!.length),0);
     await retained.close();
@@ -326,34 +358,32 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     });
     const original=await address();
     const bambooPopup=await openPopup();
-    const fix=bambooPopup.getByRole('button',{name:'Use Canada from my profile'}), result=bambooPopup.locator('#status');
+    const fix=bambooPopup.getByRole('button',{name:'Use Canada from my profile'});
     const mismatch='Country is set to United States. Your profile uses Canada.';
-    await result.getByText(mismatch,{exact:true}).waitFor();
-    await bambooPopup.getByRole('button',{name:'Fill current page'}).click();
-    await result.locator('.status-summary').filter({hasText:/fields? changed/}).waitFor();
+    assert.equal(await bambooPopup.locator('#issue-view').isVisible(),false);
+    await runPopupAction(bambooPopup,'partial');
+    await findIssue(bambooPopup,/Country is set to United States/);
+    assert.match(await bambooPopup.locator('#issue-message').innerText(),new RegExp(mismatch));
     assert.deepEqual(await address(),original);
-    assert.equal(await result.locator('li').filter({hasText:/country/i}).count(),1);
-    assert.doesNotMatch(await result.innerText(),/Alabama|State, ZIP/);
+    assert.doesNotMatch(await bambooPopup.locator('#issue-view').innerText(),/Alabama|State, ZIP/);
     assert.equal(await page.getByLabel('First name').inputValue(),'Fixture');
     await bambooPopup.locator('body').screenshot({path:join(root,'bamboo-conflict.png')});
     await fix.click();
-    const undo=bambooPopup.getByRole('button',{name:'Undo fill'});
     const canada={...original,country:'2',region:'20',postal:'T2P 1J9',labels:['Country Canada','Province Alberta']};
     await bambooPopup.locator('#use-profile-country').waitFor({state:'hidden'});
     assert.deepEqual(await address(),canada);
-    assert.equal(await undo.evaluate(button=>button===document.activeElement),true);
     await bambooPopup.locator('body').screenshot({path:join(root,'bamboo-corrected.png')});
-    await undo.click();
-    await result.getByText(mismatch,{exact:true}).waitFor();
+    await runPopupAction(bambooPopup,'undo');
+    await findIssue(bambooPopup,/Country is set to United States/);
     assert.deepEqual(await address(),original);
     assert.equal(await page.getByLabel('First name').inputValue(),'Fixture','Undo address preserves the preceding fill');
     assert.equal(await fix.isEnabled(),true);
-    await bambooPopup.getByRole('button',{name:'Redo fill'}).click();
+    await runPopupAction(bambooPopup,'redo');
     await fix.waitFor({state:'hidden'});
     assert.deepEqual(await address(),canada);
     await page.locator('[name="zip.value"]').fill('Owner edit');
-    await undo.click();
-    await result.getByText(/could not verify the restored address/).waitFor();
+    await runPopupAction(bambooPopup,'undo');
+    await findIssue(bambooPopup,/could not verify the restored address/);
     assert.deepEqual(await address(),{...canada,postal:'Owner edit'});
   }finally{await context?.close();await service.close();}
 });

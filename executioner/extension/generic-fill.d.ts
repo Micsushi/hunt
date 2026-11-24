@@ -6,6 +6,7 @@ export interface PartialFillResult {
   incomplete?: boolean;
   profileCountryConflict?: boolean;
   matching?: PageQuestion[];
+  requiredIssues?: {fieldId:string;label:string;section?:string;reason:'required_empty'|'required_invalid'|'required_unconfirmed'}[];
   filled: string[];
   skipped: { label: string; reason: string; componentFailure?: ComponentFailure; fieldId?: string; frameId?: string }[];
   canUndo: boolean;

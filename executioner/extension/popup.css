@@ -6,12 +6,11 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-.popup { width: 312px; }
+.popup { width: 280px; max-width: 100vw; }
 .popup.tab-view { max-width: 100vw; }
 body { width: 100%; padding: 10px 12px; margin: 0; }
 header, .history, #actions { display: flex; align-items: center; gap: 6px; }
-header { justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid #2b4433; }
-.brand-group { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+header { justify-content: space-between; gap: 8px; min-height: 24px; }
 h1 { margin: 0; font-size: 18px; line-height: 21px; letter-spacing: -.02em; }
 h1 span { color: #aec4b3; font-size: 11px; font-weight: 600; }
 h2 { margin: 0; font-size: 14px; line-height: 19px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -30,7 +29,7 @@ p:empty { display: none; }
 #connection[data-ready=true]::before { content: ""; display: inline-block; width: 6px; height: 6px; background: currentColor; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
 #connection-actions { margin-top: 8px; }
 #connection-actions button { width: 100%; min-height: 30px; font-size: 12px; padding: 4px 8px; }
-main { padding: 8px 0 0; display: flex; flex-direction: column; gap: 7px; }
+main { padding: 3px 0 0; display: flex; flex-direction: column; gap: 7px; }
 #support { margin-top: -3px; font-size: 11.5px; line-height: 15px; color: #b5c9ba; }
 .resume-field { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 #resume-label { color: #bdcfc1; }
@@ -53,51 +52,38 @@ main { padding: 8px 0 0; display: flex; flex-direction: column; gap: 7px; }
 #resume-list a, .pdf-preview a { color: #b4e7ce; }
 #resume-list a { white-space: nowrap; padding: 4px; font-size: 12px; }
 #no-resumes { padding: 6px; }
-body[data-panel]:has(#resume-picker:not([hidden])) :is(header,#compact-nav,#job,#support,#actions,#history,#status,#message-pages,#use-profile-country) { display: none; }
-body[data-panel] #resume-list { max-height: 108px; }
+body[data-compact]:has(#resume-picker:not([hidden])) :is(header,#actions,#other-actions,#status,#support,#return-issues) { display: none; }
+body[data-compact] #resume-list { max-height: 108px; }
+#connection[data-ready=true], #connection:empty { display: none; }
+.text-button { min-height: 24px; padding: 2px 0; color: #b4e7ce; font-size: 12px; font-weight: 500; background: transparent; }
+.text-button:hover:not(:disabled) { color: #e4f2e7; text-decoration: underline; background: transparent; }
+#resume-label { font-size: 12px; }
+#batch { margin-left: auto; }
 #actions { align-items: stretch; }
-#actions > * { flex: 1; }
-#prepare-action button { width: 100%; height: 100%; }
-.history button { flex: 1; min-height: 28px; font-size: 12px; padding: 4px 8px; }
-#status:not(:empty) { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; line-height: 16px; }
-#status .status-summary { padding: 6px 9px; background: #1a2d21; border: 1px solid #304b38; border-radius: 6px; color: #e4f2e7; font-weight: 500; }
-#status .status-list { margin: 0; padding: 6px 9px; list-style: none; border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
-#status .status-list li { overflow-wrap: anywhere; }
-#status .status-list li + li { padding-top: 4px; border-top: 1px solid currentColor; border-top-color: rgba(255,255,255,.12); }
-#status .status-warn { background: #2c2516; border: 1px solid #594a26; color: #f5dda3; }
-#status .status-error { background: #3b201e; border: 1px solid #6e3531; color: #ffccc6; }
-#status[data-paged] { display: block; height: 7em; column-width: var(--column-width); column-gap: 20px; column-fill: auto; overflow: hidden; }
-#message-pages { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; }
-#message-pages button { min-height: 26px; font-size: 12px; padding: 3px 8px; }
-#use-profile-country { margin-top: 5px; min-height: 28px; padding: 4px 9px; font-size: 12px; }
+#partial { flex: 1; }
+#more-actions { width: 32px; padding: 2px 4px; letter-spacing: .5px; }
+#other-actions, .history { display: flex; gap: 5px; flex-wrap: wrap; }
+#other-actions button { min-height: 28px; font-size: 12px; padding: 4px 8px; }
+#return-issues { align-self: flex-start; }
+#status:not(:empty) { margin-top: 6px; font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+#status[data-error=true] { color: #ffccc6; }
+#issue-view { padding-top: 5px; }
+#issue-description { border-left: 2px solid #e8bd79; padding-left: 9px; max-height: 130px; overflow-y: auto; }
+#issue-position { font-size: 11px; color: #eccc99; }
+#issue-label { white-space: normal; overflow-wrap: anywhere; font-size: 15px; line-height: 20px; }
+#issue-message { margin-top: 2px; }
+#issue-actions, #issue-navigation { display: flex; gap: 5px; align-items: center; }
+#issue-actions { margin-top: 8px; flex-wrap: wrap; }
+#issue-navigation { margin-left: auto; }
+#issue-actions button { font-size: 12px; min-height: 30px; padding: 4px 8px; }
+body[data-compact] #issue-description { max-height: 94px; }
 :focus-visible { outline: 2px solid #b4e7ce; outline-offset: 2px; }
-/* At high OS scaling Chrome can cap the entire action popup at 210 CSS pixels. */
-#compact-nav { display: flex; gap: 4px; margin-bottom: 6px; }
-#compact-nav button { flex: 1; min-height: 26px; font: 600 12px/16px "Segoe UI", system-ui, sans-serif; padding: 3px 4px; }
-#compact-nav [aria-pressed=true] { background: #8fd49d; color: #102317; }
-body[data-panel] { padding: 7px 10px; }
-body[data-panel] main { padding: 4px 0 0; gap: 5px; }
-body[data-panel]:not([data-panel=result]) :is(#status, #message-pages, #use-profile-country),
-body[data-panel=result] main { display: none; }
-body[data-panel=result]:has(#use-profile-country:not([hidden])):has(#status[data-paged]) header { display: none; }
-body[data-panel=result] #use-profile-country { margin-top: 2px; }
-body[data-panel=result] #use-profile-country:not([hidden]) + #message-pages { margin-top: 1px; }
 .pdf-preview { height: 100vh; padding: 0; display: flex; flex-direction: column; }
 .pdf-preview details { padding: 10px 16px; max-height: 40vh; overflow: auto; }
 .pdf-preview summary { cursor: pointer; }
 .pdf-preview li { padding: 3px 0; }
 .pdf-preview iframe { width: 100%; flex: 1; border: 0; }
 .pdf-preview p { padding: 24px; font-size: 15px; }
-#fill-log { margin-top: 6px; border-top: 1px solid #2b4433; }
-#fill-log summary { padding: 5px 0; cursor: pointer; }
-#fill-log-runs { max-height: 220px; overflow-y: auto; overflow-wrap: anywhere; }
-#fill-log-runs summary { color: #bdcfc1; font-size: 12px; }
-#fill-log-runs ul { list-style: none; margin: 0; padding: 0; }
-#fill-log-runs li { padding: 4px 0; border-top: 1px solid #2b4433; }
-#fill-log-runs li strong { display: block; }
-body[data-panel=page] #fill-log { display: none; }
-body[data-panel=result]:has(#fill-log[open]) > :is(header, #status, #message-pages, #use-profile-country) { display: none; }
-body[data-panel=result] #fill-log-runs { max-height: 125px; }
 @media (forced-colors: active) {
   button, select { border: 1px solid ButtonText; }
   button:disabled, select:disabled { color: GrayText; }

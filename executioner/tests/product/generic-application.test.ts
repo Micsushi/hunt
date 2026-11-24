@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import { chromium } from 'playwright';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { fillGenericApplication, fillGenericIdentityFields } from './retired-queue/generic-application.ts';
 import { applicantProfile, effectiveProfileFacts } from '../../src/product/sources.ts';
 import { fillMatchedPage } from '../../src/product/page-matching.ts';
+import {readPageFillLog} from '../../src/product/matching-backlog.ts';
 
 
 
@@ -51,7 +55,8 @@ test('validated website rows appear as saved URL answers without rewriting prove
     assert.equal(await page.locator('#linkedin').inputValue(),'https://example.invalid/linkedin');
     assert.equal(JSON.stringify(saved),original);
 
-    const currentPage = async () => fillMatchedPage({
+    const currentPage = async (root?:string) => fillMatchedPage({
+      root,
       profile:saved, resume:Buffer.from('%PDF-fixture'), url:page.url(), workflow:'C3.2',signal:AbortSignal.timeout(12000),
       call:async(action,matchingPlans,matchingRunId)=>({...await page.evaluate(fillVisibleFields,{
         action,matchingPlans,matchingRunId,scope:'page' as const,facts:effectiveProfileFacts(saved),
@@ -92,10 +97,15 @@ test('validated website rows appear as saved URL answers without rewriting prove
       <label>Password*<input type="password" value="private-fixture" required></label>
       <label>Password (Re-enter)*<input type="password" required></label>
       <button>Submit Profile</button></form>`);
-    const registered=await currentPage();
+    const historyRoot=mkdtempSync(join(tmpdir(),'c3-required-review-'));
+    const registered=await currentPage(historyRoot);
     assert.equal(await page.locator('#login').inputValue(),'fixture@example.invalid');
     assert.ok(registered.filled.includes('Email/Login*'));
     assert.ok(!registered.filled.includes('Email'));
+    assert.deepEqual(registered.requiredIssues?.map(issue=>issue.label),['Password (Re-enter)']);
+    assert.deepEqual(readPageFillLog(historyRoot).runs[0]?.steps.filter(s=>s.requirement),[
+      {label:'Password (Re-enter)',outcome:'skipped',reason:'password_field_preserved',requirement:'required_empty'}
+    ]);
     assert.deepEqual(registered.skipped.filter(item=>item.reason==='password_field_preserved').map(item=>item.label),
       ['Password','Password (Re-enter)']);
     assert.doesNotMatch(JSON.stringify(registered),/private-fixture/);

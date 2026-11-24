@@ -537,7 +537,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     }
     const knownProfileControl = e => e.matches('textarea,select:not([multiple]),input:not([type]),input:is([type=text],[type=email],[type=tel],[type=url],[type=date],[type=number])') &&
       !['listbox','combobox'].includes(e.getAttribute('role'));
-    const { isRequired, unresolvedAttachment } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
+    const { isRequired, unresolvedAttachment, requiredIssues } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
     });
     const pickerHoldsAttempt = receipt => !!receipt && receipt.url===location.href && !receipt.externalized &&
@@ -577,9 +577,26 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         } else if (receipt?.element===input && result.resume!=='verified') addSkip('Resume','resume_upload_already_attempted_review_attachment');
       }
       reportDisabledSubmission(applicationRegions);
+      if(currentPage){
+        const owners=new Set(applicationRegions.filter(Boolean));
+        if(registrationRegion)owners.add(registrationRegion);
+        result.requiredIssues=requiredIssues(applicationStep || checkedForm?.owner || document,{
+          visible,labelFor,externalAttachment,
+          inScope:e=>{
+            const owner=regionFor(e);
+            if(owners.has(owner) || !owners.size && !separateAccountForm)return true;
+            // A separate, adjacent upload-only form can belong to the application.
+            // Other account, newsletter and search forms have their own owner.
+            if(e.type!=='file' || !owner.matches?.('form') || ![...owners].some(form=>form.parentElement===owner.parentElement) ||
+                !fileBinding(e) && !unresolvedAttachment(e))return false;
+            return !deepQuery(owner,'input:not([type=hidden],[type=file],[type=submit],[type=button]),select,textarea').some(editable);
+          },
+          selectedChoice:(e,label)=>Boolean(observe(e,label).selected)
+        });
+        if(!historyAction && result.requiredIssues.length) result.incomplete=true;
+      }
       return result;
     };
-    if (historyAction) return finalReport();
     const { observe:baseObserve } = createFieldObserver({
       deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
       sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
@@ -591,6 +608,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return {...row,profileOnly:true,...(loginEmail && {registrationEmail:true}),
         signature:JSON.stringify([row.signature,loginEmail?'registration-email':'profile'])};
     };
+    if (historyAction) return finalReport();
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {

@@ -7,26 +7,17 @@ async function initializePopup() {
   const toolbar=chrome.extension.getViews({type:'popup'}).includes(window);
   if(!toolbar)document.documentElement.classList.add('tab-view');
   const compact=toolbar && screen.availHeight<590;
-  function showPanel(panel){
-    if(!compact)return;
-    document.body.dataset.panel=panel;
-    for(const button of $('compact-nav').children)button.setAttribute('aria-pressed',String(button.dataset.panel===panel));
-    layoutMessage();
-  }
-  if(compact){
-    $('compact-nav').hidden=false;
-    $('compact-nav').onclick=event=>{if(event.target.dataset.panel)showPanel(event.target.dataset.panel);};
-  }
+  if(compact)document.body.dataset.compact='';
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
   const saved=await chrome.storage.local.get('token');
   const choiceKey='pageResume:'+tab?.id;
   let preference=(await chrome.storage.session.get(choiceKey))[choiceKey];
-  $('job').textContent=tab?.title||'Current page';
-  $('job').title=tab?.title||'';
   let busy=false, serviceReady=false, browserReady=false;
   const canPartial=supportsCurrentPage(tab?.url,origin);
   $('actions').hidden=!canPartial;
-  if(!canPartial)$('job').textContent='Open a web form';
+  const pageHash=canPartial ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(tab.url))),byte=>byte.toString(16).padStart(2,'0')).join('').slice(0,24) : '';
+  const reviewKey='fillReview:'+tab?.id;
+  let savedReview=(await chrome.storage.session.get(reviewKey))[reviewKey];
   let selection=null, alternatives=null, currentPageJobId, selectedResumeSha256;
   function resumeOptions(next){
     const seen=new Set(), list=[];
@@ -46,7 +37,7 @@ async function initializePopup() {
   function displayFilename(container,item){
     const filename=document.createElement('span');
     filename.className='resume-filename';
-    filename.textContent=item.name;
+    filename.textContent=container.id==='resume-name' ? item.name.replace(/^Default resume · [a-f0-9]{8}$/i,'Default resume') : item.name;
     container.replaceChildren(filename);
     if(item.version){
       const version=document.createElement('span');
@@ -126,7 +117,7 @@ async function initializePopup() {
     selectedResumeSha256=prefMatch && !matchesQueued && activeResume?.sha256!==next?.currentPage?.sha256 ? activeResume.sha256 : undefined;
     selection=next?(activeResume?{...next,currentPage:activeResume}:next):null;
     $('prepare-action').hidden=!next?.supportsQueue;
-    $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':next?.supportsQueue?'Full application or current page':'');
+    $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':'');
     resumeButton.value=activeResume?.sha256||'';
     const title=activeResume?resumeLabel(activeResume):'';
     if(resumeButton.title!==title){
@@ -147,41 +138,80 @@ async function initializePopup() {
     $('partial').disabled=busy||!canPartial||!selection||!serviceReady||!browserReady;
     $('undo').disabled=busy||!canUndo;$('redo').disabled=busy||!canRedo;
     $('history').hidden=!canUndo&&!canRedo;
-    countryAction.hidden=!profileCountryConflict;
     countryAction.disabled=busy||!profileCountryConflict||!serviceReady||!browserReady;
     resumeButton.disabled=busy||!selection?.currentPage;
     if(busy)togglePicker(false);
     $('connect-local').disabled=busy;$('batch').disabled=busy;
-    $('fill-log').hidden=!canPartial||!browserReady||!serviceReady;
-    if(compact){
-      $('compact-nav').querySelector('[data-panel=result]').disabled=!$('status').textContent && $('fill-log').hidden;
+    $('more-actions').hidden=!selection?.supportsQueue && !canUndo && !canRedo;
+    if($('more-actions').hidden)setMore(false);
+  }
+  function setMore(open){
+    $('other-actions').hidden=!open;
+    $('more-actions').setAttribute('aria-expanded',String(open));
+  }
+  $('more-actions').onclick=()=>setMore($('other-actions').hidden);
+  function setStatus({summary='',errors=[]}={}){
+    $('status').textContent=errors.length ? errors.join(' ') : summary;
+    $('status').dataset.error=String(errors.length>0);
+  }
+  let issues=[],issueIndex=0,issuesDocumentId;
+  function showReview(open,focus=false){
+    const reviewing=open && issues.length>0;
+    $('issue-view').hidden=!reviewing;
+    document.querySelector('main').hidden=reviewing;
+    $('back-to-fill').hidden=!reviewing;
+    $('resume-label').hidden=reviewing;
+    $('return-issues').hidden=!issues.length;
+    $('return-issues').textContent='Review '+issues.length+' '+(issues.length===1?'issue':'issues');
+    if(reviewing){
+      const issue=issues[issueIndex];
+      const position='Issue '+(issueIndex+1)+' of '+issues.length;
+      $('issue-position').textContent=issue.target?.section ? position+' · '+issue.target.section : position;
+      $('issue-label').textContent=issue.label;
+      $('issue-message').textContent=issue.message;
+      $('show-field').hidden=!issue.target;
+      countryAction.hidden=!issue.country || !profileCountryConflict;
+      $('issue-navigation').hidden=issues.length<2;
+      $('previous-message').disabled=issueIndex===0;
+      $('next-message').disabled=issueIndex===issues.length-1;
+      if(focus)$('issue-label').focus();
+    }else{
+      countryAction.hidden=true;
+      if(focus)$('partial').focus();
     }
   }
-  function setStatus({summary='', warnings=[], errors=[]}={}){
-    const box=$('status');
-    box.replaceChildren();
-    box.dataset.error=String(errors.length>0);
-    if(summary){
-      const p=document.createElement('p');
-      p.className='status-summary';
-      p.textContent=summary;
-      box.append(p);
-    }
-    const addList=(cls,items)=>{
-      const unique=[...new Set(items.filter(Boolean))];
-      if(!unique.length)return;
-      const ul=document.createElement('ul');
-      ul.className='status-list '+cls;
-      for(const text of unique){
-        const li=document.createElement('li');
-        li.textContent=text;
-        ul.append(li);
-      }
-      box.append(ul);
-    };
-    addList('status-error',errors);
-    addList('status-warn',warnings);
+  function rememberReview(){
+    savedReview={page:pageHash,documentId:issuesDocumentId,index:issueIndex};
+    return chrome.storage.session.set({[reviewKey]:savedReview});
   }
+  function stepIssue(direction){
+    issueIndex=Math.max(0,Math.min(issues.length-1,issueIndex+direction));
+    setStatus();showReview(true,true);void rememberReview();
+  }
+  $('previous-message').onclick=()=>stepIssue(-1);
+  $('next-message').onclick=()=>stepIssue(1);
+  $('back-to-fill').onclick=()=>{setStatus();showReview(false,true);};
+  $('return-issues').onclick=()=>showReview(true,true);
+  $('show-field').onclick=async()=>{
+    const issue=issues[issueIndex];
+    if(!issue?.target || busy)return;
+    const button=$('show-field');
+    button.disabled=true;
+    try{
+      const reply=await browserReply(chrome.runtime.sendMessage({action:'revealIssue',tabId:tab.id,expectedUrl:tab.url,documentId:issuesDocumentId,
+        frameId:issue.target.frameId,fieldId:issue.target.fieldId}));
+      if(!reply?.ok)throw new Error();
+      if(toolbar)window.close();
+    }catch{
+      try{
+        const inspected=await inspectPage();
+        applyPageState(inspected);
+        if(inspected.documentId===issuesDocumentId)presentResult(inspected,issueIndex);
+        else{issues=[];showReview(false);}
+      }catch{issues=[];showReview(false);}
+      setStatus({errors:['That field could not be located. Check the current form.']});
+    }finally{button.disabled=false;}
+  };
   async function checkConnection(){
     serviceReady=false;browserReady=false;
     try{
@@ -228,111 +258,12 @@ async function initializePopup() {
       // Disabling or moving the clicked control can drop keyboard focus.
       // Restore it only if the user has not focused something else while waiting.
       if(document.activeElement===document.body&&(focused instanceof HTMLButtonElement||focused instanceof HTMLSelectElement)){
-        const fallback=focused===countryAction?(compact?$('compact-nav').querySelector('[data-panel=page]'):canUndo?$('undo'):$('partial')):$('batch');
-        (focused.checkVisibility()&&!focused.disabled?focused:fallback).focus();
+        const fallback=$('issue-view').hidden?$('partial'):$('issue-label');
+        (focused.checkVisibility()&&!focused.disabled?focused:fallback.disabled?$('batch'):fallback).focus();
       }
     }
   }
   let historyVersion=0;
-  // Chrome caps toolbar popup height. Long results remain readable one part at a time.
-  const statusBox=$('status');
-  let messagePage=0;
-  function layoutMessage(reset=false){
-    if(reset)messagePage=0;
-    delete statusBox.dataset.paged;
-    if(statusBox.offsetHeight<=(compact&&profileCountryConflict?70:135)){$('message-pages').hidden=true;return;}
-    const width=statusBox.clientWidth;
-    statusBox.style.setProperty('--column-width',(width-20)+'px');
-    statusBox.dataset.paged='';
-    const count=Math.ceil(statusBox.scrollWidth/width);
-    messagePage=Math.max(0,Math.min(count-1,messagePage));
-    statusBox.scrollLeft=messagePage*width;
-    $('message-position').textContent=`Part ${messagePage+1} of ${count}`;
-    $('previous-message').disabled=messagePage===0;
-    $('next-message').disabled=messagePage===count-1;
-    $('message-pages').hidden=count<2;
-  }
-  new MutationObserver(()=>{
-    if(compact){
-      const hasResult=Boolean(statusBox.textContent);
-      $('compact-nav').querySelector('[data-panel=result]').disabled=!hasResult && $('fill-log').hidden;
-      if(hasResult && picker.hidden)showPanel('result');
-      else if(document.body.dataset.panel==='result')showPanel('page');
-    }
-    layoutMessage(true);
-  }).observe(statusBox,{childList:true,characterData:true,subtree:true});
-  window.addEventListener('resize',()=>layoutMessage());
-  $('previous-message').onclick=()=>{messagePage--;layoutMessage();};
-  $('next-message').onclick=()=>{messagePage++;layoutMessage();};
-  const logReasons={
-    existing_value_confirmed:'Already matched the saved answer.',
-    existing_value_preserved:'Kept the existing entry.',
-    saved_value_conflict:'The existing entry differs from the saved answer.',
-    product_readback_confirmed:'Filled and checked on the page.',
-    optional_field:'Skipped this optional field.',
-    needs_owner_answer:'Needs your answer.',
-    account_fields_preserved:'Account field left for you.',
-    password_field_preserved:'Enter this password yourself.',
-    optional_consent_skipped:'Optional consent was left unchanged.',
-    address_country_conflict:'The country on the form differs from your profile.',
-    postal_code_requires_review:'Check the postal code against the country on the form.',
-    choice_not_unique:'More than one option matched.',
-    button_choice_interaction_unsupported:'C3 could not select this type of option.',
-    employer_submission_disabled:'The employer has disabled submission.',
-    required_attachment_missing:'The required file is missing.',
-    required_resume_missing:'The required resume is missing.',
-    existing_attachment_preserved:'Kept the existing attachment.',
-    resume_control_not_identified:'C3 could not identify the resume field.',
-    field_changed_before_fill:'The control changed before C3 could fill it.',
-    suggested_answer:'Review this suggested answer on the page.',
-    required_attachment_unconfirmed:'C3 could not verify the required attachment.',
-    resume_attachment_not_verified:'C3 could not verify the attached resume.',
-    value_not_accepted:'The page did not keep the intended value.',
-    previous_control_write_unconfirmed:'An earlier change could not be verified.',
-    screening_choice_not_confirmed:'The page did not confirm the choice.',
-    choice_commit_or_reset_unconfirmed:'C3 could not verify the final selection.',
-    value_changed_after_fill:'The value changed after filling.',
-    page_action_not_confirmed:'C3 could not confirm the change.',
-  };
-  const logOutcomes={changed:'Filled',existing:'Already present',skipped:'Skipped',unconfirmed:'Unconfirmed',suggested:'Suggested answer'};
-  let logRequest=0;
-  async function loadFillLog(){
-    const request=++logRequest;
-    if(!$('fill-log').open)return;
-    const box=$('fill-log-runs'),status=$('fill-log-status');
-    status.textContent='Reading fill log…';
-    box.replaceChildren();
-    try{
-      const {token}=await chrome.storage.local.get('token');
-      const response=await fetch(origin+'/browser/page-fill-log',{
-        method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},
-        body:JSON.stringify({tabId:tab.id,expectedUrl:tab.url}),redirect:'error',signal:AbortSignal.timeout(8000)
-      });
-      if(!response.ok)throw new Error();
-      const {runs}=await response.json();
-      if(request!==logRequest)return;
-      status.textContent=runs.length?'':'No recorded fills for this page.';
-      for(const [index,run] of runs.entries()){
-        const entry=document.createElement('details'), heading=document.createElement('summary'), list=document.createElement('ul');
-        entry.open=index===0;
-        heading.textContent=(index===0?'Latest fill · ':'Fill · ')+new Date(run.at).toLocaleString();
-        for(const step of run.steps){
-          const row=document.createElement('li'),label=document.createElement('strong');
-          label.textContent=step.label;
-          const outcome=logOutcomes[step.outcome]||'Unconfirmed';
-          const reason=logReasons[step.reason];
-          row.append(label,reason ? outcome+' · '+reason : outcome);
-          list.append(row);
-        }
-        entry.append(heading,list);
-        if(!run.steps.length)entry.append('No field details were recorded.');
-        box.append(entry);
-      }
-    }catch{
-      if(request===logRequest)status.textContent='Could not read the fill log. Reopen Hunt on the original page.';
-    }
-  }
-  $('fill-log').ontoggle=loadFillLog;
   async function browserReply(promise,message='The browser did not respond. Reopen C3 to retry.'){
     let timer;
     try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),15000);})]);}
@@ -360,7 +291,6 @@ async function initializePopup() {
     else if(reasons.has('resume_filename_visible'))warnings.push('The employer shows a resume filename. Check it against your selected PDF. Contents unverified.');
     else if(reasons.has('resume_picker_occupied'))warnings.push('The local resume picker contains a file. Check it against your selected PDF. Employer contents unverified.');
     else if(['existing_attachment_preserved','existing_remote_attachment_requires_review','existing_smartrecruiters_attachment_requires_review','remote_upload_preserved','client_attachment_preserved'].some(reason=>reasons.has(reason)))warnings.push('A resume is already present. Check it against your selected PDF.');
-    else if(result.resumeEvidence==='picker')warnings.push('The local file picker matches the selected PDF. Employer contents unverified.');
     else if(reasons.has('required_resume_missing') || result.operation==='inspect' && result.resume==='missing')errors.push('The required resume field is empty.');
     else if(reasons.has('resume_control_not_identified'))errors.push('C3 could not identify the resume field. Check the employer page.');
     else if(['resume_attachment_not_verified','resume_upload_already_attempted_review_attachment','uploaded_attachment_requires_review','attachment_not_verified_native_file_retained','ambiguous_resume_attachment','resume_parsing_pending_profile_not_filled'].some(reason=>reasons.has(reason)))errors.push('The resume attachment was not confirmed. Check it on the employer page.');
@@ -389,28 +319,32 @@ async function initializePopup() {
       throw new Error(canUndo?'C3 could not confirm all changes. Check the page or use Undo fill.':'C3 could not confirm all changes. Check the page and reopen Hunt for Undo.');
     }
     applyPageState(result);
-    if(result.accountPage){setStatus({summary:'Account fields filled.'});return;}
-    const count=result.filled.length;
-    const summary=['fill','use_profile_country'].includes(action)?`${count} ${count===1?'field changed':'fields changed'}.`:`${count} field changes ${action==='undo'?'undone':'restored'}.`;
-    const warnings=[], errors=profileCountryConflict?[countryMismatch]:[];
+    if(result.accountPage){issues=[];showReview(false);setStatus({summary:'Account fields filled.'});return;}
+    issuesDocumentId=result.documentId;
+    presentResult(result);
+    await rememberReview();
+  }
+  function presentResult(result,index=0){
+    const warnings=[],errors=[],fieldIssues=[];
+    const required=(result.requiredIssues??[]).map(target=>({
+      label:target.label,
+      message:target.reason==='required_empty'?'This required field is empty.':
+        target.reason==='required_invalid'?'The current value needs a correction.':'C3 could not verify this required field.',
+      target,
+    }));
     const conflictItems=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason)
       && !(profileCountryConflict && item.reason==='saved_value_conflict' && /^country\b/i.test(item.label?.trim())));
-    if(conflictItems.length){
-      const names=[...new Set(conflictItems.map(item=>String(item.label||'').replace(/[\u2009*✱]/g,'').trim()).filter(Boolean))];
-      errors.push(names.length
-        ? `${names.join(', ')} ${names.length===1?'differs':'differ'} from saved answers or changed after filling.`
-        : `${conflictItems.length} ${conflictItems.length===1?'field differs':'fields differ'} from saved answers or changed after filling.`);
+    for(const label of new Set(conflictItems.map(item=>String(item.label||'Field').replace(/[\u2009*✱]/g,'').trim()))){
+      fieldIssues.push({label,message:'The form value differs from your saved answer or changed after filling.'});
     }
     collectAttachments(result, warnings, errors);
     const addressReason=result.skipped?.find(item=>['bamboo_address_change_unconfirmed','bamboo_address_restore_unconfirmed'].includes(item.reason))?.reason;
     if(addressReason)errors.push(addressReason==='bamboo_address_restore_unconfirmed'
       ? 'C3 could not verify the restored address. Check Country, region and postal code on the form.'
       : 'BambooHR did not confirm the address update. Check the address and your saved profile.');
-    if(result.needsOwnerReview){
-      const reviewNames=Array.isArray(result.reviewFields)?result.reviewFields.filter(Boolean):[];
-      warnings.push(reviewNames.length
-        ? `Review suggested or uncertain answers: ${reviewNames.join(', ')}.`
-        : 'Suggested answers and uncertain matches need review.');
+    for(const label of new Set(result.reviewFields??[])){
+      if(label && !required.some(issue=>issue.label===label) && !fieldIssues.some(issue=>issue.label===label))
+        fieldIssues.push({label,message:'Check the suggested answer on the form.'});
     }
     if (result.componentFailure && !addressReason) {
       const {component, operation} = result.componentFailure;
@@ -419,15 +353,31 @@ async function initializePopup() {
     const submissionDisabled=Boolean(result.skipped?.some(item=>item.reason==='employer_submission_disabled'));
     if(submissionDisabled)errors.push('The employer still has submission disabled.');
     if (result.frames?.some(frame => frame.status === 'unavailable')) {
-      errors.push('A frame could not be reached. Check it before retrying.');
-    } else if (result.incomplete && !result.componentFailure && !submissionDisabled && !addressReason) {
+      errors.push('C3 could not inspect an embedded section. Check it on the form.');
+    } else if (result.incomplete && !result.componentFailure && !submissionDisabled && !addressReason && !required.length && !fieldIssues.length && !warnings.length && !errors.length && !profileCountryConflict) {
       errors.push('Check the incomplete fields before retrying.');
     }
-    setStatus({summary, warnings, errors});
+    if(result.needsOwnerReview && !fieldIssues.length && !required.length && !errors.length && !warnings.length && !profileCountryConflict)
+      warnings.push('Some answers need review. Check the page before continuing.');
+    const normalize=str=>str.toLowerCase().replace(/[^a-z0-9]/g,'');
+    const duplicatesRequired=message=>required.some(issue=>{
+      const label=normalize(issue.label);
+      return label && (message==='The required resume field is empty.' && /resume|cv/.test(label) ||
+        /^The required .+ is missing\.$/.test(message) && normalize(message.slice(13,-12))===label);
+    });
+    const secondary=[...new Set([...errors,...warnings])].filter(text=>!duplicatesRequired(text));
+    issues=[...required,...fieldIssues,...(profileCountryConflict?[{label:'Country',message:countryMismatch,country:true}]:[]),
+      ...secondary.map(message=>({label:message.includes('resume')||message.includes('PDF')?'Review attachment':'Check the form',message}))];
+    issueIndex=Math.max(0,Math.min(Number.isInteger(index)?index:0,issues.length-1));
+    setMore(false);
+    showReview(issues.length>0);
+    const count=result.filled?.length??0;
+    const summary=result.operation==='inspect'?'':result.operation==='undo'?count+' field changes undone.':
+      result.operation==='redo'?count+' field changes restored.':count+' '+(count===1?'field changed.':'fields changed.');
+    const note=result.resumeEvidence==='picker'?'The local file picker matches the selected PDF. Employer contents unverified.':'';
+    setStatus({summary:issues.length?'':[summary,note].filter(Boolean).join(' ')});
   }
-  $('partial').onclick=()=>run(async()=>{
-    try{await partial('fill');}finally{void loadFillLog();}
-  },$('partial'),'Filling page…');
+  $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…');
   countryAction.onclick=()=>run(()=>partial('use_profile_country'),countryAction,'Updating address…');
   $('undo').onclick=()=>run(()=>partial('undo'));
   $('redo').onclick=()=>run(()=>partial('redo'));
@@ -435,13 +385,13 @@ async function initializePopup() {
     canUndo=result.canUndo;canRedo=result.canRedo;profileCountryConflict=result.profileCountryConflict===true;
   }
   async function loadHistory(){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;applyPageState(result);
-    if(!busy&&!$('status').textContent){
-      const warnings=[], errors=profileCountryConflict?[countryMismatch]:[];
-      collectAttachments(result, warnings, errors);
-      if(result.skipped?.some(item=>item.reason==='employer_submission_disabled'))errors.push('The employer still has submission disabled.');
-      if(warnings.length||errors.length)setStatus({warnings, errors});
+    if(!busy && savedReview?.page===pageHash && savedReview.documentId===result.documentId){
+      issuesDocumentId=result.documentId;
+      presentResult(result,savedReview.index);
     }
-    controls();}catch{}}
+    controls();}catch{
+      if(!busy && savedReview?.page===pageHash)setStatus({errors:['C3 could not check this page for remaining issues.']});
+    }}
   async function refreshHistory(){
     historyVersion++;canUndo=false;canRedo=false;profileCountryConflict=false;controls();
     if(inspection)await inspection.catch(()=>{});
@@ -499,13 +449,12 @@ async function initializePopup() {
     await connectWithToken(token);
   }
   $('connect-local').onclick=()=>run(connectLocal,$('connect-local'),'Connecting…');
-  $('batch').onclick=()=>run(async()=>{const {token}=await chrome.storage.local.get('token');await chrome.tabs.create({url:origin+'/#token='+encodeURIComponent(token||'')});});
+  $('batch').onclick=()=>run(async()=>{const {token}=await chrome.storage.local.get('token');await chrome.tabs.create({url:origin+'/#token='+encodeURIComponent(token||'')+(pageHash?'&page='+pageHash:'')});});
   $('fill').onclick=()=>run(async()=>{const digest=selection?.queued?.sha256;const current=await chrome.tabs.get(tab.id);if(current.url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');const {token}=await chrome.storage.local.get('token');const resultConnect=await browserReply(chrome.runtime.sendMessage({action:'connect'}));if(!resultConnect?.ok)throw new Error(resultConnect?.error||'Connection request failed');if((await chrome.tabs.get(tab.id)).url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');
     const request={jobs:[{url:tab.url,tabId:tab.id,title:tab.title,...(digest&&{expectedResumeSha256:digest})}]};
     let response,result;try{response=await fetch(origin+'/jobs',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify(request),signal:AbortSignal.timeout(15000)});result=await response.json();}catch{throw new Error('No confirmation received. Check Applications for this job.');}if(!response.ok)throw new Error(typeof result?.error==='string'&&result.error?result.error:'C3 could not confirm this job. Check Applications before retrying.');const job=result?.[0];if(!job||typeof job.status!=='string')throw new Error('No confirmation received. Check Applications before retrying.');setStatus({summary:['queued','running'].includes(job.status)?'Queued. C3 will stop at Review.':`${job.stage||job.status}. Open Applications to continue.`});});
 
   controls();await checkConnection();
-  showPanel('page');
   if(canPartial && selection)void loadHistory();
   if(!saved.token)void run(connectLocal);
   setInterval(()=>{if(!busy)void checkConnection();},5000);

@@ -2,13 +2,18 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hunt C3</title><link rel="stylesheet" href="./style.css"><script src="./app.js" defer></script></head>
 <body><main>
   <header class="app-header"><span class="brand">Hunt <span>C3</span></span><span id="connection" role="status">Connecting</span></header>
-  <nav class="app-nav" aria-label="Full menu"><button type="button" data-view="profile" aria-current="page">Profile</button><button type="button" data-view="applications">Applications</button><button type="button" data-view="settings">Settings</button></nav>
+  <nav class="app-nav" aria-label="Full menu"><button type="button" data-view="profile" aria-current="page">Profile</button><button type="button" data-view="applications">Applications</button><button type="button" data-view="fills" hidden>Fill history</button><button type="button" data-view="settings">Settings</button></nav>
   <div class="page-heading"><h1 id="page-title">Profile</h1></div>
   <div id="profile-answer-warning" class="owner-warning" hidden><p>This profile includes a test setting or test answers. Check it before filling.</p><button id="review-profile-answers" type="button" class="secondary">Review profile answers</button></div>
   <p id="error" role="alert" hidden></p>
   <div id="connection-error" hidden><p role="alert"></p><button id="retry-connection" type="button" class="secondary">Reconnect</button></div>
   <button id="recover-storage" class="secondary" hidden>Retry saving progress</button>
   <form id="pair" hidden><label>Pairing key<input id="token" type="password" autocomplete="off" required></label><button>Connect C3</button></form>
+  <section data-panel="fills" hidden aria-label="Fill history">
+    <div class="fill-history-tools"><label id="history-page-label" hidden>Application page<select id="history-page"></select></label><button id="refresh-fills" type="button" class="secondary">Refresh history</button></div>
+    <p class="note" id="fill-history-status" role="status"></p>
+    <div id="fill-history-runs"></div>
+  </section>
   <section data-panel="applications" hidden aria-label="New applications">
     <details id="batch-entry" open><summary>Add application links</summary>
     <form id="batch"><label for="links">Job links</label><textarea id="links" rows="5" spellcheck="false" placeholder="One job URL per line" required></textarea>

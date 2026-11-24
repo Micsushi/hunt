@@ -96,11 +96,15 @@ selection for Fill current page. The local full menu also has this list under
 **Profile → Resume**.
 **Prepare this job** keeps using the job's saved PDF.
 
-Open **Fill log** in the popup (**Result** on small screens) to see the four
-most recent recorded fills for the current page address. Each
-entry names the field and reports what C3 could verify, including fields that
-already matched and fields left for manual entry. Older runs show the field
-observations available at the time. The log omits field values.
+After a fill, the popup shows fields that still need attention. Use **Previous**
+and **Next** to review them one at a time. **Show field** takes you to the
+corresponding control when C3 can identify it on the current page. Complete the
+field on the employer's form.
+
+Open **Full menu → Fill history** for the field-by-field record. Choose a page
+to see its recent fills, including fields that already matched and fields left
+for manual entry. Older runs show the observations available at the time. The
+history omits field values.
 
 On BambooHR, if the form shows United States and your saved country is Canada,
 **Fill current page** preserves that selection and leaves empty State and ZIP fields

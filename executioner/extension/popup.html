@@ -8,24 +8,17 @@
   <script src="popup.js" type="module"></script>
 </head>
 <body>
-  <nav id="compact-nav" aria-label="Hunt controls" hidden>
-    <button class="secondary" data-panel="page">Page</button>
-    <button class="secondary" data-panel="result">Result</button>
-  </nav>
   <header>
-    <div class="brand-group">
-      <h1>Hunt <span>C3</span></h1>
-      <p id="connection" role="status">Checking connection…</p>
-    </div>
-    <button id="batch" class="secondary">Open full menu</button>
+    <span id="resume-label">Resume</span>
+    <button id="back-to-fill" class="text-button" hidden>Back to fill</button>
+    <button id="batch" class="text-button" aria-label="Open full menu">Full menu</button>
   </header>
+  <p id="connection" role="status">Checking connection…</p>
   <div id="connection-actions" hidden><button id="connect-local" class="secondary">Connect to local app</button></div>
   <main>
-    <h2 id="job">Current page</h2>
     <p id="support"></p>
     <div id="resumes" hidden>
       <div class="resume-field">
-        <span id="resume-label">Resume</span>
         <button id="resume-select" class="secondary" aria-labelledby="resume-label resume-name" aria-expanded="false" aria-controls="resume-picker"><span id="resume-name"></span></button>
       </div>
       <section id="resume-picker" aria-label="Saved resumes" hidden>
@@ -43,24 +36,32 @@
     </div>
     <div id="actions">
       <button id="partial" disabled>Fill current page</button>
+      <button id="more-actions" class="secondary" aria-expanded="false" aria-controls="other-actions" aria-label="More fill actions" title="More fill actions" hidden>•••</button>
+    </div>
+    <div id="other-actions" hidden>
       <div id="prepare-action" hidden><button id="fill" class="secondary" aria-describedby="support" disabled>Prepare this job</button></div>
+      <div id="history" class="history" hidden>
+        <button id="undo" class="secondary" disabled>Undo fill</button>
+        <button id="redo" class="secondary" disabled>Redo fill</button>
+      </div>
     </div>
-    <div id="history" class="history" hidden>
-      <button id="undo" class="secondary" disabled>Undo fill</button>
-      <button id="redo" class="secondary" disabled>Redo fill</button>
-    </div>
+    <button id="return-issues" class="text-button" hidden></button>
   </main>
+  <section id="issue-view" aria-label="Fill issues" hidden>
+    <div id="issue-description" aria-live="polite" aria-atomic="true">
+      <p id="issue-position"></p>
+      <h2 id="issue-label" tabindex="-1"></h2>
+      <p id="issue-message"></p>
+    </div>
+    <div id="issue-actions">
+      <button id="show-field" hidden>Show field</button>
+      <button id="use-profile-country" hidden disabled>Use Canada from my profile</button>
+      <nav aria-label="Review issues" id="issue-navigation">
+        <button id="previous-message" class="secondary" aria-label="Previous issue">Previous</button>
+        <button id="next-message" class="secondary" aria-label="Next issue">Next</button>
+      </nav>
+    </div>
+  </section>
   <div id="status" role="status"></div>
-  <button id="use-profile-country" class="secondary" hidden disabled>Use Canada from my profile</button>
-  <nav id="message-pages" aria-label="Result details" hidden>
-    <button id="previous-message" class="secondary" aria-label="Previous part">Previous</button>
-    <span id="message-position" role="status"></span>
-    <button id="next-message" class="secondary" aria-label="Next part">Next</button>
-  </nav>
-  <details id="fill-log" hidden>
-    <summary>Fill log</summary>
-    <p id="fill-log-status" role="status"></p>
-    <div id="fill-log-runs"></div>
-  </details>
 </body>
 </html>

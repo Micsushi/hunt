@@ -4,7 +4,10 @@ const base = proxied ? '/api/c3/' : '/';
 $('browse-resumes').hidden = proxied;
 if (proxied) { $('pair').hidden = true; $('handoff-entry').hidden = true; $('pairing-settings').hidden = true; }
 const previousToken=sessionStorage.getItem('c3-token') ?? '';
-let urlToken = new URLSearchParams(location.hash.slice(1)).get('token');
+const launchParams=new URLSearchParams(location.hash.slice(1));
+let urlToken = launchParams.get('token');
+const originPage=launchParams.get('page');
+let selectedHistoryPage=!proxied && /^[a-f0-9]{24}$/.test(originPage || '')?originPage:'';
 let token = urlToken ?? previousToken;
 if (urlToken !== null) history.replaceState(null, '', location.pathname + location.search);
 let state, busy = false, rendered = '', pendingSubmit, historyBusy = false, profileLoaded = false, polling = false, profileDirty = false;
@@ -14,7 +17,8 @@ let savedProfile, savedResumeUrl, accountStatus, accountDraft = false, metadataC
 const jobErrors = new Map();
 $('profile-form').addEventListener('input', updateProfileDraft);
 $('account-form').addEventListener('input', () => { accountDraft = true; });
-const viewCopy={profile:'Profile',applications:'Applications',settings:'Settings'};
+const viewCopy={profile:'Profile',applications:'Applications',fills:'Fill history',settings:'Settings'};
+document.querySelector('[data-view="fills"]').hidden=proxied;
 const profileSections = [...document.querySelectorAll('.section-nav a')];
 let sectionId = profileSections.find(link => link.hash === location.hash)?.hash.slice(1) || 'contact';
 function showSection(id) {
@@ -44,12 +48,87 @@ for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>
   for(const panel of document.querySelectorAll('[data-panel]'))panel.hidden=panel.dataset.panel!==button.dataset.view;
   for(const tab of document.querySelectorAll('[data-view]')){if(tab===button)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}
   $('page-title').textContent=viewCopy[button.dataset.view];
+  if(button.dataset.view==='fills')void loadFillHistory(true);
 };
 if(proxied)document.querySelector('[data-view="applications"]').click();
 $('review-profile-answers').onclick=()=>{document.querySelector('[data-view="profile"]').click();showSection('contact');$('profile-form').querySelector('[name]').focus();};
 $('concurrency').replaceChildren(...Array.from({length:30}, (_,i) => new Option(String(i+1), String(i+1))));
 $('concurrency').disabled = true;
 const undo = [], redo = [];
+let historyRequest=0;
+const fillOutcomes={changed:'Filled',existing:'Already present',suggested:'Suggested answer',skipped:'Skipped',unconfirmed:'Unconfirmed'};
+const fillReasons={
+  saved_value_conflict:'The field differs from your saved answer.',
+  optional_field:'Optional field.',needs_owner_answer:'Needs your answer.',
+  account_fields_preserved:'Enter this account detail yourself.',password_field_preserved:'Enter this password yourself.',
+  optional_consent_skipped:'Optional consent.',address_country_conflict:'The country differs from your profile.',
+  postal_code_requires_review:'Check the postal code against the country on the form.',
+  choice_not_unique:'More than one option matched.',button_choice_interaction_unsupported:'C3 could not select the option.',
+  employer_submission_disabled:'The employer has disabled submission.',required_attachment_missing:'The required file is missing.',
+  required_resume_missing:'The required resume is missing.',existing_attachment_preserved:'Kept the existing attachment.',
+  resume_control_not_identified:'C3 could not identify the resume field.',field_changed_before_fill:'The control changed before filling.',
+  required_attachment_unconfirmed:'C3 could not verify the required attachment.',resume_attachment_not_verified:'C3 could not verify the resume.',
+  value_not_accepted:'The page did not keep the intended value.',previous_control_write_unconfirmed:'An earlier change could not be verified.',
+  screening_choice_not_confirmed:'The page did not confirm the choice.',choice_commit_or_reset_unconfirmed:'C3 could not verify the final selection.',
+  value_changed_after_fill:'The value changed after filling.'
+};
+const remainingRequirements = {
+  required_empty:'Required field was empty after filling.',
+  required_invalid:'Required answer was marked invalid after filling.',
+  required_unconfirmed:'C3 could not verify the required selection.'
+};
+function fillRun(run,index){
+  const entry=document.createElement('details'),heading=document.createElement('summary'),time=document.createElement('time');
+  entry.open=index===0;
+  time.dateTime=run.at;
+  time.textContent=new Date(run.at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'medium'});
+  heading.append(time);
+  const count=document.createElement('span');
+  count.textContent=run.steps.length+' field '+(run.steps.length===1?'entry':'entries');
+  heading.append(count);entry.append(heading);
+  const list=document.createElement('ul');
+  for(const step of run.steps){
+    const row=document.createElement('li'),name=document.createElement('strong'),outcome=document.createElement('span');
+    name.textContent=step.label;
+    outcome.textContent=fillOutcomes[step.outcome]||'Unconfirmed';outcome.dataset.outcome=step.outcome;
+    row.append(name,outcome);
+    const detail=[remainingRequirements[step.requirement],fillReasons[step.reason]].filter(Boolean).join(' ');
+    if(detail){
+      const reason=document.createElement('p');reason.textContent=detail;row.append(reason);
+    }
+    list.append(row);
+  }
+  entry.append(list);
+  if(!run.steps.length)entry.append('No field details were recorded.');
+  return entry;
+}
+async function loadFillHistory(refreshList){
+  const request=++historyRequest,select=$('history-page'),status=$('fill-history-status'),runs=$('fill-history-runs');
+  runs.replaceChildren();status.textContent='Reading fill history…';
+  try{
+    if(refreshList){
+      const pages=await api('fill-history');
+      if(request!==historyRequest)return;
+      if(!selectedHistoryPage)selectedHistoryPage=pages[0]?.id || '';
+      const options=pages.map(page=>new Option((page.id===originPage?'Current page · ':'')+page.label+' · '+new Date(page.at).toLocaleString(),page.id));
+      if(selectedHistoryPage===originPage && !pages.some(page=>page.id===originPage))options.unshift(new Option('Current page',originPage));
+      select.replaceChildren(...options);
+      select.value=selectedHistoryPage;
+      if(select.selectedIndex<0 && select.options.length)select.selectedIndex=0;
+      selectedHistoryPage=select.value;
+      $('history-page-label').hidden=!options.length;
+    }
+    if(!selectedHistoryPage){status.textContent='No fills recorded yet.';return;}
+    const data=await api('fill-history/'+selectedHistoryPage);
+    if(request!==historyRequest)return;
+    status.textContent=data.runs.length?'':'No fills recorded for this page.';
+    runs.replaceChildren(...data.runs.map(fillRun));
+  }catch{
+    if(request===historyRequest)status.textContent='Could not load fill history. Check the connection and refresh history.';
+  }
+}
+$('refresh-fills').onclick=()=>void loadFillHistory(true);
+$('history-page').onchange=event=>{selectedHistoryPage=event.target.value;void loadFillHistory(false);};
 async function api(path, body) {
   if(body !== undefined && !stateFresh) throw new Error('Refresh progress before trying another action.');
   const signal = AbortSignal.timeout(body === undefined ? 15000 : 90000);
