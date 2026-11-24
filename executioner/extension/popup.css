@@ -10,7 +10,7 @@
 /* A toolbar popup chooses its viewport from its content. Only a tab has an independent viewport. */
 .popup.tab-view { max-width: 100%; }
 body { width: 100%; padding: 10px 12px; margin: 0; }
-.popup body { padding: 12px 14px; }
+.popup body { padding: 12px 14px; font: inherit; }
 header, .history, #actions { display: flex; align-items: center; gap: 6px; }
 header { justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid #2b4433; padding-bottom: 9px; }
 #page-context { min-width: 0; }
@@ -65,7 +65,7 @@ body[data-compact] #resume-list { max-height: 108px; }
 #resume-label { font-size: 12px; }
 #batch { margin-left: auto; }
 #actions { align-items: stretch; }
-#partial { flex: 1; min-height: 36px; white-space: nowrap; }
+#partial { flex: 1; min-height: 38px; font-size: 14px; white-space: nowrap; }
 #more-actions { width: 32px; padding: 2px 4px; letter-spacing: .5px; }
 #other-actions, .history { display: flex; gap: 5px; flex-wrap: wrap; }
 #other-actions button { min-height: 28px; font-size: 12px; padding: 4px 8px; }
