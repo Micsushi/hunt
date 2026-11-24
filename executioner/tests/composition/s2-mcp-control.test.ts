@@ -189,13 +189,12 @@ test("default MCP production journey retains, expires, and falls back without re
       errorCode: "page_incomplete",
     });
     assert.deepEqual(scenario.calls.slice(0, 3), ["bind", "account", "preserve"]);
-    assert.deepEqual(scenario.observedExpiry, [new Date(Math.min(
-      Date.parse(approvalExpiryAt),
-      Date.parse(leaseExpiryAt),
-    )).toISOString()]);
     for (let attempt = 0; attempt < 300 && scenario.closeCalls === 0; attempt += 1) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
+    // The timer checks the same expiry again before releasing the retained journey.
+    const expectedExpiry = new Date(Math.min(Date.parse(approvalExpiryAt), Date.parse(leaseExpiryAt))).toISOString();
+    assert.deepEqual(scenario.observedExpiry, [expectedExpiry, expectedExpiry]);
     assert.equal(scenario.releaseAt > 0, true);
     assert.equal(scenario.releaseAt >= Date.parse(approvalExpiryAt), true);
     assert.equal(scenario.closeCalls, 1);
