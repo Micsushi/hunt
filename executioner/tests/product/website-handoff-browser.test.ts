@@ -34,10 +34,13 @@ test('trusted website reaches only the paired paused-import bridge in a real ext
     context=await chromium.launchPersistentContext(join(root,'profile'),{headless:true,channel:'chromium',...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{}),args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
     const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');
     const id=new URL(worker.url()).host;
-    await worker.evaluate(async(token)=>{await (globalThis as any).chrome.storage.local.set({token});},token);
     const popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
+    await popup.getByText('Open the full menu in this browser, then connect again.',{exact:true}).waitFor();
+    await context.route(`http://127.0.0.1:${port}/`,route=>route.fulfill({contentType:'text/html',body:'<title>Existing workspace</title><label>Draft<textarea>Unsaved fixture details</textarea></label>'}));
+    const workspace=await context.newPage();await workspace.goto(`http://127.0.0.1:${port}/#token=${token}`);
     await popup.getByRole('button',{name:'Connect to local app',exact:true}).click();
-    await popup.getByText('Connected',{exact:true}).waitFor();
+    await popup.locator('#connection[data-ready="true"]').waitFor({state:'attached'});
+    assert.equal(await popup.getByRole('button',{name:'Connect to local app',exact:true}).isVisible(),false);
     assert.equal(await popup.locator('#settings').count(),0);
     await context.route('https://agent-hunt-review.mshi.ca/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Hunt website fixture</title><h1>Applications</h1>'}));
     const page=await context.newPage();await page.goto('https://agent-hunt-review.mshi.ca/executioner');
@@ -45,8 +48,7 @@ test('trusted website reaches only the paired paused-import bridge in a real ext
       (globalThis as any).chrome.runtime.sendMessage(id,{protocol:'hunt-c3-handoff-v1',operation,expiresAt:Date.now()+15000,...extra},(reply:any)=>resolve(reply??{error:(globalThis as any).chrome.runtime.lastError?.message}));
     }),{id,operation,extra});
     assert.deepEqual(await send('status'),{ok:true,result:{connected:true,configured:true}});
-    await context.route(`http://127.0.0.1:${port}/`,route=>route.fulfill({contentType:'text/html',body:'<title>Existing workspace</title><label>Draft<textarea>Unsaved fixture details</textarea></label>'}));
-    const workspace=await context.newPage();await workspace.goto(`http://127.0.0.1:${port}/`);await page.bringToFront();
+    await page.bringToFront();
     const pagesBefore=context.pages().length;
     const activeBefore=await worker.evaluate(async()=>(await (globalThis as any).chrome.tabs.query({active:true})).map((tab:any)=>tab.id));
     const bundle={format:'hunt-c3-handoff',version:1,jobs:[{sourceJobId:123,resumeVersion:'8'}]};

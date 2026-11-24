@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:https";
-import { createServer as createTcpServer } from "node:net";
+import { type AddressInfo } from "node:net";
 import { chromium } from "playwright";
 import { WebSocket } from "ws";
 import { startProductServer } from "../../src/product/server.ts";
@@ -26,12 +26,8 @@ async function cdp(url: string, method: string, params: object = {}): Promise<an
 }
 
 test("real extension retains Review and recovers after browser-initiated discard", { timeout: 180_000 }, async () => {
-  for (const port of [47851, 47852, 47853]) {
-    const probe = createTcpServer();
-    await new Promise<void>((resolve, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve())); });
-  }
   const root = mkdtempSync(join(tmpdir(), "c3-suspension-"));
-  const service = await startProductServer({ root, port: 47851 });
+  const service = await startProductServer({ root, port: 0 });
   const token = readFileSync(service.tokenPath, "utf8");
   const extension = join(root, "extension");
   execFileSync(process.platform === "win32" ? "C:/Program Files/Git/usr/bin/openssl.exe" : "openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(root, "key.pem"), "-out", join(root, "cert.pem"), "-days", "1", "-subj", "/CN=suspension.wd1.myworkdayjobs.com"], { windowsHide: true, stdio: "ignore" });
@@ -57,14 +53,16 @@ test("real extension retains Review and recovers after browser-initiated discard
         setTimeout(profile, 1500);
       } else profile();`);
   const fixtureServer = createServer({ key: readFileSync(join(root, "key.pem")), cert: readFileSync(join(root, "cert.pem")) }, (_, response) => { response.setHeader("Content-Type", "text/html"); response.end(fixture); });
-  await new Promise<void>(resolve => fixtureServer.listen(47852, "127.0.0.1", resolve));
+  await new Promise<void>(resolve => fixtureServer.listen(0, "127.0.0.1", resolve));
+  const fixturePort = (fixtureServer.address() as AddressInfo).port;
   cpSync(resolve("extension"), extension, { recursive: true });
-  for (const file of ["background.js", "manifest.json", "popup.js", "website-handoff.js"]) writeFileSync(join(extension, file), readFileSync(join(extension, file), "utf8").replaceAll("47831", "47851"));
+  for (const file of ["background.js", "manifest.json", "popup.js", "website-handoff.js"]) writeFileSync(join(extension, file), readFileSync(join(extension, file), "utf8").replaceAll("47831", new URL(service.origin).port));
   const browser = spawn(process.env.HUNT_C3_CHROMIUM ?? chromium.executablePath(), [
-    '--headless=new', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=47853', `--user-data-dir=${join(root, 'browser')}`,
-    `--disable-extensions-except=${extension}`, `--load-extension=${extension}`, "--ignore-certificate-errors", "--no-proxy-server", "--host-resolver-rules=MAP suspension.wd1.myworkdayjobs.com 127.0.0.1:47852", 'about:blank',
+    '--headless=new', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${join(root, 'browser')}`,
+    `--disable-extensions-except=${extension}`, `--load-extension=${extension}`, "--ignore-certificate-errors", "--no-proxy-server", `--host-resolver-rules=MAP suspension.wd1.myworkdayjobs.com 127.0.0.1:${fixturePort}`, 'about:blank',
   ], { windowsHide: true, stdio: 'ignore' });
-  const targets = async (): Promise<any[]> => fetch('http://127.0.0.1:47853/json/list').then(response => response.json());
+  const debugOrigin = () => 'http://127.0.0.1:' + readFileSync(join(root, 'browser', 'DevToolsActivePort'), 'utf8').split(/\r?\n/)[0];
+  const targets = async (): Promise<any[]> => fetch(debugOrigin() + '/json/list').then(response => response.json());
   let workerUrl: string | undefined;
   const evaluate = async (type: string, expression: string) => {
     const target = (await targets()).find(target => target.type === type && (type === 'service_worker' ? target.webSocketDebuggerUrl === workerUrl : target.url.includes('suspension.wd1')));
@@ -96,11 +94,21 @@ test("real extension retains Review and recovers after browser-initiated discard
       if (!popup) await new Promise(resolve => setTimeout(resolve, 50));
     }
     assert.ok(popup, "pairing page opened");
-    await cdp(popup.webSocketDebuggerUrl, "Runtime.evaluate", {
-      expression:'chrome.runtime.sendMessage({action:"connect"})', awaitPromise:true,
-    });
+    for (let i = 0; i < 100 && !service.queue.snapshot().connected; i++) {
+      const clicked = await cdp(popup.webSocketDebuggerUrl, "Runtime.evaluate", {
+        expression: `(() => {
+          const button = document.getElementById('connect-local');
+          if (!button?.checkVisibility() || button.disabled) return false;
+          button.click();
+          return true;
+        })()`,
+      });
+      if (clicked.result.value) break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    for (let i = 0; i < 100 && !service.queue.snapshot().connected; i++) await new Promise(r => setTimeout(r, 100));
+    assert.equal(service.queue.snapshot().connected, true, "the extension paired through the popup");
     await worker.evaluate(`chrome.tabs.remove(${pairing.id})`);
-    for (let i = 0; i < 100 && !service.queue.snapshot().connected; i++) await new Promise(r => setTimeout(r, 50));
     await api("settings", { applicant: { given_name: "Synthetic", family_name: "Applicant", email_address: "fixture@example.invalid" }, resumeBase64: Buffer.from("%PDF-1.4\nfixture").toString("base64") });
     await api("jobs", { jobs: [{ url: "https://suspension.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1" }] });
     const job = service.queue.jobs[0]!;
@@ -131,7 +139,7 @@ test("real extension retains Review and recovers after browser-initiated discard
     assert.equal(await evaluate('page', 'restoredEdits'), 0);
   } finally {
     await service.close();
-    const version = await fetch('http://127.0.0.1:47853/json/version').then(response => response.json()).catch(() => null) as any;
+    const version = await Promise.resolve().then(() => fetch(debugOrigin() + '/json/version')).then(response => response.json()).catch(() => null) as any;
     if (version?.webSocketDebuggerUrl) await cdp(version.webSocketDebuggerUrl, 'Browser.close').catch(() => {});
     for (const socket of sockets.values()) socket.close(); sockets.clear();
     if (browser.exitCode === null) browser.kill();

@@ -77,6 +77,7 @@ test("real extension fills concurrent tabs through Review and requires fresh per
     await worker.evaluate(`chrome.tabs.update(${tabs.find(t => t.url === pages[0]!.url())!.id}, {active:true})`);
     const popupUrl = worker.url().replace(/background\.js$/, "popup.html");
     const [popup] = await Promise.all([context.waitForEvent("page"), worker.evaluate(`chrome.tabs.create({url:${JSON.stringify(popupUrl)},active:false})`)]);
+    await popup.getByRole("button", { name: "More fill actions" }).click();
     await popup.getByRole("button", { name: "Prepare this job", exact: true }).click();
     await popup.getByText("Queued. C3 will stop at Review.", { exact: true }).waitFor();
     const jobs = await api("jobs", { jobs: pages.map(page => ({ url: page.url(), tabId: tabs.find(t => t.url === page.url())!.id })) });
