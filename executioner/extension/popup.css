@@ -26,7 +26,6 @@ button:hover:not(:disabled) { background: #aae4b5; }
 .secondary:hover:not(:disabled) { background: #293f30; border-color: #73927b; }
 button:disabled { background: #202c24; color: #a4b3a8; border-color: #364b3c; cursor: default; }
 button[aria-busy=true] { cursor: progress; }
-header button { min-height: 28px; padding: 4px 9px; font-size: 12px; white-space: nowrap; flex: none; }
 p { margin: 0; font-size: 12px; line-height: 16px; color: #c0d1c4; overflow-wrap: anywhere; }
 p:empty { display: none; }
 #connection { font-size: 11px; line-height: 15px; font-weight: 600; }
@@ -63,7 +62,7 @@ body[data-compact] #resume-list { max-height: 108px; }
 .text-button { min-height: 24px; padding: 2px 0; color: #b4e7ce; font-size: 12px; font-weight: 500; background: transparent; }
 .text-button:hover:not(:disabled) { color: #e4f2e7; text-decoration: underline; background: transparent; }
 #resume-label { font-size: 12px; }
-#batch { margin-left: auto; }
+#batch { margin-left: auto; flex: none; width: 34px; height: 34px; padding: 0; display: grid; place-items: center; font: 21px/1 "Segoe UI Symbol", sans-serif; }
 #actions { align-items: stretch; }
 #partial { flex: 1; min-height: 38px; font-size: 14px; white-space: nowrap; }
 #more-actions { width: 32px; padding: 2px 4px; letter-spacing: .5px; }
