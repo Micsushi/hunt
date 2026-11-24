@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const proxied = location.pathname.startsWith('/api/c3/');
 const base = proxied ? '/api/c3/' : '/';
-if (proxied) { $('pair').hidden = true; $('handoff-entry').hidden = true; }
+if (proxied) { $('pair').hidden = true; $('handoff-entry').hidden = true; $('pairing-settings').hidden = true; }
 const previousToken=sessionStorage.getItem('c3-token') ?? '';
 let urlToken = new URLSearchParams(location.hash.slice(1)).get('token');
 let token = urlToken ?? previousToken;
@@ -9,7 +9,7 @@ if (urlToken !== null) history.replaceState(null, '', location.pathname + locati
 let state, busy = false, rendered = '', pendingSubmit, historyBusy = false, profileLoaded = false, polling = false, profileDirty = false;
 let stateFresh = false, refreshSequence = 0, pendingJob;
 let handoffBundle, handoffPaused = false, handoffFileVersion = 0;
-let savedProfile, savedResumeUrl, accountStatus, accountDraft = false, metadataCheckedAt = 0;
+let savedProfile, savedResumeUrl, accountStatus, accountDraft = false, metadataCheckedAt = 0, extensionId = '';
 const jobErrors = new Map();
 $('profile-form').addEventListener('input', updateProfileDraft);
 $('account-form').addEventListener('input', () => { accountDraft = true; });
@@ -74,7 +74,7 @@ async function api(path, body) {
       return api(path,body);
     }
     stateFresh=false; $('pair').hidden=false;
-    throw new Error('This pairing key is no longer accepted. Enter the current key below, or reconnect Hunt C3 in the extension and choose Open workspace.');
+    throw new Error('This pairing key is no longer accepted. Enter the current key below, or reconnect Hunt C3 in the extension and choose Open full menu.');
   }
   if (!response.ok) throw new Error(data.error || data.detail || 'C3 is unavailable.');
   return data;
@@ -99,7 +99,7 @@ async function perform(action, jobId, label) {
   }
   finally { busy = false; pendingJob = undefined; historyButtons(); renderJobs(); }
 }
-function historyButtons() { $('repair-link').disabled=busy||historyBusy||!stateFresh||!!state?.storageError; $('undo').disabled = busy || historyBusy || !stateFresh || !undo.length; $('redo').disabled = busy || historyBusy || !stateFresh || !redo.length; $('retry-connection').disabled = busy || historyBusy; $('retry-profile').disabled = busy || historyBusy; $('check-account').disabled=busy||historyBusy||!stateFresh||!(accountStatus?.gmail?.configured||accountStatus?.gmail?.saved); $('check-connection').disabled=busy||historyBusy; $('refresh-profile').disabled=busy||historyBusy||!stateFresh; $('save-profile').disabled=busy||historyBusy||!profileLoaded||!stateFresh||!profileDirty; $('save-account').disabled=busy||historyBusy||!stateFresh; handoffControls(); }
+function historyButtons() { $('repair-link').disabled=busy||historyBusy||!stateFresh||!!state?.storageError; $('undo').disabled = busy || historyBusy || !stateFresh || !undo.length; $('redo').disabled = busy || historyBusy || !stateFresh || !redo.length; $('retry-connection').disabled = busy || historyBusy; $('retry-profile').disabled = busy || historyBusy; $('check-account').disabled=busy||historyBusy||!stateFresh||!(accountStatus?.gmail?.configured||accountStatus?.gmail?.saved); $('check-connection').disabled=busy||historyBusy; $('connect-website').disabled=busy||historyBusy||!stateFresh||!state?.connected||!state?.configured||!extensionId; $('settings-connect').disabled=busy||historyBusy; $('refresh-profile').disabled=busy||historyBusy||!stateFresh; $('save-profile').disabled=busy||historyBusy||!profileLoaded||!stateFresh||!profileDirty; $('save-account').disabled=busy||historyBusy||!stateFresh; handoffControls(); }
 function remember(entry) { undo.push(entry); if(undo.length > 20) undo.shift(); redo.length = 0; historyButtons(); }
 async function reverse(from, to, direction) {
   if(busy || historyBusy || !stateFresh || !from.length) return;
@@ -120,14 +120,17 @@ $('recover-storage').onclick = () => perform(() => api('recover-storage', {}));
 $('retry-connection').onclick = $('retry-profile').onclick = () => perform(async () => {});
 $('job-search').oninput = $('job-filter').onchange = () => renderJobs();
 $('clear-filters').onclick = () => { $('job-search').value=''; $('job-filter').value='all'; renderJobs(); $('job-search').focus(); };
-$('pair').onsubmit = e => { e.preventDefault(); void perform(async()=>{
-  const candidate=$('token').value.trim();
-  const response=await fetch(base+'state',{headers:{Authorization:'Bearer '+candidate},signal:AbortSignal.timeout(15000)});
-  if(!response.ok)throw new Error('Pairing key rejected. Your saved connection was kept.');
-  const checked=await response.json();
-  if(typeof checked.connected!=='boolean'||typeof checked.configured!=='boolean')throw new Error('C3 did not confirm the connection. Your saved connection was kept.');
-  token=candidate;sessionStorage.setItem('c3-token',token);$('token').value='';await refresh();
-}); };
+async function applyPairingKey(input) {
+  const candidate = input.value.trim();
+  const response = await fetch(base + 'state', { headers: { Authorization: 'Bearer ' + candidate }, signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error('Pairing key rejected. Your saved connection was kept.');
+  const checked = await response.json();
+  if (typeof checked.connected !== 'boolean' || typeof checked.configured !== 'boolean') throw new Error('C3 did not confirm the connection. Your saved connection was kept.');
+  token = candidate; sessionStorage.setItem('c3-token', token); input.value = ''; await refresh();
+  $('notice').textContent = 'Connection saved.';
+}
+$('pair').onsubmit = e => { e.preventDefault(); void perform(() => applyPairingKey($('token'))); };
+$('settings-pair-form').onsubmit = e => { e.preventDefault(); void perform(() => applyPairingKey($('settings-token'))); };
 $('batch').onsubmit = e => { e.preventDefault(); const submitted = $('links').value; void perform(async () => {
   const jobs = [...new Set(submitted.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))].map(url=>({url}));
   const added = await api('jobs', { jobs }); const existing=new Set(state.jobs.map(job=>job.id));const distinct=[...new Map(added.map(job=>[job.id,job])).values()];const reused=distinct.filter(job=>existing.has(job.id)).length; $('notice').textContent=`${distinct.length-reused} new applications · ${reused} already in your list${added.length===distinct.length?'':' · '+(added.length-distinct.length)+' duplicate links ignored'}`; if($('links').value === submitted) $('links').value = ''; $('links').focus();
@@ -336,10 +339,16 @@ $('check-account').onclick=()=>perform(async()=>{
 });
 async function loadConnectionStatus() {
   const status=await api('agent/status');
+  extensionId=typeof status.extension?.extensionId==='string'?status.extension.extensionId:'';
   $('connection-details').textContent=status.extension?`${status.extension.browser || 'Browser'} connected.`:status.connected?'Browser connected. Reload Hunt C3 to show its version.':'Open Hunt C3 in your browser and select Connect to local app.';
   $('connection-version').textContent=`Local app ${status.serviceVersion}${status.extension?.version?` · Extension ${status.extension.version}`:''}`;
+  historyButtons();
 }
 $('check-connection').onclick=()=>perform(async()=>{await loadConnectionStatus();$('notice').textContent='Connection checked.';});
+$('connect-website').onclick=()=>{
+  if(!extensionId)return;
+  window.open('https://agent-hunt-review.mshi.ca/executioner#c3-extension='+encodeURIComponent(extensionId),'_blank','noopener');
+};
 function button(text, action, jobId, blocked=false) { const b=document.createElement('button'); b.type='button'; b.className='secondary'; b.textContent=text; b.disabled=busy||historyBusy||!stateFresh||blocked; b.onclick=()=>perform(action,jobId,`${text} in progress…`); return b; }
 const ownerReview = job => job.status==='review' && job.stage.startsWith('Owner review needed:');
 const needsAttention = job => ownerReview(job) || ['paused','submission_uncertain'].includes(job.status);

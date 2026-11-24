@@ -31,12 +31,11 @@ test('popup pairs from the workspace, preserves saved keys on failure, and recon
     await popup.goto(worker.url().replace(/background\.js$/, 'popup.html'));
     const connect = popup.getByRole('button', { name: 'Connect to local app', exact: true });
     const clickConnect = async () => {
-      if (!await connect.isVisible()) await popup.locator('#settings > summary').click();
       await connect.click();
     };
     const savedKey = () => worker.evaluate(async () => (await (globalThis as any).chrome.storage.local.get('token')).token);
     await clickConnect();
-    await popup.getByText('Open the local C3 workspace in this browser, then connect again.').waitFor();
+    await popup.getByText('Open the full menu in this browser, then connect again.').waitFor();
     assert.equal(await savedKey(), undefined);
     await popup.screenshot({ path: join(root, 'popup-unpaired.png'), fullPage: true });
 
@@ -50,55 +49,31 @@ test('popup pairs from the workspace, preserves saved keys on failure, and recon
     await clickConnect();
     await popup.getByText(/Connection saved\./).waitFor();
     assert.equal(await savedKey(), token);
-    await popup.getByText('Connected. Save your profile in the workspace.', { exact: true }).waitFor();
+    await popup.getByText('Connected · Save profile in full menu', { exact: true }).waitFor();
+    assert.equal(await popup.locator('#settings').count(), 0, 'connection settings moved out of popup');
+    assert.equal(await connect.isVisible(), false, 'connect button hidden once connected');
     assert.equal(service.queue.snapshot().connected, true);
 
-    // A new explicit pairing URL takes priority before the workspace consumes its hash.
-    await workspace.evaluate(key => {
-      sessionStorage.setItem('c3-token', 'a'.repeat(64));
-      history.replaceState(null, '', '/#token=' + key);
-    }, token);
-    await clickConnect();
-    await popup.getByText(/Connection saved\./).waitFor();
-    assert.equal(await popup.locator('#status').getAttribute('data-error'), 'false');
-    assert.equal(await savedKey(), token);
-
-    const stale = await context.newPage();
-    await stale.goto(`${service.origin}/#token=${'a'.repeat(64)}`);
-    await stale.waitForFunction(() => !location.hash);
-    assert.equal(await stale.evaluate(() => sessionStorage.getItem('c3-token')),null,'Rejected URL key must not become the saved workspace connection');
-    // An old workspace can still carry a previously saved key from an older app.
-    await stale.evaluate(() => sessionStorage.setItem('c3-token','a'.repeat(64)));
-    await clickConnect();
-    await popup.getByText(/Several workspaces have different keys/).waitFor();
-    assert.equal(await savedKey(), token);
-    assert.equal(service.queue.snapshot().connected, true);
+    // Invalid pairing key entered in the full menu Settings panel preserves the saved workspace connection.
+    await workspace.getByRole('button', { name: 'Settings', exact: true }).click();
+    await workspace.locator('#pairing-settings > summary').click();
+    await workspace.locator('#settings-token').fill('invalid-key');
+    await workspace.locator('#settings-connect').click();
+    await workspace.getByText('Pairing key rejected. Your saved connection was kept.', { exact: true }).waitFor();
+    assert.equal(await workspace.evaluate(() => sessionStorage.getItem('c3-token')), token);
     await workspace.close();
-    await clickConnect();
-    await popup.getByText('Pairing key rejected. Your saved connection was kept.', { exact: true }).waitFor();
-    assert.equal(await savedKey(), token);
-    await stale.close();
-
-    if (!await popup.getByLabel('Pairing key').isVisible()) await popup.locator('#settings > summary').click();
-    await popup.getByLabel('Pairing key').fill('invalid-key');
-    await popup.getByRole('button', { name: 'Connect', exact: true }).click();
-    await popup.getByText('Pairing key rejected. Your saved connection was kept.', { exact: true }).waitFor();
-    assert.equal(await savedKey(), token);
 
     // The saved connection works without an open workspace, including a service restart.
     await popup.reload();
-    await popup.getByText('Connected. Save your profile in the workspace.', { exact: true }).waitFor();
+    await popup.getByText('Connected · Save profile in full menu', { exact: true }).waitFor();
     await service.close();
+    await popup.getByText('Start the local C3 app to connect', { exact: true }).waitFor();
     await clickConnect();
     await popup.locator('#status[data-error="true"]').waitFor();
     assert.equal(await savedKey(), token);
-    await popup.getByText('Start the local C3 app to connect', { exact: true }).waitFor();
     service = await startProductServer({ root: join(root, 'service'), port });
-    await popup.getByText('Connected. Save your profile in the workspace.', { exact: true }).waitFor();
+    await popup.getByText('Connected · Save profile in full menu', { exact: true }).waitFor();
     assert.equal(service.queue.snapshot().connected, true);
-    await clickConnect();
-    await popup.getByText(/Connection saved\./).waitFor();
-    assert.equal(await savedKey(), token);
     assert.equal(service.queue.snapshot().jobs.length, 0);
     await popup.screenshot({ path: join(root, 'popup-connected.png'), fullPage: true });
     console.log(`Pairing browser evidence: ${root}`);

@@ -246,7 +246,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const {token} = await chrome.storage.local.get('token');
       if(Date.now()>=expiresAt)throw new Error('The page action expired. Inspect the draft before retrying.');
       // The service validates live profile mode and queued resume ownership for every entry point.
-      const response=await fetch(origin+'/browser/page',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify({operation:message.operation,tabId:message.tabId,expectedUrl:message.expectedUrl,documentId:message.documentId,expectedResumeSha256:message.expectedResumeSha256,currentPageJobId:message.currentPageJobId,expiresAt}),signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),redirect:'error'});
+      const response=await fetch(origin+'/browser/page',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify({operation:message.operation,tabId:message.tabId,expectedUrl:message.expectedUrl,documentId:message.documentId,expectedResumeSha256:message.expectedResumeSha256,currentPageJobId:message.currentPageJobId,...(message.resumeSha256?{resumeSha256:message.resumeSha256}:{}),expiresAt}),signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),redirect:'error'});
       const result=await response.json();
       if(!response.ok)throw new Error(response.status===404?'Update the local C3 app before filling this page.':typeof result?.error==='string'?result.error:'C3 could not confirm this page action. Inspect the draft before retrying.');
       return result;

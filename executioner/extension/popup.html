@@ -10,25 +10,24 @@
 <body>
   <nav id="compact-nav" aria-label="Hunt controls" hidden>
     <button class="secondary" data-panel="page">Page</button>
-    <button class="secondary" data-panel="resumes">Résumé</button>
     <button class="secondary" data-panel="result">Result</button>
-    <button class="secondary" data-panel="settings">Settings</button>
   </nav>
   <header>
-    <h1>Hunt <span>C3</span></h1>
-    <button id="batch" class="secondary">Open workspace</button>
+    <div class="brand-group">
+      <h1>Hunt <span>C3</span></h1>
+      <p id="connection" role="status">Checking connection…</p>
+    </div>
+    <button id="batch" class="secondary">Open full menu</button>
   </header>
-  <section class="connection" aria-label="Connection">
-    <p id="connection" role="status">Checking connection…</p>
-    <div id="connection-actions"><button id="connect-local" class="secondary">Connect to local app</button></div>
-  </section>
+  <div id="connection-actions" hidden><button id="connect-local" class="secondary">Connect to local app</button></div>
   <main>
     <h2 id="job">Current page</h2>
     <p id="support"></p>
     <div id="resumes" hidden>
-      <div id="current-resume" class="resume-row" hidden><span></span><a target="_blank" rel="noopener"></a></div>
-      <div id="queued-resume" class="resume-row" hidden><span></span><a target="_blank" rel="noopener"></a></div>
-      <label id="choice-row" hidden><input id="choose-resume" type="checkbox"> Use the full application résumé on this page</label>
+      <label class="resume-field" for="resume-select">
+        <span>Resume</span>
+        <select id="resume-select"></select>
+      </label>
     </div>
     <div id="actions">
       <button id="partial" disabled>Fill current page</button>
@@ -39,21 +38,11 @@
       <button id="redo" class="secondary" disabled>Redo fill</button>
     </div>
   </main>
-  <p id="status" role="status"></p>
+  <div id="status" role="status"></div>
   <nav id="message-pages" aria-label="Result details" hidden>
     <button id="previous-message" class="secondary" aria-label="Previous part">Previous</button>
     <span id="message-position" role="status"></span>
     <button id="next-message" class="secondary" aria-label="Next part">Next</button>
   </nav>
-  <details id="settings">
-    <summary>Connection settings</summary>
-    <div class="settings-content">
-      <div id="pairing-actions"></div>
-      <label for="token">Pairing key</label>
-      <div class="pairing"><input id="token" type="password" autocomplete="off"><button id="connect" class="secondary">Connect</button></div>
-      <button id="website" class="secondary">Connect Hunt website</button>
-      <p class="version"><span id="extension-version"></span> <span id="browser-details"></span></p>
-    </div>
-  </details>
 </body>
 </html>

@@ -290,8 +290,52 @@ export class ApplicationQueue {
     const source = job?.resumeVersion ? 'selected' : 'default';
     const savedName = job?.resumeName && job.resumeName !== 'Default resume' ? job.resumeName :
       input.resume === this.settings?.resume ? this.settings.resumeName : undefined;
-    const name = savedName || (source === 'selected' ? 'Selected résumé' : 'Default résumé') + ' · ' + sha256.slice(0,8);
+    const name = savedName || (source === 'selected' ? 'Selected resume' : 'Default resume') + ' · ' + sha256.slice(0,8);
     return {pdf, metadata:{source,name,sha256,...(job?.resumeVersion && {version:job.resumeVersion})}};
+  }
+  availableResumes() {
+    const list: {id: string; source: 'default' | 'selected'; name: string; sha256: string; version?: string; jobId?: string}[] = [];
+    const seen = new Set<string>();
+    try {
+      const def = this.resumeDocument();
+      if (def) {
+        seen.add(def.metadata.sha256);
+        list.push({id: 'default', source: 'default', name: def.metadata.name, sha256: def.metadata.sha256});
+      }
+    } catch { /* Default resume unavailable. */ }
+    for (let i = this.jobs.length - 1; i >= 0; i--) {
+      const job = this.jobs[i]!;
+      if (job.status === 'removed') continue;
+      try {
+        const doc = this.resumeDocument(job);
+        if (!doc || seen.has(doc.metadata.sha256)) continue;
+        seen.add(doc.metadata.sha256);
+        list.push({
+          id: doc.metadata.sha256,
+          source: doc.metadata.source as 'default' | 'selected',
+          name: doc.metadata.name,
+          sha256: doc.metadata.sha256,
+          ...(doc.metadata.version && {version: doc.metadata.version}),
+          ...(job.id && {jobId: job.id}),
+        });
+      } catch { /* Skip damaged job inputs so other resumes remain selectable. */ }
+    }
+    return list;
+  }
+  resumeBySha256(sha256: string) {
+    try {
+      const def = this.resumeDocument();
+      if (def?.metadata.sha256 === sha256) return {...def, base64: def.pdf.toString('base64')};
+    } catch { /* Fall through to job resumes. */ }
+    for (let i = this.jobs.length - 1; i >= 0; i--) {
+      const job = this.jobs[i]!;
+      if (job.status === 'removed') continue;
+      try {
+        const doc = this.resumeDocument(job);
+        if (doc?.metadata.sha256 === sha256) return {...doc, base64: doc.pdf.toString('base64')};
+      } catch { /* Ignore unreadable job inputs. */ }
+    }
+    return null;
   }
   recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
   configureApplicant(values: unknown, resumeBase64?: string, resumeName?: string) {

@@ -63,7 +63,7 @@ export async function currentPageOwner(jobs: ProductJob[], url: URL, currentPage
   try { key = productApplicationTarget(url.href).key; } catch { /* Ordinary page fill also supports unfamiliar HTTPS pages. */ }
   if (currentPageJobId !== undefined) {
     const chosen = jobs.find(job=>job.id===currentPageJobId && job.ats!=='generic' && selectableQueueResume(job) && canonicalPostingKey(job.key)===key);
-    if (!chosen) throw new Error('The selected application résumé changed. Reopen Hunt on its original posting.');
+    if (!chosen) throw new Error('The selected application resume changed. Reopen Hunt on its original posting.');
     return chosen;
   }
   const publication = smartRecruitersPublication(url);

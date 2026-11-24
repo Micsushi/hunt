@@ -36,10 +36,9 @@ test('trusted website reaches only the paired paused-import bridge in a real ext
     const id=new URL(worker.url()).host;
     await worker.evaluate(async(token)=>{await (globalThis as any).chrome.storage.local.set({token});},token);
     const popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
-    await popup.locator('#settings > summary').click();
     await popup.getByRole('button',{name:'Connect to local app',exact:true}).click();
-    await popup.getByRole('button',{name:'Connect Hunt website',exact:true}).waitFor();
-    await popup.waitForFunction(()=>!(document.getElementById('website') as HTMLButtonElement).disabled);
+    await popup.getByText('Connected',{exact:true}).waitFor();
+    assert.equal(await popup.locator('#settings').count(),0);
     await context.route('https://agent-hunt-review.mshi.ca/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Hunt website fixture</title><h1>Applications</h1>'}));
     const page=await context.newPage();await page.goto('https://agent-hunt-review.mshi.ca/executioner');
     const send=async(operation:string,extra:object={})=>page.evaluate(({id,operation,extra})=>new Promise<any>(resolve=>{

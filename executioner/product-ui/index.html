@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hunt C3</title><link rel="stylesheet" href="./style.css"><script src="./app.js" defer></script></head>
 <body><main>
   <header class="app-header"><span class="brand">Hunt <span>C3</span></span><span id="connection" role="status">Connecting</span></header>
-  <nav class="app-nav" aria-label="Workspace"><button type="button" data-view="profile" aria-current="page">Profile</button><button type="button" data-view="applications">Applications</button><button type="button" data-view="settings">Settings</button></nav>
+  <nav class="app-nav" aria-label="Full menu"><button type="button" data-view="profile" aria-current="page">Profile</button><button type="button" data-view="applications">Applications</button><button type="button" data-view="settings">Settings</button></nav>
   <div class="page-heading"><h1 id="page-title">Profile</h1></div>
   <div id="profile-answer-warning" class="owner-warning" hidden><p>This profile includes a test setting or test answers. Check it before filling.</p><button id="review-profile-answers" type="button" class="secondary">Review profile answers</button></div>
   <p id="error" role="alert" hidden></p>
@@ -43,8 +43,9 @@
   </section>
   <section id="settings-panel" data-panel="settings" hidden aria-label="Settings and backup">
     <section class="connection-settings" aria-labelledby="connection-heading">
-      <h2 id="connection-heading">Browser connection</h2><p id="connection-details" role="status">Checking connection…</p>
-      <details><summary>Connection details</summary><p id="connection-version" class="note"></p><button id="check-connection" type="button" class="secondary">Check connection</button></details>
+      <h2 id="connection-heading">Connection settings</h2><p id="connection-details" role="status">Checking connection…</p><p id="connection-version" class="note"></p>
+      <div class="actions"><button id="check-connection" type="button" class="secondary">Check connection</button><button id="connect-website" type="button" class="secondary" disabled>Connect Hunt website</button></div>
+      <details id="pairing-settings"><summary>Pairing key</summary><form id="settings-pair-form"><label for="settings-token">Pairing key</label><input id="settings-token" type="password" autocomplete="off" required><button id="settings-connect" type="submit" class="secondary">Connect</button></form></details>
     </section>
     <section aria-labelledby="account-heading"><h2 id="account-heading">Application account</h2>
     <dl class="status-list" aria-label="Saved account status"><div><dt>Application password</dt><dd id="application-password-state">Checking saved account</dd></div><div><dt>Gmail verification</dt><dd id="gmail-password-state">Checking saved account</dd></div></dl><button id="check-account" type="button" class="secondary" disabled>Recheck saved Gmail</button><p class="note" id="account-storage-status" role="status"></p><details><summary>Edit credentials</summary><form id="account-form"><label>Account email<input id="email" type="email" autocomplete="username" required></label><label>Application password<input id="password" type="password" autocomplete="current-password" aria-describedby="account-password-hint"></label><label>Gmail app password<input id="gmail" type="password" autocomplete="off" aria-describedby="account-password-hint"></label><p id="account-password-hint" class="note">For the same email, blank passwords keep the saved values.</p><button id="save-account">Save account</button></form></details>

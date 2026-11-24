@@ -60,20 +60,17 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.equal(choice.currentPage.source,'default');
     assert.notEqual(choice.queued.sha256,choice.currentPage.sha256);
     const chooser=await openPopup();
-    const useSelected=chooser.locator('#choose-resume');
-    await useSelected.waitFor();
-    assert.equal(await useSelected.isChecked(),false);
-    await useSelected.check();
-    const chosenLink=chooser.locator('#current-resume a');
-    await chosenLink.filter({hasText:'Selected.pdf'}).waitFor();
-    const [chosenPreview]=await Promise.all([context.waitForEvent('page'),chosenLink.click()]);
-    const chosenFrame=chosenPreview.locator('#pdf:not([hidden])');
-    await chosenFrame.waitFor();
-    assert.equal(await chosenFrame.evaluate(async (frame:HTMLIFrameElement)=>btoa(await (await fetch(frame.src)).text())),selected);
-    await chosenPreview.close();
-    await useSelected.uncheck();
-    await chosenLink.filter({hasText:'Default résumé'}).waitFor();
-    await chooser.locator('#choose-resume:not(:disabled)').waitFor();
+    const resumeSelect=chooser.locator('#resume-select');
+    await resumeSelect.waitFor();
+    assert.equal(await chooser.locator('#resumes a').count(),0,'popup resume selector has no link');
+    assert.equal(await resumeSelect.inputValue(),choice.currentPage.sha256);
+    assert.match(await resumeSelect.locator('option:checked').innerText(),/Default resume/);
+    await resumeSelect.selectOption(choice.queued.sha256);
+    assert.equal(await resumeSelect.inputValue(),choice.queued.sha256);
+    assert.match(await resumeSelect.locator('option:checked').innerText(),/Selected\.pdf/);
+    await resumeSelect.selectOption(choice.currentPage.sha256);
+    assert.equal(await resumeSelect.inputValue(),choice.currentPage.sha256);
+    await chooser.locator('#resume-select:not(:disabled)').waitFor();
     await chooser.close();
     const fills=await send('fill',inspect.result.documentId);
     assert.equal(fills.ok,true,JSON.stringify(fills));
@@ -99,14 +96,10 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const inputFile=join(root,'service',queued.id+'.input.json');
     writeFileSync(inputFile,'{invalid fixture');
     const damaged=await openPopup();
-    await damaged.locator('#support').filter({hasText:'Check the saved résumé in Applications'}).waitFor();
+    await damaged.locator('#support').filter({hasText:'Check the saved resume in Applications'}).waitFor();
     assert.equal(await damaged.locator('#fill').isDisabled(),true);
     assert.equal(await damaged.locator('#partial').isEnabled(),true);
-    const [defaultPreview]=await Promise.all([context.waitForEvent('page'),damaged.locator('#current-resume a').click()]);
-    const defaultFrame=defaultPreview.locator('#pdf:not([hidden])');
-    await defaultFrame.waitFor();
-    assert.equal(await defaultFrame.evaluate(async (frame:HTMLIFrameElement)=>btoa(await (await fetch(frame.src)).text())),resume);
-    await defaultPreview.close();
+    assert.match(await damaged.locator('#resume-select option:checked').innerText(),/Default resume/);
     await damaged.locator('#partial').click();
     await damaged.locator('#undo:not(:disabled)').waitFor();
     assert.equal(await nativeFile.evaluate(async(e:HTMLInputElement)=>btoa(await e.files![0]!.text())),resume);
@@ -178,19 +171,11 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const attachments=await openPopup();
     const status=attachments.locator('#status'), resumeInput=page.locator('input[type=file]').first();
     const transcript=page.getByLabel('Transcript',{exact:true});
-    const previewLink=attachments.locator('#current-resume a');
+    const resumeSelect2=attachments.locator('#resume-select');
     const defaultDigest=createHash('sha256').update(Buffer.from(resume,'base64')).digest('hex');
-    await previewLink.waitFor();
-    assert.match(await previewLink.innerText(),/Default résumé/);
-    const previewUrl=await previewLink.evaluate((link:HTMLAnchorElement)=>link.href);
-    assert.equal(new URLSearchParams(new URL(previewUrl).hash.slice(1)).get('sha256'),defaultDigest);
-    const [preview]=await Promise.all([context.waitForEvent('page'),previewLink.click()]);
-    await preview.locator('#pdf:not([hidden])').waitFor();
-    const displayedPdf=await preview.locator('#pdf').evaluate(async (frame:HTMLIFrameElement)=>
-      Array.from(new Uint8Array(await (await fetch(frame.src)).arrayBuffer())));
-    assert.equal(Buffer.from(displayedPdf).toString('base64'),resume);
-    assert.ok(!preview.url().includes(token));
-    await preview.close();
+    await resumeSelect2.waitFor();
+    assert.match(await resumeSelect2.locator('option:checked').innerText(),/Default resume/);
+    assert.equal(await resumeSelect2.inputValue(),defaultDigest);
     const requiredTranscript='The required transcript is missing.';
     await status.filter({hasText:'The required resume field is empty.'}).filter({hasText:requiredTranscript}).waitFor();
     for(const [action,message] of [
@@ -204,14 +189,8 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
       assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files!.length),action==='undo'?0:1);
     }
     service.queue.configure(personal,selected);
-    // Reopening the old preview must never display the replacement under the earlier label.
-    const stale=await context.newPage();
-    await stale.goto(previewUrl);
-    await stale.locator('#preview-status').filter({hasText:/changed/i}).waitFor();
-    assert.equal(await stale.locator('#pdf').isVisible(),false);
-    await stale.close();
     const selectedDigest=createHash('sha256').update(Buffer.from(selected,'base64')).digest('hex');
-    await attachments.waitForFunction(digest=>document.querySelector<HTMLAnchorElement>('#current-resume a')?.href.includes(digest),selectedDigest);
+    await attachments.waitForFunction(digest=>document.querySelector<HTMLSelectElement>('#resume-select')?.value===digest,selectedDigest);
     await attachments.locator('#partial').click();
     await status.filter({hasText:'Your selected PDF differs from the earlier resume selection'}).filter({hasText:requiredTranscript}).waitFor();
     assert.doesNotMatch(await status.innerText(),/picker matches the selected PDF/);

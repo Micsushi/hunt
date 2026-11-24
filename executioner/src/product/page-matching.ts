@@ -111,7 +111,14 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
     // A form with no observed fields and no identifiable upload target cannot confirm a fill.
     const emptyForm = !seen.size && !filled.size && remaining.some(skip => skip.reason === 'resume_control_not_identified');
     const incomplete = result.incomplete === true || emptyForm;
+    const reviewFields = [...new Set(
+      (result.matching ?? [])
+        .filter(row => row.provisional && row.reason !== 'existing_value_preserved' && row.reason !== 'optional_field' && row.reason !== 'existing_value_confirmed')
+        .map(row => row.question.replace(/[\u2009*✱]/g, '').trim())
+        .filter(Boolean)
+    )];
     return {...report, incomplete, filled: [...filled], skipped: remaining, ...(failure ? {componentFailure: failure} : {}),
+      ...(reviewFields.length ? {reviewFields} : {}),
       needsOwnerReview: backlog.needsReview || incomplete};
   } finally {disposeResumeArtifact(sources.resumeIntent.artifact);}
 }

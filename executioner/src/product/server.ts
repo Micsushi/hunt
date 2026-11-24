@@ -150,11 +150,11 @@ export async function startProductServer(options: { root?: string; port?: number
         if (!body || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || !supportsCurrentPage(body.expectedUrl,origin) ||
           Object.keys(body).some(key=>!['tabId','expectedUrl','workflow','sha256','currentPageJobId'].includes(key)) ||
           (body.workflow !== undefined || body.sha256 !== undefined) && (!['currentPage','queued'].includes(body.workflow) || typeof body.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.sha256))) {
-          throw new Error('Choose a current tab and a valid résumé.');
+          throw new Error('Choose a current tab and a valid resume.');
         }
         const tabs = await bridge.call('pageTabs');
         if (!Array.isArray(tabs) || !tabs.some(tab => tab.tabId === body.tabId && tab.url === body.expectedUrl && !tab.discarded)) {
-          throw new Error('The original tab changed. Reopen Hunt to check its résumé.');
+          throw new Error('The original tab changed. Reopen Hunt to check its resume.');
         }
         const url = new URL(body.expectedUrl);
         queue.assertAvailableLink(url.href,undefined,true);
@@ -170,21 +170,29 @@ export async function startProductServer(options: { root?: string; port?: number
           try { queued = queue.resumeDocument(queuedJob); }
           catch {
             queued = null;
-            queuedError = 'Check the saved résumé in Applications before preparing this application.';
+            queuedError = 'Check the saved resume in Applications before preparing this application.';
           }
         }
         if (body.workflow) {
           if (body.workflow === 'queued' && queuedError) throw new Error(queuedError);
           const doc = body.workflow === 'queued' ? queued : currentPage;
-          if (!doc || doc.metadata.sha256 !== body.sha256) throw new Error('The selected résumé changed. Reopen Hunt to check it.');
+          if (!doc || doc.metadata.sha256 !== body.sha256) throw new Error('The selected resume changed. Reopen Hunt to check it.');
           response.setHeader('Content-Type','application/pdf');
           response.end(doc.pdf);return;
         }
+        const resumes = queue.availableResumes();
+        const queuedMeta = queued ? {...queued.metadata,...(queuedJob && selectableQueueResume(queuedJob) && {jobId:queuedJob.id})} : null;
+        if (queuedMeta) {
+          const match = resumes.find(item => item.sha256 === queuedMeta.sha256);
+          if (match && queuedMeta.jobId) match.jobId = queuedMeta.jobId;
+          else if (!match) resumes.push({id: queuedMeta.sha256, source: queuedMeta.source as 'default'|'selected', name: queuedMeta.name, sha256: queuedMeta.sha256, ...(queuedMeta.version && {version: queuedMeta.version}), ...(queuedMeta.jobId && {jobId: queuedMeta.jobId})});
+        }
         result = {supportsQueue:!!target,currentPage:currentPage?.metadata??null,
-          ...(queuedError && {queuedError}),queued:queued ? {...queued.metadata,...(queuedJob && selectableQueueResume(queuedJob) && {jobId:queuedJob.id})} : null};
+          ...(queuedError && {queuedError}),queued:queuedMeta,resumes};
       } else if (path === '/browser/page') {
-        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt','expectedResumeSha256','currentPageJobId'].includes(key)) ||
-          !['inspect','fill','undo','redo'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string') throw new Error('Choose an HTTPS tab and a supported page action.');
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt','expectedResumeSha256','currentPageJobId','resumeSha256'].includes(key)) ||
+          !['inspect','fill','undo','redo'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string' ||
+          (body.resumeSha256 !== undefined && (typeof body.resumeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.resumeSha256)))) throw new Error('Choose an HTTPS tab and a supported page action.');
         const url = new URL(body.expectedUrl);
         if (!supportsCurrentPage(url.href,origin) || body.operation !== 'inspect' && (typeof body.documentId !== 'string' || !body.documentId)) throw new Error('Inspect a secure web page or local form before changing fields.');
         if (body.expiresAt !== undefined && (!Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now())) throw new Error('This page action expired. Inspect the page again before changing it.');
@@ -210,7 +218,7 @@ export async function startProductServer(options: { root?: string; port?: number
             queue.jobs.some(job => job.id === prior.jobId && job.pageHandoff && job.status === 'paused')) {
           throw new Error('This tab is linked to a saved application. Reopen its posting from Applications, or use a new tab for another job.');
         }
-        if (prior && !selected && body.operation !== 'inspect') throw new Error('Inspect the current page after changing the selected résumé.');
+        if (prior && !selected && body.operation !== 'inspect') throw new Error('Inspect the current page after changing the selected resume.');
         if (selected) {
           if (activeHandoffs.has(selected.id)) throw new Error('C3 is operating this application in another tab.');
           lockedHandoff = selected.id;
@@ -233,8 +241,15 @@ export async function startProductServer(options: { root?: string; port?: number
           accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
         const priorWorkdayPage = accountPage?.priorWorkdayPage;
         if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
+        const pickedResume = !selected && typeof body.resumeSha256 === 'string' ? queue.resumeBySha256(body.resumeSha256) : undefined;
+        if (!selected && typeof body.resumeSha256 === 'string' && !pickedResume) {
+          throw new Error('The selected resume changed. Reopen Hunt to check it before filling.');
+        }
         const currentInput = () => {
-          if (!selected) return queue.getSettings();
+          if (!selected) {
+            const base = queue.getSettings();
+            return pickedResume && base ? {profile: base.profile, resume: pickedResume.base64} : base;
+          }
           const pinned = queue.currentPageInput(selected);
           // The known ATS chooser selects only the PDF; explicit imported handoffs retain their profile.
           return body.currentPageJobId === undefined ? pinned : {profile:queue.getSettings()?.profile,resume:pinned.resume};
@@ -243,8 +258,9 @@ export async function startProductServer(options: { root?: string; port?: number
         const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');
         const resume = body.operation === 'fill' ? settings?.resume : undefined;
-        if (body.operation === 'fill' && body.expectedResumeSha256 !== undefined && body.expectedResumeSha256 !== queue.resumeDocument(selected)?.metadata.sha256) {
-          throw new Error('The selected résumé changed. Reopen Hunt to check it before filling.');
+        const resolvedSha256 = pickedResume ? pickedResume.metadata.sha256 : queue.resumeDocument(selected)?.metadata.sha256;
+        if (body.operation === 'fill' && body.expectedResumeSha256 !== undefined && body.expectedResumeSha256 !== resolvedSha256) {
+          throw new Error('The selected resume changed. Reopen Hunt to check it before filling.');
         }
         if (writesProfile) {
           const admitted = productSources(profile, Buffer.from(settings?.resume ?? '', 'base64'));

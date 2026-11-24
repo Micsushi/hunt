@@ -13,28 +13,28 @@ async function openResumePreview() {
     const sha256 = params.get('sha256') || '';
     const currentPageJobId = params.get('currentPageJobId');
     if (!Number.isSafeInteger(tabId) || tabId < 1 || !['currentPage', 'queued'].includes(workflow) || !/^[a-f0-9]{64}$/.test(sha256)) {
-      throw new Error('Open this résumé from the Hunt popup.');
+      throw new Error('Open this resume from the Hunt popup.');
     }
     const tab = await chrome.tabs.get(tabId);
     const {token} = await chrome.storage.local.get('token');
-    if (!token) throw new Error('Connect to Hunt, then open the résumé again.');
+    if (!token) throw new Error('Connect to Hunt, then open the resume again.');
     const service = chrome.runtime.getManifest().host_permissions.find(pattern => pattern.startsWith('http://127.0.0.1:'));
     const response = await fetch(new URL('/browser/page-resume', service), {
       method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
       body: JSON.stringify({tabId, expectedUrl: tab.url, workflow, sha256, ...(workflow === 'currentPage' && currentPageJobId && {currentPageJobId})}), signal: AbortSignal.timeout(15000), redirect: 'error',
     });
-    if (!response.ok) throw new Error((await response.json()).error || 'Open the selected résumé again from Hunt.');
+    if (!response.ok) throw new Error((await response.json()).error || 'Open the selected resume again from Hunt.');
     if (response.headers.get('Content-Type')?.split(';')[0] !== 'application/pdf') throw new Error('The selected file is unavailable.');
     const blob = await response.blob();
     const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
     const actual = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    if (actual !== sha256) throw new Error('The selected résumé changed. Open it again from Hunt.');
+    if (actual !== sha256) throw new Error('The selected resume changed. Open it again from Hunt.');
     const frame = document.getElementById('pdf');
     frame.src = URL.createObjectURL(blob);
     frame.hidden = false;
     status.hidden = true;
   } catch (error) {
-    status.textContent = error.message || 'The résumé could not be opened.';
+    status.textContent = error.message || 'The resume could not be opened.';
   }
 }
 
@@ -46,7 +46,6 @@ async function initializePopup() {
   function showPanel(panel){
     if(!compact)return;
     document.body.dataset.panel=panel;
-    $('settings').open=panel==='settings';
     for(const button of $('compact-nav').children)button.setAttribute('aria-pressed',String(button.dataset.panel===panel));
     layoutMessage();
   }
@@ -58,42 +57,57 @@ async function initializePopup() {
   const saved=await chrome.storage.local.get('token');
   const choiceKey='pageResume:'+tab?.id;
   let preference=(await chrome.storage.session.get(choiceKey))[choiceKey];
-  $('extension-version').textContent=`Extension ${chrome.runtime.getManifest().version}`;
   $('job').textContent=tab?.title||'Current page';
   $('job').title=tab?.title||'';
   let busy=false, serviceReady=false, browserReady=false;
   const canPartial=supportsCurrentPage(tab?.url,origin);
   $('actions').hidden=!canPartial;
   if(!canPartial)$('job').textContent='Open a web form';
-  let selection=null, alternatives=null, currentPageJobId;
+  let selection=null, alternatives=null, currentPageJobId, selectedResumeSha256;
+  function resumeOptions(next){
+    const seen=new Set(), list=[];
+    const add=item=>{
+      if(!item?.sha256||seen.has(item.sha256))return;
+      seen.add(item.sha256);
+      list.push(item);
+    };
+    if(next?.currentPage)add(next.currentPage);
+    if(next?.queued)add(next.queued);
+    if(Array.isArray(next?.resumes))for(const item of next.resumes)add(item);
+    return list;
+  }
   function renderSelection(next, error=''){
     alternatives=next;
+    const options=resumeOptions(next);
     const queued=next?.queued;
-    const canChoose=queued?.source==='selected' && queued.jobId && queued.sha256!==next.currentPage?.sha256;
-    const chosen=canChoose && preference?.jobId===queued.jobId && preference?.sha256===queued.sha256 && preference?.url===tab.url;
-    currentPageJobId=chosen?queued.jobId:undefined;
-    selection=chosen?{...next,currentPage:queued}:next;
-    $('choice-row').hidden=!canChoose;
-    $('choose-resume').checked=Boolean(chosen);
+    const select=$('resume-select');
+    const prefMatch=preference?.url===tab?.url
+      ? options.find(item=>item.sha256===preference.sha256 && (!preference.jobId || item.jobId===preference.jobId || item.sha256===queued?.sha256))
+      : null;
+    const activeResume=prefMatch||next?.currentPage||options[0]||null;
+    const matchesQueued=Boolean(prefMatch && queued?.source==='selected' && queued.jobId && activeResume?.sha256===queued.sha256 && queued.sha256!==next?.currentPage?.sha256);
+    currentPageJobId=matchesQueued?queued.jobId:undefined;
+    selectedResumeSha256=prefMatch && !matchesQueued && activeResume?.sha256!==next?.currentPage?.sha256 ? activeResume.sha256 : undefined;
+    selection=next?(activeResume?{...next,currentPage:activeResume}:next):null;
     $('prepare-action').hidden=!next?.supportsQueue;
-    $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':next?.supportsQueue?'Full application or current page':next?'Single-page fill':'');
-    const separate=queued && selection.currentPage?.sha256!==queued.sha256;
-    function renderRow(id,workflow,pdf,caption){
-      const row=$(id);
-      row.hidden=!pdf;
-      if(!pdf)return;
-      const link=row.querySelector('a');
-      const label=pdf.version?`${pdf.name} · ${pdf.version}`:pdf.name;
-      row.querySelector('span').textContent=caption;
-      link.textContent=label;
-      link.title=`Open PDF: ${label}`;
-      const query=new URLSearchParams({tabId:String(tab.id),workflow,sha256:pdf.sha256});
-      if(workflow==='currentPage' && currentPageJobId)query.set('currentPageJobId',currentPageJobId);
-      link.href=chrome.runtime.getURL('resume-preview.html')+'#'+query;
+    $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':next?.supportsQueue?'Full application or current page':'');
+    if(options.length){
+      const signature=options.map(item=>`${item.sha256}:${item.name}:${item.version||''}`).join('|');
+      if(select.dataset.signature!==signature){
+        select.replaceChildren(...options.map(item=>{
+          const opt=document.createElement('option');
+          opt.value=item.sha256;
+          opt.textContent=item.version?`${item.name} · ${item.version}`:item.name;
+          return opt;
+        }));
+        select.dataset.signature=signature;
+      }
+      if(activeResume)select.value=activeResume.sha256;
+    }else{
+      select.replaceChildren();
+      delete select.dataset.signature;
     }
-    renderRow('current-resume','currentPage',selection?.currentPage,separate?'Current page résumé':'Résumé');
-    renderRow('queued-resume','queued',separate&&next.queued,'Full application résumé');
-    $('resumes').hidden=!next?.currentPage&&!separate;
+    $('resumes').hidden=!options.length;
   }
   renderSelection(null);
   let canUndo=false,canRedo=false;
@@ -102,13 +116,36 @@ async function initializePopup() {
     $('partial').disabled=busy||!canPartial||!selection||!serviceReady||!browserReady;
     $('undo').disabled=busy||!canUndo;$('redo').disabled=busy||!canRedo;
     $('history').hidden=!canUndo&&!canRedo;
-    $('choose-resume').disabled=busy;
-    $('connect').disabled=busy;$('connect-local').disabled=busy;$('batch').disabled=busy;
-    $('website').disabled=busy||!serviceReady||!browserReady;
+    $('resume-select').disabled=busy||$('resume-select').options.length<=1;
+    $('connect-local').disabled=busy;$('batch').disabled=busy;
     if(compact){
-      $('compact-nav').querySelector('[data-panel=resumes]').disabled=$('resumes').hidden;
       $('compact-nav').querySelector('[data-panel=result]').disabled=!$('status').textContent;
     }
+  }
+  function setStatus({summary='', warnings=[], errors=[]}={}){
+    const box=$('status');
+    box.replaceChildren();
+    box.dataset.error=String(errors.length>0);
+    if(summary){
+      const p=document.createElement('p');
+      p.className='status-summary';
+      p.textContent=summary;
+      box.append(p);
+    }
+    const addList=(cls,items)=>{
+      const unique=[...new Set(items.filter(Boolean))];
+      if(!unique.length)return;
+      const ul=document.createElement('ul');
+      ul.className='status-list '+cls;
+      for(const text of unique){
+        const li=document.createElement('li');
+        li.textContent=text;
+        ul.append(li);
+      }
+      box.append(ul);
+    };
+    addList('status-error',errors);
+    addList('status-warn',warnings);
   }
   async function checkConnection(){
     serviceReady=false;browserReady=false;
@@ -120,45 +157,42 @@ async function initializePopup() {
       const state=await response.json();serviceReady=Boolean(state.configured);
       const local=await browserReply(chrome.runtime.sendMessage({action:'connectionStatus'}));
       browserReady=Boolean(local?.connected);
-      $('connection').textContent=!browserReady?(state.connected?'Another browser is connected':'Browser connection pending'):!serviceReady?'Connected. Save your profile in the workspace.':'Connected';
-      $('browser-details').textContent=local?.browser||'';
+      $('connection').textContent=!browserReady?(state.connected?'Another browser is connected':'Browser connection pending'):!serviceReady?'Connected · Save profile in full menu':'Connected';
       if(serviceReady && browserReady && canPartial){
         try{
           const metadata=await fetch(origin+'/browser/page-resume',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
             body:JSON.stringify({tabId:tab.id,expectedUrl:tab.url}),signal:AbortSignal.timeout(4000),redirect:'error'});
-          if(!metadata.ok)throw new Error((await metadata.json()).error||'Open the workspace to check the selected résumé.');
+          if(!metadata.ok)throw new Error((await metadata.json()).error||'Open the full menu to check the selected resume.');
           const next=await metadata.json();
-          const formerChoice=currentPageJobId;
+          const formerChoice=currentPageJobId||selectedResumeSha256;
           renderSelection(next);
-          if(preference?.url===tab.url && !currentPageJobId){
+          if(preference?.url===tab.url && !currentPageJobId && !selectedResumeSha256 && preference.sha256!==next?.currentPage?.sha256){
             preference=null;
             await chrome.storage.session.remove(choiceKey);
-            $('status').dataset.error='true';
-            $('status').textContent='The selected résumé changed. Check the current page résumé before filling.';
+            setStatus({errors:['The selected resume changed. Check the resume before filling.']});
             if(formerChoice)await refreshHistory();
           }
-        }catch(error){renderSelection(null,error.message||'Could not check the selected résumé.');}
+        }catch(error){renderSelection(null,error.message||'Could not check the selected resume.');}
       }
     }catch{$('connection').textContent='Start the local C3 app to connect';}
     finally{
       if(!browserReady || !serviceReady)renderSelection(null);
       $('connection').dataset.ready=String(serviceReady&&browserReady);
-      const destination=$(browserReady?'pairing-actions':'connection-actions');
-      if($('connect-local').parentElement!==destination)destination.append($('connect-local'));
+      $('connection-actions').hidden=browserReady;
       controls();
     }
   }
   async function run(action,control,message){
     if(busy)return;
     const focused=document.activeElement;
-    busy=true;controls();$('status').dataset.error='false';$('status').textContent=message||'';
+    busy=true;controls();setStatus({summary:message||''});
     const label=control?.textContent;if(control){control.textContent=message;control.setAttribute('aria-busy','true');}
-    try{await action();}catch(e){$('status').dataset.error='true';$('status').textContent=e.name==='TimeoutError'?'Request timed out. Check that C3 is running, then retry.':e.message;}
+    try{await action();}catch(e){setStatus({errors:[e.name==='TimeoutError'?'Request timed out. Check that C3 is running, then retry.':e.message]});}
     finally{
       busy=false;if(control){control.textContent=label;control.removeAttribute('aria-busy');}controls();
       // Disabling or moving the clicked control can drop keyboard focus.
       // Restore it only if the user has not focused something else while waiting.
-      if(document.activeElement===document.body&&focused instanceof HTMLButtonElement){
+      if(document.activeElement===document.body&&(focused instanceof HTMLButtonElement||focused instanceof HTMLSelectElement)){
         (focused.checkVisibility()&&!focused.disabled?focused:$('batch')).focus();
       }
     }
@@ -206,42 +240,29 @@ async function initializePopup() {
   }
   async function pageReply(operation, expectedResumeSha256){
     const reply=await browserReply(chrome.runtime.sendMessage({action:'pageAction',operation,tabId:tab.id,expectedUrl:tab.url,documentId:pageDocumentId,
-      ...(currentPageJobId&&{currentPageJobId}),...(expectedResumeSha256&&{expectedResumeSha256}),expiresAt:Date.now()+12000}));
+      ...(currentPageJobId&&{currentPageJobId}),...(selectedResumeSha256&&{resumeSha256:selectedResumeSha256}),...(expectedResumeSha256&&{expectedResumeSha256}),expiresAt:Date.now()+12000}));
     if(!reply?.ok)throw new Error(reply?.error||'The page action was not confirmed. Inspect the draft before retrying.');
     pageDocumentId=reply.result.documentId;
     return reply.result;
   }
-  function showSubmissionWarning(result){
-    if(!result.skipped?.some(item=>item.reason==='employer_submission_disabled'))return false;
-    const status=$('status');
-    status.dataset.error='true';
-    status.textContent+=(status.textContent?' ':'')+'The employer still has submission disabled.';
-    return true;
-  }
-  function showAttachments(result){
+  function collectAttachments(result, warnings, errors){
     const rows=result.skipped??[], reasons=new Set(rows.map(row=>row.reason));
-    const notes=new Set();
-    if(['undo','redo'].includes(result.operation) && (reasons.has('remote_upload_preserved')||reasons.has('client_attachment_preserved')))notes.add('The attachment stayed on the employer page.');
-    if(reasons.has('different_resume_requires_manual_review'))notes.add('Your selected PDF differs from the earlier resume selection on this page. Check which resume the employer has.');
-    else if(reasons.has('resume_filename_differs'))notes.add('The employer shows a different resume filename. Check it against your selected PDF.');
-    else if(result.resumeEvidence==='filename'||reasons.has('resume_filename_visible_contents_unverified'))notes.add('The employer shows the matching resume filename. PDF contents unverified.');
-    else if(result.resumeEvidence==='earlier_filename')notes.add('The previous step showed the matching resume filename. PDF contents unverified.');
-    else if(reasons.has('resume_filename_visible'))notes.add('The employer shows a resume filename. Check it against your selected PDF. Contents unverified.');
-    else if(reasons.has('resume_picker_occupied'))notes.add('The local resume picker contains a file. Check it against your selected PDF. Employer contents unverified.');
-    else if(['existing_attachment_preserved','existing_remote_attachment_requires_review','existing_smartrecruiters_attachment_requires_review','remote_upload_preserved','client_attachment_preserved'].some(reason=>reasons.has(reason)))notes.add('A resume is already present. Check it against your selected PDF.');
-    else if(result.resumeEvidence==='picker')notes.add('The local file picker matches the selected PDF. Employer contents unverified.');
-    else if(reasons.has('required_resume_missing') || result.operation==='inspect' && result.resume==='missing')notes.add('The required resume field is empty.');
-    else if(reasons.has('resume_control_not_identified'))notes.add('C3 could not identify the resume field. Check the employer page.');
-    else if(['resume_attachment_not_verified','resume_upload_already_attempted_review_attachment','uploaded_attachment_requires_review','attachment_not_verified_native_file_retained','ambiguous_resume_attachment','resume_parsing_pending_profile_not_filled'].some(reason=>reasons.has(reason)))notes.add('The resume attachment was not confirmed. Check it on the employer page.');
+    if(['undo','redo'].includes(result.operation) && (reasons.has('remote_upload_preserved')||reasons.has('client_attachment_preserved')))warnings.push('The attachment stayed on the employer page.');
+    if(reasons.has('different_resume_requires_manual_review'))errors.push('Your selected PDF differs from the earlier resume selection on this page. Check which resume the employer has.');
+    else if(reasons.has('resume_filename_differs'))errors.push('The employer shows a different resume filename. Check it against your selected PDF.');
+    else if(result.resumeEvidence==='filename'||reasons.has('resume_filename_visible_contents_unverified'))warnings.push('The employer shows the matching resume filename. PDF contents unverified.');
+    else if(result.resumeEvidence==='earlier_filename')warnings.push('The previous step showed the matching resume filename. PDF contents unverified.');
+    else if(reasons.has('resume_filename_visible'))warnings.push('The employer shows a resume filename. Check it against your selected PDF. Contents unverified.');
+    else if(reasons.has('resume_picker_occupied'))warnings.push('The local resume picker contains a file. Check it against your selected PDF. Employer contents unverified.');
+    else if(['existing_attachment_preserved','existing_remote_attachment_requires_review','existing_smartrecruiters_attachment_requires_review','remote_upload_preserved','client_attachment_preserved'].some(reason=>reasons.has(reason)))warnings.push('A resume is already present. Check it against your selected PDF.');
+    else if(result.resumeEvidence==='picker')warnings.push('The local file picker matches the selected PDF. Employer contents unverified.');
+    else if(reasons.has('required_resume_missing') || result.operation==='inspect' && result.resume==='missing')errors.push('The required resume field is empty.');
+    else if(reasons.has('resume_control_not_identified'))errors.push('C3 could not identify the resume field. Check the employer page.');
+    else if(['resume_attachment_not_verified','resume_upload_already_attempted_review_attachment','uploaded_attachment_requires_review','attachment_not_verified_native_file_retained','ambiguous_resume_attachment','resume_parsing_pending_profile_not_filled'].some(reason=>reasons.has(reason)))errors.push('The resume attachment was not confirmed. Check it on the employer page.');
     for(const row of rows){
       if(!['required_attachment_missing','required_attachment_unconfirmed'].includes(row.reason))continue;
       const name=/transcript|relev[ée] de notes/i.test(row.label)?'transcript':/cover[ -]?letter|lettre de/i.test(row.label)?'cover letter':'document';
-      notes.add(row.reason==='required_attachment_missing'?`The required ${name} is missing.`:`Check the required ${name}. Its upload is unconfirmed.`);
-    }
-    if(notes.size){
-      const status=$('status');
-      status.dataset.error='true';
-      status.textContent+=(status.textContent?' ':'')+[...notes].join(' ');
+      errors.push(row.reason==='required_attachment_missing'?`The required ${name} is missing.`:`Check the required ${name}. Its upload is unconfirmed.`);
     }
   }
   async function partial(action){
@@ -261,32 +282,47 @@ async function initializePopup() {
       throw new Error(canUndo?'C3 could not confirm all changes. Check the page or use Undo fill.':'C3 could not confirm all changes. Check the page and reopen Hunt for Undo.');
     }
     canUndo=result.canUndo;canRedo=result.canRedo;
-    if(result.accountPage){$('status').textContent='Account fields filled.';return;}
+    if(result.accountPage){setStatus({summary:'Account fields filled.'});return;}
     const count=result.filled.length;
-    $('status').textContent=action==='fill'?`${count} ${count===1?'field changed':'fields changed'}.`:`${count} field changes ${action==='undo'?'undone':'restored'}.`;
-    const conflicts=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason)).length;
-    if(conflicts){$('status').dataset.error='true';$('status').textContent+=` ${conflicts} ${conflicts===1?'field differs':'fields differ'} from saved answers or changed after filling. Check them before continuing.`;}
-    showAttachments(result);
-    if(result.needsOwnerReview)$('status').textContent+=' Suggested answers and uncertain matches need review.';
+    const summary=action==='fill'?`${count} ${count===1?'field changed':'fields changed'}.`:`${count} field changes ${action==='undo'?'undone':'restored'}.`;
+    const warnings=[], errors=[];
+    const conflictItems=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason));
+    if(conflictItems.length){
+      const names=[...new Set(conflictItems.map(item=>String(item.label||'').replace(/[\u2009*✱]/g,'').trim()).filter(Boolean))];
+      errors.push(names.length
+        ? `${names.join(', ')} ${names.length===1?'differs':'differ'} from saved answers or changed after filling.`
+        : `${conflictItems.length} ${conflictItems.length===1?'field differs':'fields differ'} from saved answers or changed after filling.`);
+    }
+    collectAttachments(result, warnings, errors);
+    if(result.needsOwnerReview){
+      const reviewNames=Array.isArray(result.reviewFields)?result.reviewFields.filter(Boolean):[];
+      warnings.push(reviewNames.length
+        ? `Review suggested or uncertain answers: ${reviewNames.join(', ')}.`
+        : 'Suggested answers and uncertain matches need review.');
+    }
     if (result.componentFailure) {
       const {component, operation} = result.componentFailure;
-      $('status').dataset.error = 'true';
-      $('status').textContent += ' Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').';
+      errors.push('Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').');
     }
-    const submissionDisabled = showSubmissionWarning(result);
+    const submissionDisabled=Boolean(result.skipped?.some(item=>item.reason==='employer_submission_disabled'));
+    if(submissionDisabled)errors.push('The employer still has submission disabled.');
     if (result.frames?.some(frame => frame.status === 'unavailable')) {
-      $('status').dataset.error = 'true';
-      $('status').textContent += ' A frame could not be reached. Check it before retrying.';
+      errors.push('A frame could not be reached. Check it before retrying.');
     } else if (result.incomplete && !result.componentFailure && !submissionDisabled) {
-      $('status').dataset.error = 'true';
-      $('status').textContent += ' Check the incomplete fields before retrying.';
+      errors.push('Check the incomplete fields before retrying.');
     }
+    setStatus({summary, warnings, errors});
   }
   $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…');
   $('undo').onclick=()=>run(()=>partial('undo'));
   $('redo').onclick=()=>run(()=>partial('redo'));
   async function loadHistory(){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;canUndo=result.canUndo;canRedo=result.canRedo;
-    if(!busy&&!$('status').textContent){showAttachments(result);showSubmissionWarning(result);}
+    if(!busy&&!$('status').textContent){
+      const warnings=[], errors=[];
+      collectAttachments(result, warnings, errors);
+      if(result.skipped?.some(item=>item.reason==='employer_submission_disabled'))errors.push('The employer still has submission disabled.');
+      if(warnings.length||errors.length)setStatus({warnings, errors});
+    }
     controls();}catch{}}
   async function refreshHistory(){
     historyVersion++;canUndo=false;canRedo=false;controls();
@@ -294,9 +330,12 @@ async function initializePopup() {
     pageDocumentId=undefined;
     await loadHistory();
   }
-  $('choose-resume').onchange=()=>run(async()=>{
+  $('resume-select').onchange=()=>run(async()=>{
+    const chosenSha=$('resume-select').value;
+    const isDefault=chosenSha===alternatives?.currentPage?.sha256;
     const queued=alternatives?.queued;
-    const next=$('choose-resume').checked && queued?.jobId?{jobId:queued.jobId,sha256:queued.sha256,url:tab.url}:null;
+    const matchedJobId=queued?.source==='selected' && queued.sha256===chosenSha ? queued.jobId : undefined;
+    const next=!isDefault && chosenSha ? {sha256:chosenSha,...(matchedJobId&&{jobId:matchedJobId}),url:tab.url} : null;
     if(next)await chrome.storage.session.set({[choiceKey]:next});
     else await chrome.storage.session.remove(choiceKey);
     preference=next;
@@ -304,7 +343,7 @@ async function initializePopup() {
     await refreshHistory();
   });
   async function connectWithToken(token){
-    if(!token)throw new Error('Enter a pairing key, or use Connect to local app.');
+    if(!token)throw new Error('Open the full menu in this browser, then connect again.');
     let response;
     try{response=await fetch(origin+'/state',{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(4000)});}
     catch{throw new Error('Start the local C3 app, then retry. Your saved connection was kept.');}
@@ -314,9 +353,8 @@ async function initializePopup() {
     await chrome.storage.local.set({token});
     const result=await browserReply(chrome.runtime.sendMessage({action:'connect'}));
     if(!result?.ok)throw new Error(result?.error||'Connection request failed. Reopen C3 to retry.');
-    $('token').value='';await checkConnection();$('status').textContent=browserReady?'Connection saved.':'Connection saved. Waiting for the browser.';
+    await checkConnection();setStatus({summary:browserReady?'Connection saved.':'Connection saved. Waiting for the browser.'});
   }
-  $('connect').onclick=()=>run(()=>connectWithToken($('token').value.trim()),$('connect'),'Connecting…');
   async function connectLocal(){
     const tabs=await chrome.tabs.query({url:origin+'/*'});
     const keys=new Set();
@@ -332,20 +370,19 @@ async function initializePopup() {
         if(typeof key==='string'&&/^[a-f0-9]{64}$/.test(key))keys.add(key);
       }catch{/* A closed or navigated workspace is not a pairing source. */}
     }
-    if(keys.size>1)throw new Error('Several workspaces have different keys. Close the old workspaces, then retry. Your saved connection was kept.');
+    if(keys.size>1)throw new Error('Several full menu tabs have different keys. Close the old tabs, then retry. Your saved connection was kept.');
     const token=keys.values().next().value||(await chrome.storage.local.get('token')).token;
-    if(!token)throw new Error('Open the local C3 workspace in this browser, then connect again.');
+    if(!token)throw new Error('Open the full menu in this browser, then connect again.');
     await connectWithToken(token);
   }
   $('connect-local').onclick=()=>run(connectLocal,$('connect-local'),'Connecting…');
   $('batch').onclick=()=>run(async()=>{const {token}=await chrome.storage.local.get('token');await chrome.tabs.create({url:origin+'/#token='+encodeURIComponent(token||'')});});
-  $('website').onclick=()=>run(async()=>{await chrome.tabs.create({url:'https://agent-hunt-review.mshi.ca/executioner#c3-extension='+chrome.runtime.id});},$('website'),'Opening Hunt…');
   $('fill').onclick=()=>run(async()=>{const digest=selection?.queued?.sha256;const current=await chrome.tabs.get(tab.id);if(current.url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');const {token}=await chrome.storage.local.get('token');const resultConnect=await browserReply(chrome.runtime.sendMessage({action:'connect'}));if(!resultConnect?.ok)throw new Error(resultConnect?.error||'Connection request failed');if((await chrome.tabs.get(tab.id)).url!==tab.url)throw new Error('The page changed. Reopen C3 on the application.');
     const request={jobs:[{url:tab.url,tabId:tab.id,title:tab.title,...(digest&&{expectedResumeSha256:digest})}]};
-    let response,result;try{response=await fetch(origin+'/jobs',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify(request),signal:AbortSignal.timeout(15000)});result=await response.json();}catch{throw new Error('No confirmation received. Check Applications for this job.');}if(!response.ok)throw new Error(typeof result?.error==='string'&&result.error?result.error:'C3 could not confirm this job. Check Applications before retrying.');const job=result?.[0];if(!job||typeof job.status!=='string')throw new Error('No confirmation received. Check Applications for this job.');$('status').textContent=['queued','running'].includes(job.status)?'Queued. C3 will stop at Review.':`${job.stage||job.status}. Open Applications to continue.`;});
+    let response,result;try{response=await fetch(origin+'/jobs',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify(request),signal:AbortSignal.timeout(15000)});result=await response.json();}catch{throw new Error('No confirmation received. Check Applications for this job.');}if(!response.ok)throw new Error(typeof result?.error==='string'&&result.error?result.error:'C3 could not confirm this job. Check Applications before retrying.');const job=result?.[0];if(!job||typeof job.status!=='string')throw new Error('No confirmation received. Check Applications before retrying.');setStatus({summary:['queued','running'].includes(job.status)?'Queued. C3 will stop at Review.':`${job.stage||job.status}. Open Applications to continue.`});});
 
   controls();await checkConnection();
-  showPanel(browserReady && serviceReady?'page':'settings');
+  showPanel('page');
   if(canPartial && selection)void loadHistory();
   if(!saved.token)void run(connectLocal);
   setInterval(()=>{if(!busy)void checkConnection();},5000);
