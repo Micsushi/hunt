@@ -52,7 +52,7 @@ async function initializePopup() {
     if(item.version){
       const version=document.createElement('span');
       version.className='resume-version';
-      version.textContent=' · '+item.version;
+      version.textContent=container.id==='resume-name' ? ' · '+item.version : 'Version '+item.version;
       container.append(version);
     }
   }
