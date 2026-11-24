@@ -168,7 +168,7 @@ async function initializePopup() {
       const position='Issue '+(issueIndex+1)+' of '+issues.length;
       $('issue-position').textContent=issue.target?.section ? position+' · '+issue.target.section : position;
       $('issue-label').textContent=issue.label;
-      $('issue-message').textContent=issue.message;
+      $('issue-message').textContent=issue.target ? issue.message+' Reopen Hunt after editing to recheck.' : issue.message;
       $('show-field').hidden=!issue.target;
       countryAction.hidden=!issue.country || !profileCountryConflict;
       $('issue-navigation').hidden=issues.length<2;

@@ -99,7 +99,7 @@ selection for Fill current page. The local full menu also has this list under
 After a fill, the popup shows fields that still need attention. Use **Previous**
 and **Next** to review them one at a time. **Show field** takes you to the
 corresponding control when C3 can identify it on the current page. Complete the
-field on the employer's form.
+field on the employer's form, then reopen the popup to recheck the page.
 
 Open **Full menu → Fill history** for the field-by-field record. Choose a page
 to see its recent fills, including fields that already matched and fields left
