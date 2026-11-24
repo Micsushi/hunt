@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-const source = readFileSync('extension/website-handoff.js','utf8').replace('export function','function');
+const source = readFileSync('extension/website-handoff.js','utf8').replace(/^export function /gm,'function ');
 const trusted = {origin:'https://agent-hunt-review.mshi.ca',url:'https://agent-hunt-review.mshi.ca/jobs/1',frameId:0};
 const message = (operation: string) => ({protocol:'hunt-c3-handoff-v1',operation,expiresAt:Date.now()+10000,bundle:{jobs:[{sourceJobId:1}]}});
 
