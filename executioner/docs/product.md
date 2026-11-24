@@ -2,8 +2,9 @@
 
 **C3.1** prepares queued applications on Workday, Greenhouse, Workable, Lever and Ashby. **C3.2** is the extension's current-page fill.
 
-Application filling skips optional fields by default in C3.1 and C3.2, even when
-saved profile answers are available. Existing optional values are preserved. Fields that
+Queued applications skip optional fields by default. **Fill current page** can fill
+an empty standard profile field when its label matches a saved answer, including
+an optional LinkedIn or portfolio URL. Existing entries are preserved. Fields that
 become required are reconsidered from the current page. Optional attachments are
 not uploaded automatically. When an employer asks for a transcript, cover letter, or other supporting document, supply that file yourself. C3 uses the selected résumé only in a field identified as a résumé or CV.
 
@@ -77,11 +78,19 @@ job and choose **Prepare this job** in the extension. Both use the same queue an
 ATS-specific filling engines. Filling stops before submission. **Submit** for Workday is a separate,
 per-application action after reviewing the employer's page.
 
-The extension also offers **Fill current page** on HTTPS pages, including
-sites outside the supported ATS list. It uses the saved applicant profile to
+The extension also offers **Fill current page** on HTTPS forms, including ordinary
+profile forms, and on local HTTP forms. It uses the saved applicant profile to
 fill recognized empty fields and supported saved-answer choices on the current
 page. It can attach the saved resume to an unambiguous resume input in the main
-document. It reports partial completion, preserves existing entries and flags
+document on job applications. On a general web form it uses recognized profile
+answers and leaves passwords, unrelated uploads and consent decisions to you.
+Click a résumé name in the popup to open that PDF. **Fill current page** uses your
+default résumé. An explicit current-page C2 import selects its PDF for the matching
+posting. If a paused job on a supported ATS has a different C2 PDF, the popup
+shows both filenames. You can choose the queued PDF for this page. **Prepare this
+job** keeps using the job's saved PDF.
+
+The popup reports partial completion, preserves existing entries and flags
 conflicts with saved answers. Some custom controls and attachments still require
 review. It does not log in, advance pages, or submit. Embedded forms need
 browser access permission; inaccessible frames are not covered by this action.
@@ -124,7 +133,7 @@ access so C3 can operate the selected application tabs.
 
 If your default browser differs, open the workspace in the browser where Hunt is
 installed and pair it using the key file printed by the launcher. The popup's
-**Connection settings & help** contains a manual **Pairing key** fallback and
+**Connection settings** contains a manual **Pairing key** fallback and
 the extension version. Once connected, **Connect to local app** moves into
 that panel. A rejected key
 does not replace your saved connection. If old workspace tabs contain different
@@ -228,9 +237,8 @@ unavailable preview and a file that differs from the selected PDF.
 
 On Jobvite, SmartRecruiters and other unfamiliar sites, open the employer form and
 choose **Fill current page**. Review the fields, choose **Next** yourself, then
-repeat on the new page. If an older queued entry owns that application, finish
-the saved draft manually with its selected résumé. The extension protects the
-draft from having its selected PDF replaced by the default.
+repeat on the new page. An older queued draft for the same posting keeps its
+own selected PDF. You can still use the default résumé on the current page.
 
 If a later employer page opens in another tab and C3 cannot identify the saved
 job, reopen the job from **Applications**. If the extension reports that an
@@ -309,8 +317,9 @@ check does not establish that an employer accepts the application password.
 Use `hunt_page` with `inspect`, an explicit tab ID and its current URL. Use the
 returned document ID for `fill`, `undo` or `redo`. Navigation or reload rejects
 an old document ID. Popup and MCP actions share the same per-page undo history.
-`fill` can upload the saved default resume. Queued jobs must continue through
-Applications so their selected resume is preserved. These actions do not log in,
+`fill` uses the current-page default or the posting's explicit current-page C2
+import. To resume a queued workflow with its pinned PDF, open **Applications**.
+Page actions do not log in,
 advance pages or submit applications.
 Inspect every answer on the employer page; filled-field counts are not proof of
 a complete or correct application.

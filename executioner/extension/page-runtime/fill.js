@@ -11,7 +11,7 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, aiConsentDecision, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', allowProfileForms = true, expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, aiConsentDecision, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
@@ -22,7 +22,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   checkDeadline();
   if (expectedUrl !== undefined && location.href !== expectedUrl) throw new Error('The page changed. Reopen C3 on the application.');
   const observed = observeCurrentDocument();
-  const interrupted = currentPageInterruption(observed, action);
+  const currentPage = scope === 'page';
+  const interrupted = currentPageInterruption(observed, action, currentPage);
   if (interrupted) return interrupted;
   const separateAccountForm = observed.signals.includes('separate_account_form');
   if (separateAccountForm) scope = 'application';
@@ -226,7 +227,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       });
       if(!history[index].length)history.splice(index,1);
     }
-    preservedRemote ||= historyState.externalizedUploadHistory?.some(change=>ownedUploadCompleted(change.uploadReceipt));
+    preservedRemote ||= historyState.externalizedUploadHistory?.some(change=>ownedUploadCompleted(change.uploadReceipt)) ||
+      state.resumeAttempt?.url === location.href && state.resumeAttempt.externalized && ownedUploadCompleted(state.resumeAttempt);
     if(preservedRemote && (action==='undo' || action==='redo')) {
       result.resume='verified';result.skipped.push({label:'Resume',reason:state.resumeAttempt?.clientOnly?'client_attachment_preserved':'remote_upload_preserved'});
     }
@@ -296,7 +298,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       from.pop(); to.push(chronological(changes)); result.filled = changes.map(c => c.label);
     }
     if (!historyAction && action !== 'fill' && action !== 'status') throw new Error('Unknown field action.');
-    const { choiceAliases, fact, canadaEligibility, answer, applicantName } = createLegacyAnswerReader({
+    const { choiceAliases, fact, canadaEligibility, answer, applicantName, profileLabel } = createLegacyAnswerReader({
       facts, norm
     });
     const dialComposite = e => {
@@ -421,7 +423,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return false;
     };
     const screeningSelector = checkedForm?.screening ? 'fieldset[role=radiogroup],' : '';
+    const privateControl = (e,label) => /(?:password|passcode|verification code|security code|one.time code|credit card|card number|social security|social insurance)/i.test(label) ||
+      /(?:^|\s)(?:current-password|new-password|one-time-code|cc-\S+)(?:$|\s)/i.test(e.autocomplete ?? '');
     const collectFields = () => deepQuery(applicationStep || document, screeningSelector+'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && scopedControl(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
+      !privateControl(e,labelFor(e)) &&
       (fabricWidget(e) || provinceMenu.context(e) || semanticChoiceButton(e) || !['hidden', 'password', 'file', 'submit', 'button', 'reset'].includes(e.type))).map(element => {
       const label = provinceMenu.context(element) ? 'Province' : dialComposite(element)?'Phone country code':labelFor(element);
       return { element, identity:identity(element), controlIdentity:controlIdentity(element), boundLabels:[...element.labels??[]], region:regionFor(element), label,
@@ -467,6 +472,24 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
     };
     let applicationRegions = identifyApplicationRegions(fields,action!=='fill');
+    const registration = currentPage && !separateAccountForm && observed.signals.includes('profile_registration');
+    const profileRegions = new Map();
+    const profileOnly = region => {
+      if (!currentPage || applicationStep || checkedForm || observed.version !== 'hosted-page-v1') return false;
+      if (!profileRegions.has(region)) {
+        const jobForm = !registration && (
+          /job.?application/i.test(region.id ?? '') ||
+          deepQuery(region,'button,input[type=submit],h1,h2,legend').some(e=>visible(e) &&
+            /\b(?:submit application|apply for (?:this|the) (?:job|position)|job application|envoyer la candidature)\b/i.test(e.getAttribute('aria-label') || e.innerText || e.value || '')) ||
+          deepQuery(region,'input[type=file]').some(input => !!fileBinding(input)));
+        profileRegions.set(region,!jobForm);
+      }
+      return profileRegions.get(region);
+    };
+    const passwordRegions = new Set(deepQuery(document,'input[type=password]').filter(visible).map(regionFor));
+    const registrationRegion = registration && passwordRegions.size===1 ? [...passwordRegions][0] : null;
+    const knownProfileControl = e => e.matches('textarea,select:not([multiple]),input:not([type]),input:is([type=text],[type=email],[type=tel],[type=url],[type=date],[type=number])') &&
+      !['listbox','combobox'].includes(e.getAttribute('role'));
     const { isRequired, unresolvedAttachment } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
       verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
     });
@@ -475,7 +498,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       read(receipt.element)===receipt.file && receipt.element.validity.valid && receipt.element.getAttribute('aria-invalid')!=='true';
     const finalReport = () => {
       const receipt=state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
-      if (action==='fill' && result.resume === 'verified') result.resumeEvidence=receipt?.attachmentEvidence?.() || (pickerHoldsAttempt(receipt) ? 'picker' : undefined);
+      if (result.resume === 'verified') {
+        result.resumeEvidence=receipt?.attachmentEvidence?.() || (pickerHoldsAttempt(receipt) ? 'picker' :
+          ownedUploadCompleted(receipt) && receipt.owner.innerText?.includes(receipt.file.name) ? 'filename' : undefined);
+      }
       if (!historyAction) screeningGroups.reportMissing(result,addSkip);
       const resumeInputs=[];
       for (const input of deepQuery(applicationStep || document,'input[type=file]')) {
@@ -507,11 +533,15 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
       sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
-    const observe = (element,label) => screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
+    const observe = (element,label) => {
+      const row = screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
+      return profileOnly(regionFor(element)) ? {...row,profileOnly:true,signature:JSON.stringify([row.signature,'profile'])} : row;
+    };
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {
-        if (deepQuery(f.region,'input[type=password]').some(visible) || /password|passcode|verification code|one.time code/i.test(f.label)) continue;
+        if (registration && f.region!==registrationRegion || !registration && passwordRegions.has(f.region)) continue;
+        if (profileOnly(f.region) && (!allowProfileForms || !knownProfileControl(f.element) || !profileLabel(f.label))) continue;
         if (scope!=='page' && !applicationRegions.includes(f.region)) continue;
         const row=observe(f.element,f.label); rows.set(row.fieldId,row);
       }
@@ -529,6 +559,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       state.fabricOptions??=new WeakMap();state.committedChoices??=new WeakMap();
       for(const field of fields) {
+        if (profileOnly(field.region)) continue;
         if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !screeningFields.read(field.element) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
           try {const proof=await inspectCommittedChoice(field.element);if(proof)state.committedChoices.set(field.element,proof);else state.committedChoices.delete(field.element);}
           catch {state.committedChoices.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}
@@ -557,6 +588,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       result.resume = 'unverified';
       addSkip('Resume', retainedJobvite, 'uploads', 'verify_attachment');
     } else if (checkedForm?.screening) result.resume = 'unverified';
+    else if (currentPage && fields.length && fields.every(f=>profileOnly(f.region))) result.resume='optional';
     else if (validResume) {
       const resumeFields = deepQuery(document, 'input[type=file]').filter(e =>
         applicationRegions.includes(regionFor(e)) && fileBinding(e));
@@ -712,7 +744,19 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}
       if(!editable(e)){skip('field_no_longer_editable', 'field_recognition', 'identify_field');continue;}
       if (!fabricWidget(e) && provinceMenu.context(e)) continue; // Process the unique province menu with its country below.
-      if(!isRequired(e) && !screeningFields.read(e)?.required){skip('optional_field');continue;}
+      const personal = profileOnly(f.region);
+      if (registration && f.region!==registrationRegion) continue;
+      if (personal && !allowProfileForms) continue;
+      if (personal && (!knownProfileControl(e) || !profileLabel(f.label) || !matchingPlans)) {
+        if (isRequired(e) && (e.validity?.valueMissing || e.getAttribute('aria-invalid')==='true')) {skip('needs_owner_answer');result.incomplete=true;}
+        continue;
+      }
+      if(!isRequired(e) && !screeningFields.read(e)?.required){
+        const row = currentPage && knownProfileControl(e) && observe(e,f.label);
+        if(!row || !matchingPlans?.some(plan=>plan.fieldId===row.fieldId && plan.signature===row.signature && plan.reason==='saved_profile_field')){
+          skip('optional_field');continue;
+        }
+      }
       if (scope !== 'page' && !applicationRegions.includes(f.region)) { skip('application_form_not_identified', 'page_state', 'identify_application'); continue; }
       const screenControl = screeningFields.read(e);
       if (screenControl) {
@@ -841,7 +885,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           try {const proof=await inspectCommittedChoice(e);if(proof)state.committedChoices.set(e,proof);else state.committedChoices.delete(e);}
           catch {state.committedChoices.delete(e);skip('custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');continue;}
         }
-        if (deepQuery(f.region,'input[type=password]').some(visible)) {skip('account_fields_preserved');continue;}
+        if (!registration && deepQuery(f.region,'input[type=password]').some(visible)) {skip('account_fields_preserved');continue;}
         const row=observe(e,f.label),plan=matchingPlans.find(plan=>plan.fieldId===row.fieldId);
         if (row.control==='radio') {
           if (radiosHandled.has(row.fieldId)) continue;

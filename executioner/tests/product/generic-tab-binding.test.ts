@@ -52,18 +52,29 @@ test('unfamiliar applications stay on the current page and old selected inputs r
       assert.equal(response.status,400);
       assert.match((await response.json()).error,/selected resume/);
     }
+    const bridge=(app.queue as unknown as {bridge:ExtensionBridge}).bridge;
+    const genericPdf=Buffer.from('%PDF-default').toString('base64');
+    let legacyFills=0;
+    bridge.call=async(method,params={})=>{
+      if(method==='agentStatus')return {capabilities:['pageAction-v2','question-matching-v1','consent-redo-v1']};
+      assert.equal(method,'pageAction');
+      assert.equal(params.pageHandoff,undefined);
+      if(params.operation==='fill'){
+        assert.equal((params.resume as {base64:string}).base64,genericPdf);
+        legacyFills++;
+      }
+      return {tabId:params.tabId,url:params.expectedUrl,documentId:params.documentId,filled:[],matching:[],skipped:[]};
+    };
     for (const operation of ['fill','redo']) {
       const response=await post('/browser/page',{tabId:7,expectedUrl:url,documentId:'a'.repeat(64),operation});
-      assert.equal(response.status,400);
-      assert.match((await response.json()).error,/selected resume/);
+      assert.equal(response.status,200,await response.text());
     }
     const restored=app.queue.jobs.find(job=>job.id===smartId)!;
     assert.equal(restored.tabId,undefined);
     for(const expectedUrl of [personal+'?dcr_ci='+company,selectedApplicationUrl]) {
       for(const operation of ['fill','redo']) {
         const response=await post('/browser/page',{tabId:8,expectedUrl,documentId:'b'.repeat(64),operation});
-        assert.equal(response.status,400);
-        assert.match((await response.json()).error,/selected resume/);
+        assert.equal(response.status,200,await response.text());
       }
     }
     assert.equal(lookups,0);
@@ -71,10 +82,18 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     delete restored.selectedApplicationUrl;
     for(const operation of ['fill','redo']) {
       const response=await post('/browser/page',{tabId:8,expectedUrl:selectedApplicationUrl,documentId:'b'.repeat(64),operation});
-      assert.equal(response.status,400);
-      assert.match((await response.json()).error,/selected resume/);
+      assert.equal(response.status,200,await response.text());
     }
-    assert.equal(lookups,2);
+    assert.equal(lookups,0);
+    assert.equal(legacyFills,4);
+    for (const address of ['https://fixture.bamboohr.com:8443/profile','http://localhost:8024/profile']) {
+      assert.equal((await post('/browser/page',{operation:'fill',tabId:17,expectedUrl:address,documentId:'local-document'})).status,200);
+      assert.equal((await post('/jobs',{jobs:[{url:address}]})).status,400);
+    }
+    for (const address of [app.origin,'http://localhost:47831/','http://forms.example/profile','chrome://settings/','https://owner@forms.example/profile']) {
+      assert.equal((await post('/browser/page',{operation:'fill',tabId:17,expectedUrl:address,documentId:'local-document'})).status,400);
+    }
+    assert.equal(legacyFills,6);
     restored.selectedApplicationUrl=selectedApplicationUrl;
     const open=()=>post('/jobs/'+smartId+'/action',{action:'open'});
     assert.deepEqual(await (await open()).json(),{url:selectedApplicationUrl});
@@ -84,7 +103,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
       restored.selectedApplicationUrl=unsafe;
       assert.equal((await open()).status,400);
     }
-    assert.equal(lookups,4);
+    assert.equal(lookups,2);
     restored.selectedApplicationUrl=selectedApplicationUrl;
     const bundleFor = (target:string,sourceJobId:number) => ({format:'hunt-c3-handoff',version:1,jobs:[{
       url:target,title:'Fixture',sourceJobId,resumeVersion:'v17',resumeName:'Selected.pdf',resumeBase64:resume.toString('base64'),
@@ -110,7 +129,6 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal(selected.pageHandoff,true);
     assert.equal(selected.submissionAllowed,false);
     assert.equal((await (await post('/handoff/import-paused',bundle)).json())[0].id,selected.id);
-    const bridge=(app.queue as unknown as {bridge:ExtensionBridge}).bridge;
     const documentId='c'.repeat(64),observedPdfs:string[]=[],defaultPdfs:string[]=[];
     let latestDocument=documentId,filesInHistory=false;
     bridge.call=async(method,params={})=>{
@@ -130,6 +148,17 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     };
     const operate=(operation:string,tabId=9,url=selectedUrl,doc=latestDocument)=>post('/browser/page',{tabId,expectedUrl:url,operation,...(operation!=='inspect'&&{documentId:doc})});
     app.queue.configure(applicantProfile({given_name:'Changed',family_name:'Tester',email_address:'changed@example.invalid'}),Buffer.from('%PDF-default').toString('base64'));
+    const selection={tabId:9,expectedUrl:selectedUrl};
+    const metadata=await (await post('/browser/page-resume',selection)).json();
+    const hash=createHash('sha256').update(resume).digest('hex');
+    assert.deepEqual(metadata,{supportsQueue:false,currentPage:{name:'Selected.pdf',source:'selected',version:'v17',sha256:hash},queued:null});
+    const preview=await post('/browser/page-resume',{...selection,workflow:'currentPage',sha256:hash});
+    assert.equal(preview.headers.get('content-type'),'application/pdf');
+    assert.deepEqual(Buffer.from(await preview.arrayBuffer()),resume);
+    assert.equal((await post('/browser/page-resume',{...selection,workflow:'currentPage',sha256:'0'.repeat(64)})).status,400);
+    assert.equal((await post('/browser/page-resume',{...selection,tabId:18})).status,400);
+    assert.equal((await post('/browser/page-resume',{...selection,expectedUrl:app.origin})).status,400);
+    assert.equal((await fetchLocal(app.origin+'/browser/page-resume',{method:'POST',body:JSON.stringify(selection)})).status,401);
     const later='https://jobs.jobvite.com/fixture/application/screening';
     for (const ordinary of ['https://other.example.invalid/application','https://jobs.jobvite.com/another/job/other/apply',
         'https://jobs.jobvite.com/fixture/job/other/apply/screening']) {
@@ -203,6 +232,15 @@ test('unfamiliar applications stay on the current page and old selected inputs r
 
     assert.equal(app.queue.jobs[0]!.status,'paused');
     assert.equal(app.queue.jobs[0]!.resumeVersion,'v18');
+    assert.equal(readFileSync(inputPath,'utf8'),input);
+    // A deliberate re-import can adopt the *same* saved PDF. The default fill above did not.
+    assert.equal(app.queue.jobs[0]!.pageHandoff,undefined);
+    const explicit=bundleFor(url,123);
+    explicit.jobs[0]!.resumeVersion='v18';
+    const [adopted]=await (await post('/handoff/import-paused',explicit)).json();
+    assert.equal(adopted.id,id);
+    assert.equal(adopted.pageHandoff,true);
+    assert.equal(adopted.resumeSha256,explicit.jobs[0]!.resumeSha256);
     assert.equal(readFileSync(inputPath,'utf8'),input);
   } finally {globalThis.fetch=fetchLocal;await app.close();}
 });

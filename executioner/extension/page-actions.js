@@ -4,6 +4,7 @@ import { bambooResumeControl } from './page-adapters/bamboo-resume.js';
 import { annotateQuestionContext } from './question-context.js';
 import { proveJobviteResumeInput } from './jobvite-resume.js';
 import { preparePageViewport, viewportOwnership, viewportUnavailable, viewportCleanupPending } from './page-viewport.js';
+import { supportsCurrentPage } from './current-page-url.js';
 
 // These declarations are injected into the exact isolated execution context bound below.
 const observeCurrentDocument = `(${observePageSource})()`;
@@ -110,16 +111,16 @@ async function proveBambooResumeInput(send, tabId, frame, executionContextId, bi
   }
 }
 
-export async function listPageTabs() {
-  return (await chrome.tabs.query({})).filter(tab => httpsPage(tab.url)).map(tab => ({tabId:tab.id,url:tab.url,title:tab.title || '',discarded:!!tab.discarded}));
+export async function listPageTabs(workspaceOrigin) {
+  return (await chrome.tabs.query({})).filter(tab => supportsCurrentPage(tab.url, workspaceOrigin)).map(tab => ({tabId:tab.id,url:tab.url,title:tab.title || '',discarded:!!tab.discarded}));
 }
 
 /** Popup and agent actions share one document-local undo history without new host permissions. */
-export async function pageAction(params, attached) {
+export async function pageAction(params, attached, workspaceOrigin) {
   const expiresAt = Math.min(Date.now()+15000,Number.isFinite(params.expiresAt) ? params.expiresAt : Infinity);
   const checkDeadline = () => { if (Date.now() >= expiresAt) throw new Error('The page action expired. Inspect the draft before retrying.'); };
   const { tabId, expectedUrl, documentId, operation } = params;
-  if (!Number.isSafeInteger(tabId) || tabId < 1 || !httpsPage(expectedUrl) || !['inspect','fill','undo','redo'].includes(operation)) throw new Error('Choose an HTTPS tab and a supported page action.');
+  if (!Number.isSafeInteger(tabId) || tabId < 1 || !supportsCurrentPage(expectedUrl, workspaceOrigin) || !['inspect','fill','undo','redo'].includes(operation)) throw new Error('Choose a supported form tab and page action.');
   if (operation !== 'inspect' && (typeof documentId !== 'string' || !documentId)) throw new Error('Inspect this page before changing fields.');
   if (attached.has(tabId) || pageActionTabs.has(tabId)) throw new Error('C3 is already operating this tab. Wait for it to finish.');
   pageActionTabs.add(tabId);
@@ -145,7 +146,8 @@ export async function pageAction(params, attached) {
     const results = [];
     for (const frame of frames) {
       if(frame.id!==root.id && securityWidgetFrame(frame.url)) {results.push({frameId:frame.id,status:'ignored_security_widget'});continue;}
-      if (!httpsPage(frame.url)) {
+      if (!supportsCurrentPage(frame.url, workspaceOrigin) ||
+          frame.id !== root.id && frame.url.startsWith('http:') && new URL(frame.url).origin !== new URL(root.url).origin) {
         let empty=false;
         if(frame.id!==root.id && (!frame.url || frame.url==='about:blank')) {
           try {checkDeadline();empty=await emptyHiddenFrame(send,frame);}catch {empty=false;}
@@ -160,7 +162,7 @@ export async function pageAction(params, attached) {
         checkDeadline();
         if (operation === 'fill' && params.resume && frame.id === root.id) {
           const admission=await send('Runtime.callFunctionOn',{executionContextId,returnByValue:true,
-            functionDeclaration:`function() { return ${interruption}(${observeCurrentDocument},'fill') ?? null; }`});
+            functionDeclaration:`function() { return ${interruption}(${observeCurrentDocument},'fill',true) ?? null; }`});
           if(admission.exceptionDetails)throw new Error('This frame could not complete the page action. Inspect the draft before retrying.');
           if (admission.result?.value) {
             results.push({frameId:frame.id,...admission.result.value});
@@ -170,7 +172,7 @@ export async function pageAction(params, attached) {
         }
         const response = await send('Runtime.callFunctionOn', {
           executionContextId,
-          functionDeclaration: `async function(input) { const observe=(${observePageSource}); const observation=observe(input.expectedUrl); const blocked=${interruption}(observation,input.action); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input);
+          functionDeclaration: `async function(input) { const observe=(${observePageSource}); const observation=observe(input.expectedUrl); const blocked=${interruption}(observation,input.action,true); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input);
             const result=await (${pageFillSource})(input);
             if ((input.action==='status' || observation.screeningSubmissionControl) && location.href!==input.expectedUrl) throw new Error('The inspected frame changed.');
             if (result.componentFailure?.component==='page_state') return {observation,...result};
@@ -180,7 +182,7 @@ export async function pageAction(params, attached) {
               (result.skipped??=[]).push({label:'Application',reason:'employer_submission_disabled'});
             }
             return {observation:current,...result}; }`,
-          arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,aiConsentDecision:params.aiConsentDecision,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,pageHandoff:params.pageHandoff,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',expectedUrl:frame.url,expiresAt}}],
+          arguments: [{value:{action:operation === 'inspect' ? 'status' : operation,aiConsentDecision:params.aiConsentDecision,facts:params.facts??[],matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,pageHandoff:params.pageHandoff,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',allowProfileForms:new URL(frame.url).origin===new URL(root.url).origin,expectedUrl:frame.url,expiresAt}}],
           awaitPromise:true,returnByValue:true,
         });
         if (response.exceptionDetails || !response.result?.value) throw new Error('The page action failed. Inspect the draft before retrying.');

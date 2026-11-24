@@ -36,7 +36,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
   }
   let result:MatchedPageResult={filled:[],skipped:[],canUndo:false,canRedo:false};
   try {
-    const planAnswer = createPageAnswerPlanner(sources, facts, backlog.company);
+    const planAnswer = createPageAnswerPlanner(sources, facts, backlog.company, undefined, input.workflow === 'C3.2');
     const maxRounds = 5;
     for(let round=0;round<maxRounds;round++) {
       const finalRound = round + 1 === maxRounds;
@@ -51,7 +51,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
         seen.add(key);
         const plan = await planAnswer(row, observed.matching ?? [], input.signal);
         plans.push(plan);
-        if (row.required) {
+        if (row.required || plan.answer !== null) {
           backlog.record({...row, chosenAnswer: plan.answer, requestedQuery: plan.query,
             provisional: plan.provisional, reason: plan.reason,
             outcome: plan.answer === null && plan.query === undefined ? 'unconfirmed' : 'attempted'});

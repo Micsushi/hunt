@@ -56,7 +56,7 @@ export interface PackageSbom {
 
 // Package the owned extension modules and the assets Chrome reads from its manifest.
 const extensionModules = new Set<string>(Object.values(productBoundary.sourceOwners).flat().filter(path => path.startsWith('extension/')));
-const extensionAssets = new Set(['extension/manifest.json', 'extension/popup.html', 'extension/popup.css']);
+const extensionAssets = new Set(['extension/manifest.json', 'extension/popup.html', 'extension/popup.css', 'extension/resume-preview.html']);
 
 export function verifyPackageFileList(files: readonly string[]): readonly string[] {
   return files

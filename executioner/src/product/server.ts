@@ -2,13 +2,14 @@ import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { basename, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { productApplicationTarget } from './target.ts';
+import { applicationTarget, canonicalPostingKey } from './target.ts';
+import { supportsCurrentPage } from '../../extension/current-page-url.js';
 import { ExtensionBridge } from "./extension-bridge.ts";
 import { ApplicationQueue } from "./queue.ts";
-import { currentPageOwner, inspectHandoffBundle } from './handoff.ts';
+import { currentPageOwner, inspectHandoffBundle, selectableQueueResume } from './handoff.ts';
 import { saveAccount, loadAccount, accountStorageFile } from "./account-storage.ts";
 import { aiConsentAuthority, applicantFields, effectiveProfileFacts, productSources } from './sources.ts';
 import { disposeResumeArtifact } from '../contracts/index.ts';
@@ -145,11 +146,38 @@ export async function startProductServer(options: { root?: string; port?: number
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) throw new Error('Extension reload accepts no arguments.');
         if (queue.snapshot().jobs.some(job => ['queued','running','submitting'].includes(job.status) || job.actionPending)) throw new Error('Pause active applications before reloading Hunt.');
         result = await bridge.reloadExtension();
+      } else if (path === '/browser/page-resume') {
+        if (!body || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || !supportsCurrentPage(body.expectedUrl,origin) ||
+          Object.keys(body).some(key=>!['tabId','expectedUrl','workflow','sha256','currentPageJobId'].includes(key)) ||
+          (body.workflow !== undefined || body.sha256 !== undefined) && (!['currentPage','queued'].includes(body.workflow) || typeof body.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.sha256))) {
+          throw new Error('Choose a current tab and a valid résumé.');
+        }
+        const tabs = await bridge.call('pageTabs');
+        if (!Array.isArray(tabs) || !tabs.some(tab => tab.tabId === body.tabId && tab.url === body.expectedUrl && !tab.discarded)) {
+          throw new Error('The original tab changed. Reopen Hunt to check its résumé.');
+        }
+        const url = new URL(body.expectedUrl);
+        queue.assertAvailableLink(url.href,undefined,true);
+        const selected = await currentPageOwner(queue.jobs,url,body.currentPageJobId);
+        if (!selected) queue.assertDefaultPageInput(url);
+        const currentPage = selected ? queue.resumeDocument(selected) : queue.resumeDocument();
+        let target;
+        try { target = applicationTarget(url.href); } catch { /* The page can still use current-page fill. */ }
+        const queuedJob = target && queue.jobs.find(job=>job.status!=='removed' && canonicalPostingKey(job.key)===target.key);
+        const queued = target ? queuedJob ? queue.resumeDocument(queuedJob) : currentPage : null;
+        if (body.workflow) {
+          const doc = body.workflow === 'queued' ? queued : currentPage;
+          if (!doc || doc.metadata.sha256 !== body.sha256) throw new Error('The selected résumé changed. Reopen Hunt to check it.');
+          response.setHeader('Content-Type','application/pdf');
+          response.end(doc.pdf);return;
+        }
+        result = {supportsQueue:!!target,currentPage:currentPage?.metadata??null,
+          queued:queued ? {...queued.metadata,...(queuedJob && selectableQueueResume(queuedJob) && {jobId:queuedJob.id})} : null};
       } else if (path === '/browser/page') {
-        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt'].includes(key)) ||
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt','expectedResumeSha256','currentPageJobId'].includes(key)) ||
           !['inspect','fill','undo','redo'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string') throw new Error('Choose an HTTPS tab and a supported page action.');
         const url = new URL(body.expectedUrl);
-        if (url.protocol !== 'https:' || url.username || url.password || url.port || body.operation !== 'inspect' && (typeof body.documentId !== 'string' || !body.documentId)) throw new Error('Inspect the selected HTTPS page before changing fields.');
+        if (!supportsCurrentPage(url.href,origin) || body.operation !== 'inspect' && (typeof body.documentId !== 'string' || !body.documentId)) throw new Error('Inspect a secure web page or local form before changing fields.');
         if (body.expiresAt !== undefined && (!Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now())) throw new Error('This page action expired. Inspect the page again before changing it.');
         const expiresAt = Math.min(Date.now()+15000, body.expiresAt ?? Infinity);
         if(pageActions.has(body.tabId))throw new Error('C3 is already operating this page. Wait for it to finish.');
@@ -161,16 +189,19 @@ export async function startProductServer(options: { root?: string; port?: number
             !queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused'))) {
           throw new Error('This selected application changed. Inspect its current page again.');
         }
-        if (queue.snapshot().jobs.some(job=>job.tabId===body.tabId && (job.actionPending || ['queued','running','submitting'].includes(job.status)))) throw new Error('C3 is already operating this page. Wait for it to finish.');
         const writesProfile = body.operation === 'fill' || body.operation === 'redo';
+        let postingKey:string | undefined;
+        try { postingKey = applicationTarget(url.href).key; } catch { /* Current-page forms need no posting key. */ }
+        if (queue.snapshot().jobs.some(job=>(job.tabId===body.tabId || writesProfile && postingKey!==undefined && postingKey === canonicalPostingKey(job.key)) &&
+          (job.actionPending || ['queued','running','submitting'].includes(job.status)))) throw new Error('C3 is already operating this page. Wait for it to finish.');
         queue.assertAvailableLink(url.href,undefined,writesProfile);
-        const owner = await currentPageOwner(queue.jobs, body.tabId, url);
-        if (writesProfile && !owner) queue.assertDefaultPageInput(url);
-        const selected = owner?.pageHandoff === true && owner.status === 'paused' ? owner : undefined;
+        const selected = await currentPageOwner(queue.jobs,url,body.currentPageJobId);
+        if (writesProfile && !selected) queue.assertDefaultPageInput(url);
         if (prior && !selected && prior.url !== url.href &&
-            queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused')) {
+            queue.jobs.some(job => job.id === prior.jobId && job.pageHandoff && job.status === 'paused')) {
           throw new Error('This tab is linked to a saved application. Reopen its posting from Applications, or use a new tab for another job.');
         }
+        if (prior && !selected && body.operation !== 'inspect') throw new Error('Inspect the current page after changing the selected résumé.');
         if (selected) {
           if (activeHandoffs.has(selected.id)) throw new Error('C3 is operating this application in another tab.');
           lockedHandoff = selected.id;
@@ -187,21 +218,19 @@ export async function startProductServer(options: { root?: string; port?: number
         }
         const accountProfile = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
         // Existing Workday drafts can still fill their own sign-in screen before returning to the queue.
-        const accountAllowed = !owner || productApplicationTarget(owner.url).ats === 'workday' && new URL(owner.url).origin === url.origin;
+        const accountAllowed = !selected && url.protocol === 'https:' && !url.port;
         const accountPage = !accountAllowed ? undefined : await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
           accountProfile?.profilePlan?.mode === 'synthetic_test_non_submittable' ? undefined : queue.credentials,
           accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
         const priorWorkdayPage = accountPage?.priorWorkdayPage;
         if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
-        if (writesProfile && owner && !selected) {
-          throw new Error(productApplicationTarget(owner.url).ats === 'generic'
-            ? 'This saved draft uses an unfamiliar site. Finish it on the employer page to preserve its selected resume.'
-            : 'This page belongs to a queued application. Continue from Applications to preserve its selected resume.');
-        }
         const settings = selected ? queue.currentPageInput(selected) : queue.getSettings();
         const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');
         const resume = body.operation === 'fill' ? settings?.resume : undefined;
+        if (body.operation === 'fill' && body.expectedResumeSha256 !== undefined && body.expectedResumeSha256 !== queue.resumeDocument(selected)?.metadata.sha256) {
+          throw new Error('The selected résumé changed. Reopen Hunt to check it before filling.');
+        }
         if (writesProfile) {
           const admitted = productSources(profile, Buffer.from(settings?.resume ?? '', 'base64'));
           disposeResumeArtifact(admitted.resumeIntent.artifact);
@@ -260,8 +289,8 @@ export async function startProductServer(options: { root?: string; port?: number
         if (Object.hasOwn(body,'expectedRevision') && body.expectedRevision !== revision) {
           response.writeHead(409).end(JSON.stringify({error:'Profile changed in another workspace. Refresh saved profile and review your edits.'})); return;
         }
-        if (body.applicant) queue.configureApplicant(body.applicant, body.resumeBase64);
-        else queue.configure(body.profile, body.resumeBase64);
+        if (body.applicant) queue.configureApplicant(body.applicant, body.resumeBase64, body.resumeName);
+        else queue.configure(body.profile, body.resumeBase64, body.resumeName);
         const settings=queue.getSettings();
         result = settings ? {...settings,effectiveFacts:effectiveProfileFacts(settings.profile)} : settings;
       } else if (path === "/account") {
@@ -286,7 +315,7 @@ export async function startProductServer(options: { root?: string; port?: number
         finally { accountBusy = false; }
       } else if (path === '/handoff/preview' || path === '/handoff/import' || path === '/handoff/import-paused') {
         const allowCurrentPage = path !== '/handoff/import';
-        const bundle = inspectHandoffBundle(body, queue.jobs, allowCurrentPage);
+        const bundle = inspectHandoffBundle(body, queue.jobs, allowCurrentPage,job=>queue.resumeDocument(job)?.metadata.sha256);
         for (const job of bundle.jobs) queue.assertAvailableLink(job.url,job.sourceJobId);
         if (path === '/handoff/import-paused' && bundle.preview.some(job=>job.currentPageOnly) && pageActions.size) {
           throw new Error('Wait for the current page operation to finish before importing its selected resume.');
@@ -320,7 +349,8 @@ export async function startProductServer(options: { root?: string; port?: number
   try {
     queue = new ApplicationQueue(root, bridge);
     if (!queue.snapshot().configured && process.env.HUNT_C3_PROFILE_PATH && process.env.HUNT_C3_RESUME_PATH) {
-      queue.configure(JSON.parse(readFileSync(process.env.HUNT_C3_PROFILE_PATH, "utf8")), readFileSync(process.env.HUNT_C3_RESUME_PATH).toString("base64"));
+      const resumePath=process.env.HUNT_C3_RESUME_PATH;
+      queue.configure(JSON.parse(readFileSync(process.env.HUNT_C3_PROFILE_PATH, "utf8")), readFileSync(resumePath).toString("base64"), basename(resumePath));
     }
   } catch (error) { bridge.close(); server.closeAllConnections(); server.close(); throw error; }
   accountBusy = true;

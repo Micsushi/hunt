@@ -4,11 +4,13 @@ import { chromium } from 'playwright';
 import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { fillGenericApplication, fillGenericIdentityFields } from './retired-queue/generic-application.ts';
 import { applicantProfile, effectiveProfileFacts } from '../../src/product/sources.ts';
+import { fillMatchedPage } from '../../src/product/page-matching.ts';
 
 
 
 test('validated website rows appear as saved URL answers without rewriting provenance', async () => {
-  const input = {given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'};
+  const input = {given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
+    earliest_start_date:'2027-01-20',salary_expectations:'CAD 85000'};
   const saved = applicantProfile(input) as {profilePlan:{repeatables:unknown[]}};
   saved.profilePlan.repeatables.push({section:'websites',rows:['linkedin','github','portfolio'].map(rowKey=>({
     rowKey, fields:[{fieldId:'website.url',questionType:'website',answerType:'url',allowedOptions:[],
@@ -48,6 +50,46 @@ test('validated website rows appear as saved URL answers without rewriting prove
     await fillGenericApplication(page,url,saved,Buffer.from('%PDF-fixture'),AbortSignal.timeout(5000));
     assert.equal(await page.locator('#linkedin').inputValue(),'https://example.invalid/linkedin');
     assert.equal(JSON.stringify(saved),original);
+
+    const currentPage = async () => fillMatchedPage({
+      profile:saved, resume:Buffer.from('%PDF-fixture'), url:page.url(), workflow:'C3.2',signal:AbortSignal.timeout(12000),
+      call:async(action,matchingPlans,matchingRunId)=>({...await page.evaluate(fillVisibleFields,{
+        action,matchingPlans,matchingRunId,scope:'page' as const,facts:effectiveProfileFacts(saved),
+        resume:action==='fill'?{name:'Resume.pdf',base64:Buffer.from('%PDF-fixture').toString('base64')}:undefined,
+      })}),
+    });
+    await page.goto('https://account.example.test/register');
+    await page.setContent(`<form><label>Full name<input id="name" autocomplete="name"></label>
+      <label>Email<input id="email" type="email" value="manual@example.invalid"></label>
+      <label>LinkedIn URL<input id="linkedin" type="url"></label>
+      <label>New password<input type="password" autocomplete="new-password"></label>
+      <label>Notes<input id="notes" value="private note"></label><label>Unknown prompt<input required id="unknown"></label>
+      <label>Agree to terms<input type="checkbox" required></label><label>Photo<input type="file"></label>
+      <button type="button">Create account</button></form>`);
+    const inspect = await page.evaluate(fillVisibleFields,{action:'status' as const,scope:'page' as const});
+    assert.deepEqual(inspect.matching?.map(row=>row.question),['Full name','Email','LinkedIn URL']);
+    const current=await currentPage();
+    assert.deepEqual(current.filled,['Full name','LinkedIn URL']);
+    assert.equal(current.resume,'optional');
+    assert.equal(await page.locator('#name').inputValue(),'Fixture Applicant');
+    assert.equal(await page.locator('#linkedin').inputValue(),'https://example.invalid/linkedin');
+    assert.equal(await page.locator('#email').inputValue(),'manual@example.invalid');
+    assert.equal(await page.locator('#notes').inputValue(),'private note');
+    assert.equal(await page.locator('#unknown').inputValue(),'');
+    assert.equal(await page.locator('input[type=password]').inputValue(),'');
+    assert.equal(await page.locator('input[type=checkbox]').isChecked(),false);
+    assert.equal(await page.locator('input[type=file]').inputValue(),'');
+    await page.evaluate(fillVisibleFields,{action:'undo' as const,scope:'page' as const});
+    assert.equal(await page.locator('#linkedin').inputValue(),'');
+    await page.evaluate(fillVisibleFields,{action:'redo' as const,scope:'page' as const});
+    assert.equal(await page.locator('#linkedin').inputValue(),'https://example.invalid/linkedin');
+    await page.goto(url);
+    await page.setContent(`<form id="job-application-form"><label>Date Available<input placeholder="mm/dd/yyyy"></label>
+      <label>Desired Pay<input></label><label>Website, Blog or Portfolio<input></label><label>LinkedIn URL<input></label>
+      <label>Unsupported optional prompt<input></label><button type="button">Submit application</button></form>`);
+    await currentPage();
+    assert.deepEqual(await page.locator('form input').evaluateAll(nodes=>nodes.map(node=>(node as HTMLInputElement).value)),
+      ['01/20/2027','CAD 85000','https://example.invalid/portfolio','https://example.invalid/linkedin','']);
   } finally { await browser.close(); }
 });
 

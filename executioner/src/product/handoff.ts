@@ -10,7 +10,7 @@ export interface HandoffJob {
 }
 
 /** A file is an owner-selected snapshot, not a signed claim about current server state. */
-export function inspectHandoffBundle(value: unknown, existing: readonly ProductJob[], allowCurrentPage = false) {
+export function inspectHandoffBundle(value: unknown, existing: readonly ProductJob[], allowCurrentPage = false, savedHash?: (job: ProductJob)=>string | undefined) {
   const parseTarget = allowCurrentPage ? productApplicationTarget : applicationTarget;
   const object = (entry: unknown): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry);
   const exactKeys = (entry: Record<string, unknown>, keys: string[]) => Object.keys(entry).length === keys.length && keys.every(key=>Object.hasOwn(entry,key));
@@ -40,8 +40,7 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
     if (existing.some(item => item.status !== 'removed' && item.sourceJobId === job.sourceJobId && canonicalPostingKey(item.key) !== target.key)) {
       throw new Error('The selected Hunt job already belongs to a different application link.');
     }
-    if (target.ats === 'generic' && current && !current.pageHandoff) throw new Error('Finish the existing saved draft manually to preserve its selected resume.');
-    if (current && (current.resumeSha256 !== job.resumeSha256 ||
+    if (current && ((current.resumeSha256 ?? savedHash?.(current)) !== job.resumeSha256 ||
         current.sourceJobId !== undefined && current.sourceJobId !== job.sourceJobId ||
         current.resumeVersion !== undefined && current.resumeVersion !== job.resumeVersion)) {
       throw new Error('An existing application has a different job or resume version. Pause and remove its queue entry before importing the new selection.');
@@ -55,17 +54,29 @@ export function inspectHandoffBundle(value: unknown, existing: readonly ProductJ
   return { jobs, preview };
 }
 
-export async function currentPageOwner(jobs: ProductJob[], tabId: number, url: URL) {
+export function selectableQueueResume(job: ProductJob) {
+  return job.status === 'paused' && !!job.sourceJobId && !!job.resumeVersion && !!job.resumeSha256;
+}
+
+export async function currentPageOwner(jobs: ProductJob[], url: URL, currentPageJobId?: unknown) {
   let key: string | undefined;
   try { key = productApplicationTarget(url.href).key; } catch { /* Ordinary page fill also supports unfamiliar HTTPS pages. */ }
-  const publication = smartRecruitersPublication(new URL(url.pathname, url.origin));
-  const current = jobs.filter(job => job.status !== 'removed');
+  if (currentPageJobId !== undefined) {
+    const chosen = jobs.find(job=>job.id===currentPageJobId && job.ats!=='generic' && selectableQueueResume(job) && canonicalPostingKey(job.key)===key);
+    if (!chosen) throw new Error('The selected application résumé changed. Reopen Hunt on its original posting.');
+    return chosen;
+  }
+  const publication = smartRecruitersPublication(url);
+  // Only an explicit current-page import owns the PDF for C3.2. Legacy queued drafts
+  // keep their original input on disk without claiming the user's current form.
+  const current = jobs.filter(job => job.pageHandoff && job.status === 'paused');
   if (key && current.some(job => canonicalPostingKey(job.key) !== key && possiblePostingAlias(job.key) === possiblePostingAlias(key!))) {
     throw new Error('This page resembles a saved posting. Open the exact job link from Applications to preserve its resume.');
   }
   const owners = current.filter(job => {
-    const selected = job.selectedApplicationUrl && smartRecruitersPublication(new URL(job.selectedApplicationUrl));
-    return job.tabId === tabId || canonicalPostingKey(job.key) === key ||
+    const savedUrl = job.selectedApplicationUrl && URL.parse(job.selectedApplicationUrl);
+    const selected = savedUrl && smartRecruitersPublication(savedUrl);
+    return canonicalPostingKey(job.key) === key ||
       publication && selected && publication.base.toLowerCase() === selected.base.toLowerCase();
   });
   if (publication) {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import test from 'node:test';
 import {cpSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -8,7 +9,7 @@ import {fillVisibleFields} from '../../extension/generic-fill.js';
 import {startProductServer} from '../../src/product/server.ts';
 import {fixtureApplicantProfile} from './fixture.ts';
 
-test('actual popup transport rejects synthetic profiles and queued resume substitution before effects', {timeout:60000},async()=>{
+test('actual popup transport rejects synthetic profiles and keeps queued and current-page resumes independent', {timeout:90000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-popup-safety-'));
   const service=await startProductServer({root:join(root,'service'),port:0});
   const token=readFileSync(service.tokenPath,'utf8').trim();
@@ -29,6 +30,10 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label><label>Resume<input required type="file" accept=".pdf"></label><button type="submit">Submit application</button></form>'}));
     const page=await context.newPage();await page.goto(url);
     const tabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===url).id,url);
+    const openPopup=async()=>{
+      await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
+      return (await Promise.all([context!.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]))[0];
+    };
     const send=(operation:string,documentId?:string,expectedUrl=url)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage({action:'pageAction',...args,expiresAt:Date.now()+12000}),{operation,documentId,tabId,expectedUrl});
     const inspect=await send('inspect');assert.equal(inspect.ok,true);
     assert.equal(inspect.result.resume,'missing','the required native résumé input is visibly empty');
@@ -47,16 +52,38 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     await nativeFile.setInputFiles({name:'Resume.pdf',mimeType:'application/pdf',buffer:Buffer.from(selected,'base64')});
     assert.equal((await send('inspect')).result.resume,'unverified','page inspection has no selected queue PDF to compare');
     assert.equal(await nativeFile.evaluate((e:HTMLInputElement)=>e.files!.length),1);
-    await nativeFile.setInputFiles([]);
     const before=readFileSync(join(root,'service',queued.id+'.input.json'),'utf8');
-    for(const operation of ['fill','redo']){
-      const result=await send(operation,inspect.result.documentId);assert.equal(result.ok,false);assert.match(result.error,/queued|Applications/i);
-    }
-    assert.equal(await page.locator('input').first().inputValue(),'');assert.equal(await page.locator('input[type=file]').evaluate((el:any)=>el.files.length),0);
-    assert.equal(readFileSync(join(root,'service',queued.id+'.input.json'),'utf8'),before);assert.equal(queued.status,'paused');
+    const item=await fetch(service.origin+'/browser/page-resume',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({tabId,expectedUrl:url})});
+    const choice=await item.json();
+    assert.equal(choice.supportsQueue,true);
+    assert.equal(choice.queued.name,'Selected.pdf');
+    assert.equal(choice.currentPage.source,'default');
+    assert.notEqual(choice.queued.sha256,choice.currentPage.sha256);
+    const chooser=await openPopup();
+    const useSelected=chooser.locator('#choose-resume');
+    await useSelected.waitFor();
+    assert.equal(await useSelected.isChecked(),false);
+    await useSelected.check();
+    const chosenLink=chooser.locator('#current-resume a');
+    await chosenLink.filter({hasText:'Selected.pdf'}).waitFor();
+    const [chosenPreview]=await Promise.all([context.waitForEvent('page'),chosenLink.click()]);
+    const chosenFrame=chosenPreview.locator('#pdf:not([hidden])');
+    await chosenFrame.waitFor();
+    assert.equal(await chosenFrame.evaluate(async (frame:HTMLIFrameElement)=>btoa(await (await fetch(frame.src)).text())),selected);
+    await chosenPreview.close();
+    await useSelected.uncheck();
+    await chosenLink.filter({hasText:'Default résumé'}).waitFor();
+    await chooser.locator('#choose-resume:not(:disabled)').waitFor();
+    await chooser.close();
+    const fills=await send('fill',inspect.result.documentId);
+    assert.equal(fills.ok,true,JSON.stringify(fills));
+    assert.equal(await nativeFile.evaluate(async(e:HTMLInputElement)=>btoa(await e.files![0]!.text())),selected,'an existing employer attachment is preserved');
+    assert.equal((await send('undo',inspect.result.documentId)).ok,true);
+    await nativeFile.setInputFiles([]);
+    assert.equal(await page.locator('input').first().inputValue(),'');
+    assert.equal(await nativeFile.evaluate((e:HTMLInputElement)=>e.files!.length),0);
     assert.equal(await worker.evaluate(async()=> (await (globalThis as any).chrome.storage.local.get('token')).token),token);
     await page.screenshot({path:join(root,'unchanged-queued-draft.png')});
-    await service.queue.action(queued.id,'remove');
     // The queued filler evaluates in the employer document. Its journal is outside the extension's isolated world.
     const mainWorldFill=await page.evaluate(fillVisibleFields,{facts:[{factId:'given_name',value:'Queued fixture'}]});
     assert.equal(mainWorldFill.canUndo,true);
@@ -73,7 +100,9 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     assert.equal(reportsDisabled(allowed),true);
     assert.equal(allowed.result.resume,'verified');
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
-    assert.equal(await page.locator('input[type=file]').evaluate((el:any)=>el.files.length),1);
+    assert.equal(await nativeFile.evaluate(async(e:HTMLInputElement)=>btoa(await e.files![0]!.text())),resume,'current-page fill attached the generic PDF');
+    assert.equal(readFileSync(join(root,'service',queued.id+'.input.json'),'utf8'),before);assert.equal(queued.status,'paused');
+    await service.queue.action(queued.id,'remove');
     assert.equal(allowed.result.canUndo,true);
     const history=await send('inspect');
     assert.equal(reportsDisabled(history),true);
@@ -89,10 +118,6 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     assert.equal(redone.ok,true,JSON.stringify(redone));
     assert.equal(reportsDisabled(redone),true);
     assert.equal(await page.locator('input').first().inputValue(),'Fixture');
-    const openPopup=async()=>{
-      await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
-      return (await Promise.all([context!.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]))[0];
-    };
     const view=await openPopup();
     const warning='The employer still has submission disabled.';
     await view.locator('#status').filter({hasText:warning}).waitFor();
@@ -135,6 +160,19 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
     const attachments=await openPopup();
     const status=attachments.locator('#status'), resumeInput=page.locator('input[type=file]').first();
     const transcript=page.getByLabel('Transcript',{exact:true});
+    const previewLink=attachments.locator('#current-resume a');
+    const defaultDigest=createHash('sha256').update(Buffer.from(resume,'base64')).digest('hex');
+    await previewLink.waitFor();
+    assert.match(await previewLink.innerText(),/Default résumé/);
+    const previewUrl=await previewLink.evaluate((link:HTMLAnchorElement)=>link.href);
+    assert.equal(new URLSearchParams(new URL(previewUrl).hash.slice(1)).get('sha256'),defaultDigest);
+    const [preview]=await Promise.all([context.waitForEvent('page'),previewLink.click()]);
+    await preview.locator('#pdf:not([hidden])').waitFor();
+    const displayedPdf=await preview.locator('#pdf').evaluate(async (frame:HTMLIFrameElement)=>
+      Array.from(new Uint8Array(await (await fetch(frame.src)).arrayBuffer())));
+    assert.equal(Buffer.from(displayedPdf).toString('base64'),resume);
+    assert.ok(!preview.url().includes(token));
+    await preview.close();
     const requiredTranscript='The required transcript is missing.';
     await status.filter({hasText:'The required resume field is empty.'}).filter({hasText:requiredTranscript}).waitFor();
     for(const [action,message] of [
@@ -148,6 +186,14 @@ test('actual popup transport rejects synthetic profiles and queued resume substi
       assert.equal(await resumeInput.evaluate((e:HTMLInputElement)=>e.files!.length),action==='undo'?0:1);
     }
     service.queue.configure(personal,selected);
+    // Reopening the old preview must never display the replacement under the earlier label.
+    const stale=await context.newPage();
+    await stale.goto(previewUrl);
+    await stale.locator('#preview-status').filter({hasText:/changed/i}).waitFor();
+    assert.equal(await stale.locator('#pdf').isVisible(),false);
+    await stale.close();
+    const selectedDigest=createHash('sha256').update(Buffer.from(selected,'base64')).digest('hex');
+    await attachments.waitForFunction(digest=>document.querySelector<HTMLAnchorElement>('#current-resume a')?.href.includes(digest),selectedDigest);
     await attachments.locator('#partial').click();
     await status.filter({hasText:'Your selected PDF differs from the earlier resume selection'}).filter({hasText:requiredTranscript}).waitFor();
     assert.doesNotMatch(await status.innerText(),/picker matches the selected PDF/);

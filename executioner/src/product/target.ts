@@ -25,6 +25,8 @@ export function savedPostingsMayOverlap(key: string, otherKey: string): boolean 
 
 /** An unrecognized step can rule out a saved job, but cannot establish ownership. */
 export function possibleUnmappedStep(key:string, page:URL):boolean {
+  // Saved postings use the standard HTTPS origin. A local form or different port is separate.
+  if (page.protocol !== 'https:' || page.port) return false;
   const portal = (host:string) => host === 'www.amazon.jobs' ? 'amazon.jobs'
     : host === 'ats.us1.rippling.com' ? 'ats.rippling.com' : host;
   if (portal(key.split('/')[0]!.toLowerCase()) !== portal(page.hostname)) return false;

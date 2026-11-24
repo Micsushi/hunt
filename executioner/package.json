@@ -14,6 +14,7 @@
     "extension/**/*.d.ts",
     "extension/manifest.json",
     "extension/popup.html",
+    "extension/resume-preview.html",
     "extension/popup.css",
     "docs/corpus-release.md",
     "docs/corpus-acceptance-summary.md"

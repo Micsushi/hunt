@@ -85,8 +85,8 @@ async function executeCommand(method, params, connection) {
     return {targetId:target.id,type:['page','background_page','worker','service_worker'].includes(target.type)?target.type:'other',
       attached:target.attached===true,...(Number.isSafeInteger(target.tabId)?{tabId:target.tabId}:{}),...(extensionOrigin?{extensionOrigin}:{})};
   });
-  if (method === 'pageTabs') return listPageTabs();
-  if (method === 'pageAction') return pageAction(params, attached);
+  if (method === 'pageTabs') return listPageTabs(origin);
+  if (method === 'pageAction') return pageAction(params, attached, origin);
   if (method === 'version') return { protocolVersion: '1.3', product: navigator.userAgent.match(/(?:Chrome|Chromium)\/[\d.]+/)?.[0] || 'Chrome/125.0.0.0', revision: 'c3', userAgent: navigator.userAgent, jsVersion: 'V8' };
   if (method === 'focus') {
     const tab = await chrome.tabs.get(tabId);
@@ -246,7 +246,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const {token} = await chrome.storage.local.get('token');
       if(Date.now()>=expiresAt)throw new Error('The page action expired. Inspect the draft before retrying.');
       // The service validates live profile mode and queued resume ownership for every entry point.
-      const response=await fetch(origin+'/browser/page',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify({operation:message.operation,tabId:message.tabId,expectedUrl:message.expectedUrl,documentId:message.documentId,expiresAt}),signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),redirect:'error'});
+      const response=await fetch(origin+'/browser/page',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify({operation:message.operation,tabId:message.tabId,expectedUrl:message.expectedUrl,documentId:message.documentId,expectedResumeSha256:message.expectedResumeSha256,currentPageJobId:message.currentPageJobId,expiresAt}),signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),redirect:'error'});
       const result=await response.json();
       if(!response.ok)throw new Error(response.status===404?'Update the local C3 app before filling this page.':typeof result?.error==='string'?result.error:'C3 could not confirm this page action. Inspect the draft before retrying.');
       return result;

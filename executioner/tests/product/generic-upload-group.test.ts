@@ -65,6 +65,22 @@ test('native Attach label uses only its uniquely labelled Resume/CV upload group
     // Bamboo renders a required native picker behind a visible Choose File button.
     await page.route('https://fixture.bamboohr.com/careers/1',route=>route.fulfill({contentType:'text/html',body:'<main></main>'}));
     await page.goto('https://fixture.bamboohr.com/careers/1');
+    await fixture(page,'<div><h3>Resume *</h3><input type="file" required aria-label="Resume"></div>');
+    await page.locator('input[type=file]').evaluate((input:HTMLInputElement)=>{
+      input.onchange=()=>{
+        const name=input.files![0]!.name, owner=input.parentElement!;
+        input.remove();
+        owner.insertAdjacentHTML('beforeend','<span></span><input type="hidden" name="resumeFileId" value="fixture-id"><button type="button">Remove</button>');
+        owner.querySelector('span')!.textContent=name;
+      };
+    });
+    const externalized=await fill(page);
+    assert.equal(externalized.resumeEvidence,'filename');
+    const retained=await page.evaluate(fillVisibleFields,{action:'undo' as const});
+    assert.equal(retained.resumeEvidence,'filename');
+    assert.ok(retained.skipped.some(row=>row.reason==='remote_upload_preserved'));
+    assert.equal(await page.locator('span').textContent(),'Resume.pdf');
+    await page.reload();
     await fixture(page, group('resume','Resume/CV*') + '<div id="cover"><p>Cover Letter*</p><div><button type="button">Choose File*</button><span>No file selected</span><input id="extra" aria-label="file-input" type="file" required style="display:none"><input type="hidden" name="coverLetterFileId"></div></div>');
     await page.evaluate(() => {
       const unrelated = document.createElement('form');

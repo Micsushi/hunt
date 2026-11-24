@@ -10,14 +10,15 @@ export function createLegacyAnswerReader({
     'first name': 'given_name', 'given name': 'given_name', 'legal first name': 'given_name', 'prénom': 'given_name',
     'last name': 'family_name', 'family name': 'family_name', 'legal last name': 'family_name', 'nom de famille': 'family_name',
     'preferred name': 'preferred_name', 'preferred first name':'preferred_name', 'email': 'email_address', 'email address': 'email_address', 'e-mail': 'email_address', 'adresse e-mail': 'email_address',
-    'phone': 'phone_number', 'phone number': 'phone_number', 'phone number?': 'phone_number', 'mobile phone': 'phone_number', 'téléphone': 'phone_number',
+    'phone': 'phone_number', 'phone number': 'phone_number', 'phone number?': 'phone_number', 'mobile phone': 'phone_number', 'téléphone': 'phone_number', 'telephone':'phone_number', 'telephone number':'phone_number', 'mobile number':'phone_number',
     'adresse courriel / email': 'email_address', 'numéro de téléphone / phone number': 'phone_number',
-    'city': 'city', 'ville': 'city', 'postal code': 'postal_code', 'zip code': 'postal_code', 'code postal': 'postal_code',
+    'city': 'city', 'ville': 'city', 'postal code': 'postal_code', 'zip code': 'postal_code', 'zip': 'postal_code', 'code postal': 'postal_code',
+    'location':'current_location', 'current location':'current_location', 'region':'region',
     'country': 'country', 'pays': 'country', 'state': 'region', 'province': 'region', 'state/province': 'region',
     'current company': 'current_company', 'current title': 'current_title',
     'linkedin link':'linkedin_url', 'linkedin': 'linkedin_url', 'linkedin profile': 'linkedin_url', 'linkedin profile url': 'linkedin_url', 'linkedin url': 'linkedin_url',
     'github': 'github_url', 'github profile': 'github_url', 'github url': 'github_url', 'github profile url': 'github_url',
-    'portfolio': 'portfolio_url', 'portfolio url': 'portfolio_url', 'portfolio website': 'portfolio_url',
+    'portfolio': 'portfolio_url', 'portfolio url': 'portfolio_url', 'portfolio website': 'portfolio_url', 'personal website':'portfolio_url',
     'website, blog or portfolio':'portfolio_url', 'website':'portfolio_url', 'confirm your email':'email_address',
     'address': 'address_line1', 'street address': 'address_line1', 'address line 1': 'address_line1', 'address line 2': 'address_line2',
     'when are you looking to start?': 'earliest_start_date', 'when are you available to start?': 'earliest_start_date',
@@ -56,5 +57,10 @@ export function createLegacyAnswerReader({
     }
     return fact(aliases[key]);
   };
-  return { choiceAliases, fact, canadaEligibility, answer, applicantName };
+  const profileLabel = label => {
+    const key = norm(label);
+    return (Object.hasOwn(aliases,key) && !['salary_expectations','earliest_start_date'].includes(aliases[key])) ||
+      fullName.test(key) || ['first and last names','full address','what is your current address','what is your current address?','where are you located?'].includes(key);
+  };
+  return { choiceAliases, fact, canadaEligibility, answer, applicantName, profileLabel };
 }

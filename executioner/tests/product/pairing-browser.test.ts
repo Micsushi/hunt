@@ -36,7 +36,7 @@ test('popup pairs from the workspace, preserves saved keys on failure, and recon
     };
     const savedKey = () => worker.evaluate(async () => (await (globalThis as any).chrome.storage.local.get('token')).token);
     await clickConnect();
-    await popup.getByText(/Start C3 with npm/).waitFor();
+    await popup.getByText('Open the local C3 workspace in this browser, then connect again.').waitFor();
     assert.equal(await savedKey(), undefined);
     await popup.screenshot({ path: join(root, 'popup-unpaired.png'), fullPage: true });
 

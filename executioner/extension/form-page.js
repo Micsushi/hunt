@@ -17,6 +17,16 @@ export function observeFormDocument(attachmentControls = 'input[type=file]') {
   const attachment = !!submitOwner && [...document.querySelectorAll(attachmentControls)].some(e => ownerOf(e) === submitOwner);
   const application = sameForm && (applicationSubmit || identity || attachment);
   const accountOwners = new Set(passwords.map(ownerOf));
+  const [accountForm] = accountOwners;
+  const profileName = all('input:not([type=password]):not([type=email])').some(input =>
+    ownerOf(input) === accountForm && (/^(?:given-name|family-name|name)$/i.test(input.autocomplete) ||
+      [...input.labels ?? []].some(label => /^(?:(?:first|last|full|given|family)\s+)?name\s*[*✱]?$/i.test(label.innerText.trim()))));
+  const registration = accountOwners.size === 1 && accountForm?.matches('form,[role=form]') &&
+    passwords.every(input => input.type === 'password' && input.autocomplete !== 'current-password') &&
+    (passwords.some(input => input.autocomplete === 'new-password') ||
+      profileName && email.some(input => ownerOf(input) === accountForm) ||
+      all('button,input[type=submit]').some(button => ownerOf(button) === accountForm &&
+        /^(?:create (?:an? |your )?(?:account|profile)|sign up|register)$/i.test((button.innerText || button.value || '').trim())));
   const separateAccountForm = !!submitOwner && submitOwner !== document.body && (applicationSubmit || identity || attachment) &&
     email.some(input => ownerOf(input) === submitOwner) &&
     email.every(input => ownerOf(input) === submitOwner || accountOwners.has(ownerOf(input))) &&
@@ -25,19 +35,20 @@ export function observeFormDocument(attachmentControls = 'input[type=file]') {
       return input.type === 'password' && owner && owner !== submitOwner && owner !== document.body &&
         owner.contains(input) && !input.closest('dialog,[role=dialog],[aria-modal=true]');
     });
-  const signals = [separateAccountForm ? 'separate_account_form' : '', email.length > 0 ? 'email_control' : '', submit.length === 1 ? 'submission_control' : '', sameForm ? 'shared_form' : '', applicationSubmit ? 'application_submit' : '', identity ? 'identity_control' : '', attachment ? 'attachment_control' : '', passwords.length ? 'account_or_code_control' : '', challenge.length ? 'security_challenge' : '', loading ? 'loading_marker' : ''].filter(Boolean);
+  const signals = [registration ? 'profile_registration' : '', separateAccountForm ? 'separate_account_form' : '', email.length > 0 ? 'email_control' : '', submit.length === 1 ? 'submission_control' : '', sameForm ? 'shared_form' : '', applicationSubmit ? 'application_submit' : '', identity ? 'identity_control' : '', attachment ? 'attachment_control' : '', passwords.length ? 'account_or_code_control' : '', challenge.length ? 'security_challenge' : '', loading ? 'loading_marker' : ''].filter(Boolean);
   return {version:'hosted-page-v1',documentKey:String(performance.timeOrigin),kind:challenge.length ? 'security_challenge' : passwords.length ? 'unknown' : loading ? 'loading' : application ? 'application' : 'unknown',signals,conflicts:owners.size > 1 || submit.length > 1 ? ['multiple_form_candidates'] : []};
 }
 
 // Unknown standalone forms remain eligible for current-page filling.
-export function currentPageInterruption(observation, action = 'fill') {
+export function currentPageInterruption(observation, action = 'fill', currentPage = false) {
   // Only the generic form observer admits unknown, non-account documents.
   if (observation.version !== 'hosted-page-v1') {
     if (observation.kind === 'application' || observation.kind === 'review') return;
   } else {
     if (action === 'undo' || action === 'redo') return;
     if (observation.kind !== 'loading' && observation.kind !== 'security_challenge' &&
-        (!observation.signals.includes('account_or_code_control') || observation.signals.includes('separate_account_form'))) return;
+        (!observation.signals.includes('account_or_code_control') || observation.signals.includes('separate_account_form') ||
+          currentPage && observation.signals.includes('profile_registration') && !observation.signals.includes('loading_marker'))) return;
   }
   const reason = observation.kind === 'unknown' && observation.signals.includes('account_or_code_control')
     ? 'account_or_code_control' : observation.kind;

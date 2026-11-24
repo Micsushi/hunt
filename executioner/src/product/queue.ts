@@ -105,7 +105,7 @@ export class ApplicationQueue {
   verifyEmail?: import('./workday-sign-in.ts').WorkdayAccountOptions['verifyEmail'];
   private running = new Map<string, AbortController>();
   private sessions = new Map<string, { tabId: number; page: Page; browser: Browser }>();
-  private settings?: { profile: unknown; resume: string };
+  private settings?: { profile: unknown; resume: string; resumeName?: string };
   private timer: NodeJS.Timeout;
   private closed = false;
   private reviewActions = new Set<string>();
@@ -196,7 +196,7 @@ export class ApplicationQueue {
     for (const job of this.records) {
       if (job.status === 'removed' || typeof job.key !== 'string') continue;
       const saved = savedTarget(job.url);
-      if (!job.pageHandoff && !(job.sourceJobId && job.resumeVersion && (saved?.ats ?? job.ats) === 'generic')) continue;
+      if (!job.pageHandoff) continue;
       const possible = target ? !saved && savedPostingsMayOverlap(job.key,target.key) : possibleUnmappedStep(job.key,url);
       if (!possible) continue;
       if (!saved) throw new Error('A saved application may own this step. Repair its unreadable link in local Applications before filling.');
@@ -269,24 +269,43 @@ export class ApplicationQueue {
     return {...input, profile:withCurrentAiConsent(input.profile, this.settings?.profile)};
   }
   currentPageInput(job: ProductJob): {profile: unknown; resume: string} {
-    if (!job.pageHandoff || job.status !== 'paused' || !job.sourceJobId || !job.resumeVersion || !job.resumeSha256) {
+    if (job.status !== 'paused' || !job.sourceJobId || !job.resumeVersion || !job.resumeSha256) {
       throw new Error('This application has no selected current-page handoff.');
     }
+    return this.checkedJobInput(job);
+  }
+  private checkedJobInput(job: ProductJob): {profile: unknown; resume: string} {
     const input = this.jobInput(job);
-    if (typeof input.resume !== 'string' || createHash('sha256').update(Buffer.from(input.resume, 'base64')).digest('hex') !== job.resumeSha256) {
+    if (typeof input.resume !== 'string' || job.resumeSha256 && createHash('sha256').update(Buffer.from(input.resume, 'base64')).digest('hex') !== job.resumeSha256) {
       throw new Error('The saved PDF differs from the selected Hunt resume. Check the application in Hunt.');
     }
     return input;
   }
-  recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
-  configureApplicant(values: unknown, resumeBase64?: string) {
-    this.configure(applicantProfile(values, this.settings?.profile), resumeBase64 ?? this.settings?.resume ?? "");
+  resumeDocument(job?: ProductJob) {
+    const input = job ? this.checkedJobInput(job) : this.settings;
+    if (!input) return null;
+    const pdf = Buffer.from(input.resume,'base64');
+    if (!pdf.subarray(0,5).equals(Buffer.from('%PDF-'))) throw new Error('Save a valid PDF before filling.');
+    const sha256 = createHash('sha256').update(pdf).digest('hex');
+    const source = job?.resumeVersion ? 'selected' : 'default';
+    const savedName = job?.resumeName && job.resumeName !== 'Default resume' ? job.resumeName :
+      input.resume === this.settings?.resume ? this.settings.resumeName : undefined;
+    const name = savedName || (source === 'selected' ? 'Selected résumé' : 'Default résumé') + ' · ' + sha256.slice(0,8);
+    return {pdf, metadata:{source,name,sha256,...(job?.resumeVersion && {version:job.resumeVersion})}};
   }
-  configure(profile: unknown, resumeBase64: string) {
+  recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
+  configureApplicant(values: unknown, resumeBase64?: string, resumeName?: string) {
+    this.configure(applicantProfile(values, this.settings?.profile), resumeBase64 ?? this.settings?.resume ?? "",resumeName);
+  }
+  configure(profile: unknown, resumeBase64: string, resumeName?: string) {
     const resume = Buffer.from(resumeBase64, "base64");
     const sources = productSources(profile, resume);
     disposeResumeArtifact(sources.resumeIntent.artifact);
-    const settings = { profile, resume: resume.toString("base64") };
+    if (resumeName !== undefined && (typeof resumeName !== 'string' || !resumeName.trim() ||
+      resumeName.length > 500 || /[\\/\p{Cc}]/u.test(resumeName))) throw new Error('Choose a PDF with a valid filename.');
+    const encoded = resume.toString("base64");
+    const name = resumeName?.trim() ?? (this.settings?.resume === encoded ? this.settings.resumeName : undefined);
+    const settings = { profile, resume:encoded, ...(name && {resumeName:name}) };
     const before = this.running.size ? aiConsentAuthority(this.settings?.profile) : undefined;
     if (this.settings) this.persist(join(this.root, 'settings.previous.json'), this.settings);
     this.persist(join(this.root, "settings.json"), settings);
@@ -305,7 +324,7 @@ export class ApplicationQueue {
     if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Choose between 1 and 30 simultaneous jobs.");
     this.concurrency = value; this.save(); this.safePump();
   }
-  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string }[], options: { paused?: boolean; currentPageHandoff?: boolean } = {}) {
+  add(inputs: { url: string; title?: string; tabId?: number; sourceJobId?: number; resumeBase64?: string; resumeName?: string; resumeVersion?: string; expectedResumeSha256?:string }[], options: { paused?: boolean; currentPageHandoff?: boolean } = {}) {
     if (!this.settings) throw new Error("Choose a profile and resume first.");
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) throw new Error("Add between 1 and 100 job links.");
     const prepared = inputs.map(input => {
@@ -320,15 +339,21 @@ export class ApplicationQueue {
       const resume = Buffer.from(input.resumeBase64 ?? this.settings!.resume, 'base64').toString('base64');
       const sources = productSources(this.settings!.profile, Buffer.from(resume, "base64"));
       disposeResumeArtifact(sources.resumeIntent.artifact);
-      return { input, target, resume, submissionAllowed: target.ats === "workday" && sources.profilePlan.mode === "live" && sources.executionPolicy.browserTransport === "live_browser" };
+      const resumeSha256 = createHash('sha256').update(Buffer.from(resume,'base64')).digest('hex');
+      return { input, target, resume, resumeSha256, submissionAllowed: target.ats === "workday" && sources.profilePlan.mode === "live" && sources.executionPolicy.browserTransport === "live_browser" };
     });
     const added: ProductJob[] = [];
     const pendingInputs = new Map<string, {profile: unknown; resume: string}>();
     const next = this.records.map(job => ({ ...job }));
-    for (const { input, target, resume, submissionAllowed } of prepared) {
+    for (const { input, target, resume, resumeSha256, submissionAllowed } of prepared) {
       if (input.sourceJobId !== undefined && next.some(job => job.status !== 'removed' && job.sourceJobId === input.sourceJobId &&
           canonicalPostingKey(job.key) !== target.key)) throw new Error('The selected Hunt job already belongs to a different application link.');
       const existing = next.find(j => typeof j.key==='string' && canonicalPostingKey(j.key) === target.key && j.status !== "removed");
+      if (input.expectedResumeSha256 !== undefined) {
+        let actual = resumeSha256;
+        if (existing) actual = pendingInputs.has(existing.id) ? existing.resumeSha256! : this.resumeDocument(existing)!.metadata.sha256;
+        if (input.expectedResumeSha256 !== actual) throw new Error('The selected résumé changed. Reopen Hunt to check it before continuing.');
+      }
       if (existing) {
         if (options.paused && (existing.status !== "paused" || this.running.has(existing.id) || this.reviewActions.has(existing.id))) throw new Error("This application is already active. Pause it before importing a resume.");
         if (input.tabId !== undefined && input.tabId !== existing.tabId) {
@@ -343,6 +368,11 @@ export class ApplicationQueue {
           existing.resumeName ??= input.resumeName;
           existing.resumeVersion ??= input.resumeVersion;
         }
+        if (target.ats === 'generic' && options.currentPageHandoff && input.resumeBase64) {
+          // Explicit re-import can adopt the original paused draft only after its PDF matched.
+          existing.pageHandoff = true;
+          existing.resumeSha256 ??= resumeSha256;
+        }
         added.push(existing); continue;
       }
       const id = randomUUID();
@@ -350,8 +380,8 @@ export class ApplicationQueue {
       const job: ProductJob = { id, ...target, title: input.title?.slice(0, 200) || target.posting,
         ...(target.ats === 'generic' && {pageHandoff:true}),
         status: options.paused ? "paused" : "queued", stage: options.paused ? "Imported paused. Review the resume and choose Run when ready" : "Queued", tabId: input.tabId, sourceJobId: input.sourceJobId, submissionAllowed,
-        resumeName: input.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
-        resumeSha256: createHash("sha256").update(Buffer.from(resume, "base64")).digest("hex"),
+        resumeName: input.resumeName ?? this.settings.resumeName ?? "Default resume", resumeVersion: input.resumeVersion,
+        resumeSha256,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       next.push(job); added.push(job);
     }

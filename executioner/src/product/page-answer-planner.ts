@@ -27,6 +27,7 @@ function provinceResidenceAnswer(question: string, canadianRegion: string | unde
 }
 
 export interface PageQuestion extends MatchingObservation {
+  profileOnly?: boolean;
   resumableProfileQuery?:boolean;
   state?: ApplicationFieldObservation['state']; widget?: 'international-phone' | 'multi-checkbox' | 'province-menu' | 'native-multiple' | 'rippling-location' | 'smartrecruiters-screening-checkbox'; signature:string; selected: string | boolean; valid: boolean; frameId?: string; formId?: string;
 }
@@ -58,6 +59,7 @@ export function createPageAnswerPlanner(
   facts: ReturnType<typeof effectiveProfileFacts>,
   company: string | null,
   postingEmployer?: string,
+  currentPage = false,
 ) {
   const employerNames = [company, postingEmployer].filter((name): name is string => !!name);
   const narrative = facts.find(fact => fact.factId === 'configured_narrative')?.value;
@@ -82,15 +84,36 @@ export function createPageAnswerPlanner(
     row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal,
   ): Promise<PageAnswerPlan> {
     const binding = {fieldId: row.fieldId, frameId: row.frameId, signature: row.signature};
-    if (!row.required) {
-      return {...binding, answer: null, provisional: false, reason: 'optional_field'};
-    }
     const constraints = row.constraints as ApplicationFieldObservation['constraints'];
     const populated = row.selected === true || typeof row.selected === 'string' && !!row.selected.trim();
     const state = row.state ?? (populated ? 'populated' : 'empty');
     if (constraints?.readOnly || row.state === 'hidden' || row.state === 'ambiguous') {
       const readback = constraints?.readOnly && state === 'populated';
       return {...binding, answer: null, provisional: !readback, reason: readback ? 'readback_only' : 'unsupported'};
+    }
+    if (!row.required || row.profileOnly) {
+      // On ordinary forms only write a known, exact profile answer. Optional
+      // application fields follow the same rule and never use a guessed answer.
+      if (currentPage && !row.widget && ['text','textarea','date','select'].includes(row.control) &&
+          !protectedQuestionCategory(row.question, undefined, row.options)) {
+        const saved = facts.filter(f => f.lane === 'live_owner_fact' &&
+          (f.provenance === 'owner_provided' || f.provenance === 'resume_verified'));
+        let answer = profileFieldValue(row.question, saved);
+        if (!row.profileOnly && !answer) {
+          const id = inspectQuestionMatch(row.question, employerNames).factId;
+          if (id === 'salary_expectations' || id === 'earliest_start_date') {
+            const value = saved.find(f => f.factId === id && f.provenance === 'owner_provided')?.value;
+            if (typeof value === 'string') answer = value;
+          }
+        }
+        if (answer && row.control === 'select') {
+          const options = row.options.filter(option => normalizeCatalogText(option) === normalizeCatalogText(answer!));
+          answer = options.length === 1 ? options[0] : undefined;
+        }
+        if (answer?.trim()) return {...binding, answer, provisional:false, reason:'saved_profile_field', lane:'profile_fact'};
+      }
+      return {...binding, answer:null, provisional: row.required && !populated,
+        reason: row.required ? populated ? 'existing_value_preserved' : 'needs_owner_answer' : 'optional_field'};
     }
     const isLong = (value: string) => [...value].length > MAX_BROWSER_READBACK_CODE_POINTS;
     const longQuestion = isLong(row.question);

@@ -9,6 +9,7 @@ export function observeFormDocument(attachmentControls?: string): FormPageObserv
 export function currentPageInterruption(
   observation: FormPageObservation | import('./workday-page.js').WorkdayPageObservation,
   action?: string,
+  currentPage?: boolean,
 ): undefined | {
   status: 'partial'; observation: typeof observation; incomplete: true;
   filled: string[]; matching: never[]; skipped: {label:string; reason:string; componentFailure:{component:'page_state';operation:string}}[];
