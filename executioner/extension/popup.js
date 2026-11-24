@@ -1,7 +1,5 @@
 import { supportsCurrentPage } from './website-handoff.js';
 
-await initializePopup();
-
 async function initializePopup() {
   const $=id=>document.getElementById(id),origin='http://127.0.0.1:47831';
   const toolbar=chrome.extension.getViews({type:'popup'}).includes(window);
@@ -9,11 +7,21 @@ async function initializePopup() {
   const compact=toolbar && screen.availHeight<590;
   if(compact)document.body.dataset.compact='';
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+  const canPartial=supportsCurrentPage(tab?.url,origin);
+  if(canPartial){
+    const heading=$('site-name'), platform=$('site-ats');
+    heading.textContent=new URL(tab.url).hostname;
+    void popupSiteContext(tab).then(context=>{
+      heading.textContent=context?.company || context?.hostname || 'Hunt C3';
+      heading.title=context?.hostname || '';
+      platform.textContent=context?.ats ? 'ATS · '+context.ats : '';
+      platform.hidden=!context?.ats;
+    });
+  }
   const saved=await chrome.storage.local.get('token');
   const choiceKey='pageResume:'+tab?.id;
   let preference=(await chrome.storage.session.get(choiceKey))[choiceKey];
   let busy=false, serviceReady=false, browserReady=false;
-  const canPartial=supportsCurrentPage(tab?.url,origin);
   $('actions').hidden=!canPartial;
   const pageHash=canPartial ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(tab.url))),byte=>byte.toString(16).padStart(2,'0')).join('').slice(0,24) : '';
   const reviewKey='fillReview:'+tab?.id;
@@ -160,7 +168,6 @@ async function initializePopup() {
     $('issue-view').hidden=!reviewing;
     document.querySelector('main').hidden=reviewing;
     $('back-to-fill').hidden=!reviewing;
-    $('resume-label').hidden=reviewing;
     $('return-issues').hidden=!issues.length;
     $('return-issues').textContent='Review '+issues.length+' '+(issues.length===1?'issue':'issues');
     if(reviewing){
@@ -459,3 +466,80 @@ async function initializePopup() {
   if(!saved.token)void run(connectLocal);
   setInterval(()=>{if(!busy)void checkConnection();},5000);
 }
+
+// These are display labels. Recognizing a host does not enable queued preparation.
+const hostedPlatforms = [
+  ['Workday', /\.(?:myworkdayjobs|myworkdaysite)\.com$/],
+  ['Greenhouse', /^(?:boards|job-boards(?:\.(?:eu|anz))?)\.greenhouse\.io$/],
+  ['Lever', /^jobs(?:\.eu)?\.lever\.co$/],
+  ['Ashby', /^jobs\.ashbyhq\.com$/],
+  ['Workable', /^apply\.workable\.com$/],
+  ['BambooHR', /\.bamboohr\.com$/],
+  ['SmartRecruiters', /^jobs\.smartrecruiters\.com$/],
+  ['Jobvite', /^jobs\.jobvite\.com$/],
+  ['Recruitee', /\.recruitee\.com$/],
+  ['JazzHR', /\.applytojob\.com$/],
+  ['Rippling', /^ats(?:\.us1)?\.rippling\.com$/],
+];
+
+// Runs in the selected top frame. Read only the hiring organization declared
+// by the posting; page titles, tenant slugs and account form values are not names.
+function readPostingCompany(expectedUrl) {
+  if (location.href !== expectedUrl) return null;
+  const scripts = document.querySelectorAll('script[type="application/ld+json" i]');
+  if (scripts.length > 24) return null;
+  let budget = 256 * 1024;
+  const postings = [];
+  for (const script of scripts) {
+    const text = script.textContent;
+    budget -= text.length;
+    if (budget < 0) return null;
+    let data;
+    try { data = JSON.parse(text); } catch { continue; }
+    const nodes = Array.isArray(data) ? data : [data];
+    for (const node of nodes) {
+      for (const item of [node, ...(Array.isArray(node?.['@graph']) ? node['@graph'] : [])]) {
+        if ([item?.['@type']].flat().includes('JobPosting')) postings.push(item);
+      }
+    }
+  }
+  if (postings.length !== 1) return null;
+  const [posting] = postings;
+  // A recommendation for a different URL cannot name the current employer.
+  const reference = posting.url ?? posting['@id'];
+  if (reference !== undefined) {
+    if (typeof reference !== 'string' || !reference.trim()) return null;
+    let declared;
+    try { declared = new URL(reference, expectedUrl); } catch { return null; }
+    const current = new URL(expectedUrl);
+    if (declared.origin !== location.origin || declared.pathname !== location.pathname ||
+        [...declared.searchParams].some(([key, value]) => !current.searchParams.getAll(key).includes(value)) ||
+        (declared.hash.startsWith('#/') && declared.hash !== current.hash)) return null;
+  }
+  const name = posting.hiringOrganization?.name;
+  if (typeof name !== 'string' || name.length > 160 || /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u.test(name)) return null;
+  return name.trim() || null;
+}
+
+async function popupSiteContext(tab) {
+  const {hostname, pathname} = new URL(tab.url);
+  // iCIMS also hosts marketing and support. Tenant portals commonly use a
+  // careers/jobs prefix, and custom portal names expose the same /jobs/ route.
+  const icimsPortal = /^[\w-]+\.icims\.com$/.test(hostname) &&
+    (/^(?:careers?|jobs?)[\w-]*\./.test(hostname) || /^\/jobs(?:\/|$)/.test(pathname) && !hostname.startsWith('www.'));
+  const ats = icimsPortal ? 'iCIMS' : hostedPlatforms.find(([, pattern]) => pattern.test(hostname))?.[0] ?? null;
+  let company = null;
+  try {
+    const [top] = await chrome.scripting.executeScript({
+      target: {tabId: tab.id, frameIds: [0]}, func: readPostingCompany, args: [tab.url],
+    });
+    company = top?.result ?? null;
+  } catch { /* Some browser-managed pages permit only hostname identification. */ }
+  try {
+    const current = await chrome.tabs.get(tab.id);
+    if (!current.active || current.url !== tab.url) return null;
+  } catch { return null; }
+  return {hostname, ats, company};
+}
+
+await initializePopup();

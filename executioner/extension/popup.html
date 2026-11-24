@@ -9,8 +9,10 @@
 </head>
 <body>
   <header>
-    <span id="resume-label">Resume</span>
-    <button id="back-to-fill" class="text-button" hidden>Back to fill</button>
+    <div id="page-context">
+      <h1 id="site-name">Hunt C3</h1>
+      <p id="site-ats" hidden></p>
+    </div>
     <button id="batch" class="text-button" aria-label="Open full menu">Full menu</button>
   </header>
   <p id="connection" role="status">Checking connection…</p>
@@ -19,6 +21,7 @@
     <p id="support"></p>
     <div id="resumes" hidden>
       <div class="resume-field">
+        <span id="resume-label">Resume</span>
         <button id="resume-select" class="secondary" aria-labelledby="resume-label resume-name" aria-expanded="false" aria-controls="resume-picker"><span id="resume-name"></span></button>
       </div>
       <section id="resume-picker" aria-label="Saved resumes" hidden>
@@ -48,6 +51,7 @@
     <button id="return-issues" class="text-button" hidden></button>
   </main>
   <section id="issue-view" aria-label="Fill issues" hidden>
+    <button id="back-to-fill" class="text-button" hidden>Back to fill</button>
     <div id="issue-description" aria-live="polite" aria-atomic="true">
       <p id="issue-position"></p>
       <h2 id="issue-label" tabindex="-1"></h2>

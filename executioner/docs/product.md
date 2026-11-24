@@ -86,6 +86,10 @@ document on job applications. On a general web form it uses recognized profile
 answers and leaves passwords, unrelated uploads and consent decisions to you.
 On a recognized candidate registration form, C3 can fill a separate
 **Email/Login** field from your saved contact email. You enter both passwords.
+The popup header shows the company when the current posting identifies its hiring
+organization. Otherwise it shows the site's hostname. A recognized application
+platform appears below it, such as **ATS · Workday**.
+
 The **Resume** dropdown shows the PDF selected for **Fill current page**. It starts
 with your default PDF or an explicit current-page C2 import for this posting.
 Search or sort the saved resumes, then select a filename to use it on this page

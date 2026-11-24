@@ -20,7 +20,7 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
   }
   let context:BrowserContext|undefined;
   try{
-    context=await chromium.launchPersistentContext(join(root,'browser'),{headless:true,channel:'chromium',...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{}),args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
+    context=await chromium.launchPersistentContext(join(root,'browser'),{headless:true,channel:'chromium',viewport:null,...(process.env.HUNT_C3_CHROMIUM?{executablePath:process.env.HUNT_C3_CHROMIUM}:{}),args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
     const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');
     await worker.evaluate(async token=>{await (globalThis as any).chrome.storage.local.set({token});},token);
     const popup=await context.newPage();await popup.goto(worker.url().replace(/background\.js$/,'popup.html'));
@@ -90,6 +90,27 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const chooser=await openPopup();
     const resumeSelect=chooser.locator('#resume-select');
     await resumeSelect.waitFor();
+    // An extension tab has a pre-sized viewport. Open the toolbar itself to catch shrink-to-fit regressions.
+    await worker.evaluate(()=>(globalThis as any).chrome.action.openPopup());
+    await chooser.waitForFunction(()=>{
+      const view=(globalThis as any).chrome.extension.getViews({type:'popup'})[0] as Window | undefined;
+      return view?.document.querySelector('#site-ats')?.textContent==='ATS · Greenhouse' &&
+        view.document.querySelector<HTMLButtonElement>('#partial')?.disabled===false;
+    });
+    const geometry=await chooser.evaluate(()=>{
+      const view=(globalThis as any).chrome.extension.getViews({type:'popup'})[0] as Window;
+      const doc=view.document, text=doc.createRange();
+      text.selectNodeContents(doc.getElementById('partial')!);
+      const filename=doc.querySelector<HTMLElement>('#resume-name .resume-filename')!;
+      const result={width:view.innerWidth, lines:text.getClientRects().length, fits:filename.clientWidth>=filename.scrollWidth,
+        site:doc.getElementById('site-name')!.textContent};
+      view.close();
+      return result;
+    });
+    assert.ok(geometry.width>=312 && geometry.width<=400, 'Readable toolbar width independent of PDF length');
+    assert.equal(geometry.lines,1);
+    assert.equal(geometry.fits,true);
+    assert.equal(geometry.site,new URL(url).hostname);
     await context.addInitScript(() => {
       const createObjectURL = URL.createObjectURL.bind(URL);
       URL.createObjectURL = value => {
