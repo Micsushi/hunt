@@ -8,6 +8,7 @@ import {chromium,type BrowserContext} from 'playwright';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
 import {startProductServer} from '../../src/product/server.ts';
 import {fixtureApplicantProfile} from './fixture.ts';
+import {bambooAddressForm} from './bamboo-address-fixture.ts';
 
 test('actual popup transport rejects synthetic profiles and keeps queued and current-page resumes independent', {timeout:90000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-popup-safety-'));
@@ -243,5 +244,46 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
       assert.equal(filled.result.frames.length,1);
       if (owners>0) assert.equal(await page.locator('main input').first().inputValue(),owners===1?'Fixture':'');
     }
+    const bambooUrl='https://fixture.bamboohr.com/careers/72/';
+    await context.route(bambooUrl,route=>route.fulfill({contentType:'text/html',body:bambooAddressForm}));
+    service.queue.configure(fixtureApplicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
+      country:'Canada',region:'Alberta',postal_code:'T2P 1J9'}),resume);
+    await page.goto(bambooUrl);
+    const address=()=>page.locator('form').evaluate(form=>{
+      const values=(name:string)=>form.querySelector<HTMLInputElement|HTMLSelectElement>('[name="'+name+'.value"]')!.value;
+      return {country:values('countryId'),region:values('state'),postal:values('zip'),street:values('streetAddress'),city:values('city'),
+        labels:Array.from(form.querySelectorAll('.fab-SelectToggle'),button=>button.getAttribute('aria-label')),submissions:form.dataset.submissions};
+    });
+    const original=await address();
+    const bambooPopup=await openPopup();
+    const fix=bambooPopup.getByRole('button',{name:'Use Canada from my profile'}), result=bambooPopup.locator('#status');
+    const mismatch='Country is set to United States. Your profile uses Canada.';
+    await result.getByText(mismatch,{exact:true}).waitFor();
+    await bambooPopup.getByRole('button',{name:'Fill current page'}).click();
+    await result.locator('.status-summary').filter({hasText:/fields? changed/}).waitFor();
+    assert.deepEqual(await address(),original);
+    assert.equal(await result.locator('li').filter({hasText:/country/i}).count(),1);
+    assert.doesNotMatch(await result.innerText(),/Alabama|State, ZIP/);
+    assert.equal(await page.getByLabel('First name').inputValue(),'Fixture');
+    await bambooPopup.locator('body').screenshot({path:join(root,'bamboo-conflict.png')});
+    await fix.click();
+    const undo=bambooPopup.getByRole('button',{name:'Undo fill'});
+    const canada={...original,country:'2',region:'20',postal:'T2P 1J9',labels:['Country Canada','Province Alberta']};
+    await bambooPopup.locator('#use-profile-country').waitFor({state:'hidden'});
+    assert.deepEqual(await address(),canada);
+    assert.equal(await undo.evaluate(button=>button===document.activeElement),true);
+    await bambooPopup.locator('body').screenshot({path:join(root,'bamboo-corrected.png')});
+    await undo.click();
+    await result.getByText(mismatch,{exact:true}).waitFor();
+    assert.deepEqual(await address(),original);
+    assert.equal(await page.getByLabel('First name').inputValue(),'Fixture','Undo address preserves the preceding fill');
+    assert.equal(await fix.isEnabled(),true);
+    await bambooPopup.getByRole('button',{name:'Redo fill'}).click();
+    await fix.waitFor({state:'hidden'});
+    assert.deepEqual(await address(),canada);
+    await page.locator('[name="zip.value"]').fill('Owner edit');
+    await undo.click();
+    await result.getByText(/could not verify the restored address/).waitFor();
+    assert.deepEqual(await address(),{...canada,postal:'Owner edit'});
   }finally{await context?.close();await service.close();}
 });

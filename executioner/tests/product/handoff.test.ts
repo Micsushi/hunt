@@ -232,8 +232,9 @@ test('explicit paused import keeps the exact portable contract and never schedul
     synthetic.profilePlan.mode='synthetic_test_non_submittable';
     synthetic.executionPolicy.answerFallbackPolicy='deterministic_site_valid_editable';
     assert.equal((await post('settings',{profile:synthetic,resumeBase64:job(1).resumeBase64})).status,200);
-    for(const operation of ['fill','redo']) {
-      const denied=await post('browser/page',{operation,tabId:1,expectedUrl:job(2).url,documentId:'inspected-fixture'});
+    for(const operation of ['fill','redo','use_profile_country']) {
+      const expectedUrl = operation === 'use_profile_country' ? 'https://fixture.bamboohr.com/careers/72/' : job(2).url;
+      const denied=await post('browser/page',{operation,tabId:1,expectedUrl,documentId:'inspected-fixture'});
       assert.equal(denied.status,400);assert.match((await denied.json() as {error:string}).error,/saved personal profile/);
     }
     assert.equal((service.queue.getSettings()!.profile as any).profilePlan.mode,'synthetic_test_non_submittable','refusal must preserve saved settings');
@@ -243,8 +244,16 @@ test('explicit paused import keeps the exact portable contract and never schedul
 test('manual fill and redo require the new paired extension capability and retain the caller deadline',async()=>{
   const root=mkdtempSync(join(tmpdir(),'hunt-page-capability-'));const service=await startProductServer({root,port:0});
   const original=ExtensionBridge.prototype.call;let modern=false,redoCapable=false,effects=0,slow=false,revoke=false;
+  const bamboo='https://fixture.bamboohr.com/careers/72/';
+  const countryCalls:Record<string,unknown>[]=[];
+  let countryCapable=false;
   ExtensionBridge.prototype.call=async function(method,params){
-    if(method==='agentStatus') {if(slow)await new Promise(resolve=>setTimeout(resolve,40));return {capabilities:modern?['pageAction-v2','question-matching-v1',...(redoCapable?['consent-redo-v1']:[])]:['pageAction-v1']};}
+    if(method==='agentStatus') {if(slow)await new Promise(resolve=>setTimeout(resolve,40));return {capabilities:modern?['pageAction-v2','selected-page-handoff-v1','question-matching-v1',...(redoCapable?['consent-redo-v1']:[]),...(countryCapable?['profile-country-v1']:[])]:['pageAction-v1']};}
+    if(method==='pageAction' && params?.expectedUrl===bamboo) {
+      countryCalls.push(params);
+      return {tabId:params.tabId,url:bamboo,documentId:'fixture',status:'partial',filled:[],skipped:[],matching:[],
+        canUndo:false,canRedo:false,profileCountryConflict:params.operation==='inspect'};
+    }
     if(method==='pageAction' && params?.operation==='inspect' && revoke) {
       revoke=false;
       service.queue.configureApplicant({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'false'});
@@ -267,6 +276,39 @@ test('manual fill and redo require the new paired extension capability and retai
     assert.equal((await post('browser/page',{operation:'fill',tabId:1,expectedUrl:job(1).url,documentId:'fixture'})).status,200);
     const oldRedo=await post('browser/page',{operation:'redo',tabId:1,expectedUrl:job(1).url,documentId:'fixture'});
     assert.match((await oldRedo.json()).error,/current consent/);
+    const countryRequest={operation:'use_profile_country',tabId:1,documentId:'fixture',expectedUrl:bamboo};
+    const address={given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',country:'Canada',region:'Alberta',postal_code:'T2P 1A1'};
+    service.queue.configureApplicant(address);
+    assert.equal((await post('browser/page',{...countryRequest,expectedUrl:job(1).url})).status,400);
+    assert.equal((await post('browser/page',{...countryRequest,documentId:undefined})).status,400);
+    assert.match((await (await post('browser/page',countryRequest)).json()).error,/Reload Hunt C3/);
+    assert.equal(countryCalls.length,0);
+    countryCapable=true;
+    const inspect=await post('browser/page',{...countryRequest,operation:'inspect',documentId:undefined});
+    assert.equal((await inspect.json()).profileCountryConflict,true);
+    service.queue.configureApplicant({...address,postal_code:'T2P 2B2'});
+    assert.equal((await post('browser/page',countryRequest)).status,200);
+    assert.deepEqual(countryCalls.map(call=>call.operation),['inspect','use_profile_country']);
+    const addressFacts=(call:Record<string,unknown>)=>Object.fromEntries((call.profileCountryFacts as {factId:string;value:unknown}[]).map(fact=>[fact.factId,fact.value]));
+    assert.deepEqual(addressFacts(countryCalls[0]!),{country:'Canada'});
+    assert.deepEqual(addressFacts(countryCalls[1]!),{country:'Canada',region:'Alberta',postal_code:'T2P 2B2'});
+    assert.deepEqual(Object.keys(countryCalls[1]!).sort(),['documentId','expectedUrl','expiresAt','operation','profileCountryFacts','tabId']);
+    const imported=await post('handoff/import-paused',bundle({...job(2),url:bamboo}));
+    assert.equal(imported.status,200);
+    const [draft]=await imported.json();
+    service.queue.configureApplicant({...address,country:'United States',region:'Colorado',postal_code:'80202'});
+    const selectedPage={expectedUrl:bamboo,tabId:2,documentId:'fixture'};
+    assert.equal((await post('browser/page',{...selectedPage,operation:'inspect'})).status,200);
+    const selectedFill=await post('browser/page',{...selectedPage,operation:'fill'});
+    assert.equal(selectedFill.status,200);
+    const pinned=countryCalls.find(call=>call.pageHandoff===draft.id && call.operation==='fill')!;
+    assert.equal((pinned.facts as {factId:string;value:unknown}[]).find(fact=>fact.factId==='country')?.value,'Canada');
+    assert.deepEqual(addressFacts(pinned),{country:'United States'});
+    service.queue.configureApplicant({...address,postal_code:'T3A 1A1'});
+    assert.equal((await post('browser/page',{...selectedPage,operation:'use_profile_country'})).status,200);
+    assert.deepEqual(addressFacts(countryCalls.at(-1)!),{country:'Canada',region:'Alberta',postal_code:'T3A 1A1'});
+    assert.equal(countryCalls.at(-1)!.pageHandoff,draft.id);
+    assert.equal(countryCalls.at(-1)!.resume,undefined);
     redoCapable=true;
     service.queue.configureApplicant({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',ai_evaluation_consent:'true'});
     revoke=true;

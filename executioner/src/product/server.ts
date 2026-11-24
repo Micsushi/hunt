@@ -5,7 +5,7 @@ import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { applicationTarget, canonicalPostingKey } from './target.ts';
+import { applicationTarget, canonicalPostingKey, isBambooPosting } from './target.ts';
 import { supportsCurrentPage } from '../../extension/website-handoff.js';
 import { ExtensionBridge } from "./extension-bridge.ts";
 import { ApplicationQueue } from "./queue.ts";
@@ -191,9 +191,12 @@ export async function startProductServer(options: { root?: string; port?: number
           ...(queuedError && {queuedError}),queued:queuedMeta,resumes};
       } else if (path === '/browser/page') {
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt','expectedResumeSha256','currentPageJobId','resumeSha256'].includes(key)) ||
-          !['inspect','fill','undo','redo'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string' ||
+          !['inspect','fill','undo','redo','use_profile_country'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string' ||
           (body.resumeSha256 !== undefined && (typeof body.resumeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.resumeSha256)))) throw new Error('Choose an HTTPS tab and a supported page action.');
         const url = new URL(body.expectedUrl);
+        const useProfileCountry = body.operation === 'use_profile_country';
+        const bambooPosting = isBambooPosting(url);
+        if (useProfileCountry && !bambooPosting) throw new Error('Inspect the BambooHR application before using your profile country.');
         if (!supportsCurrentPage(url.href,origin) || body.operation !== 'inspect' && (typeof body.documentId !== 'string' || !body.documentId)) throw new Error('Inspect a secure web page or local form before changing fields.');
         if (body.expiresAt !== undefined && (!Number.isSafeInteger(body.expiresAt) || body.expiresAt <= Date.now())) throw new Error('This page action expired. Inspect the page again before changing it.');
         const expiresAt = Math.min(Date.now()+15000, body.expiresAt ?? Infinity);
@@ -206,7 +209,7 @@ export async function startProductServer(options: { root?: string; port?: number
             !queue.jobs.some(job => job.id === prior.jobId && job.status === 'paused'))) {
           throw new Error('This selected application changed. Inspect its current page again.');
         }
-        const writesProfile = body.operation === 'fill' || body.operation === 'redo';
+        const writesProfile = body.operation === 'fill' || body.operation === 'redo' || useProfileCountry;
         let postingKey:string | undefined;
         try { postingKey = applicationTarget(url.href).key; } catch { /* Current-page forms need no posting key. */ }
         if (queue.snapshot().jobs.some(job=>(job.tabId===body.tabId || writesProfile && postingKey!==undefined && postingKey === canonicalPostingKey(job.key)) &&
@@ -235,17 +238,19 @@ export async function startProductServer(options: { root?: string; port?: number
         }
         const accountProfile = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
         // Existing Workday drafts can still fill their own sign-in screen before returning to the queue.
-        const accountAllowed = !selected && url.protocol === 'https:' && !url.port;
+        const accountAllowed = !selected && !useProfileCountry && url.protocol === 'https:' && !url.port;
         const accountPage = !accountAllowed ? undefined : await fillWorkdayAccountCurrentPage(bridge.call.bind(bridge), {...body,expiresAt},
           accountProfile?.profilePlan?.mode === 'synthetic_test_non_submittable' ? undefined : queue.credentials,
           accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
         const priorWorkdayPage = accountPage?.priorWorkdayPage;
         if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
-        const pickedResume = !selected && typeof body.resumeSha256 === 'string' ? queue.resumeBySha256(body.resumeSha256) : undefined;
-        if (!selected && typeof body.resumeSha256 === 'string' && !pickedResume) {
+        const pickResume = !selected && !useProfileCountry && typeof body.resumeSha256 === 'string';
+        const pickedResume = pickResume ? queue.resumeBySha256(body.resumeSha256) : undefined;
+        if (pickResume && !pickedResume) {
           throw new Error('The selected resume changed. Reopen Hunt to check it before filling.');
         }
         const currentInput = () => {
+          if (useProfileCountry) return queue.getSettings();
           if (!selected) {
             const base = queue.getSettings();
             return pickedResume && base ? {profile: base.profile, resume: pickedResume.base64} : base;
@@ -258,8 +263,7 @@ export async function startProductServer(options: { root?: string; port?: number
         const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');
         const resume = body.operation === 'fill' ? settings?.resume : undefined;
-        const resolvedSha256 = pickedResume ? pickedResume.metadata.sha256 : queue.resumeDocument(selected)?.metadata.sha256;
-        if (body.operation === 'fill' && body.expectedResumeSha256 !== undefined && body.expectedResumeSha256 !== resolvedSha256) {
+        if (body.operation === 'fill' && body.expectedResumeSha256 !== undefined && body.expectedResumeSha256 !== (pickedResume?.metadata.sha256 ?? queue.resumeDocument(selected)?.metadata.sha256)) {
           throw new Error('The selected resume changed. Reopen Hunt to check it before filling.');
         }
         if (writesProfile) {
@@ -272,11 +276,21 @@ export async function startProductServer(options: { root?: string; port?: number
           try { status=await bridge.call('agentStatus'); }
           catch { throw new Error('Reconnect and reload Hunt C3 0.1.9 or newer before filling or redoing fields.'); }
           if (!Array.isArray(status?.capabilities) || !status.capabilities.includes('pageAction-v2')) throw new Error('Reload Hunt C3 0.1.9 or newer before filling or redoing fields.');
+          if (useProfileCountry && !status.capabilities.includes('profile-country-v1')) throw new Error('Reload Hunt C3 before using your profile country.');
           if (body.operation==='redo' && !status.capabilities.includes('consent-redo-v1')) throw new Error('Reload Hunt C3 before redoing fields so it can verify your current consent.');
           if (selected && !status.capabilities.includes('selected-page-handoff-v1')) throw new Error('Reload Hunt C3 to fill this application with its selected resume.');
           if (body.operation==='fill' && !status.capabilities.includes('question-matching-v1')) throw new Error('Reload Hunt C3 before filling so this page uses shared question matching.');
         }
         if (Date.now() >= expiresAt) throw new Error('This page action expired. Inspect the page again before changing it.');
+        // An imported draft retains its pinned profile. The explicit address action belongs to today's saved profile.
+        const currentAddress = () => {
+          if (!bambooPosting) return {};
+          const saved = queue.getSettings()?.profile as {profilePlan?:{mode?:string}} | undefined;
+          if (useProfileCountry && saved !== profile) throw new Error('Your saved profile changed. Inspect the page again before using your profile country.');
+          const fields = useProfileCountry ? ['country','region','postal_code'] : ['country'];
+          return {profileCountryFacts: saved?.profilePlan?.mode === 'live' ? effectiveProfileFacts(saved).filter(fact =>
+            fields.includes(fact.factId) && fact.lane === 'live_owner_fact' && ['owner_provided','resume_verified'].includes(fact.provenance)) : []};
+        };
         if (body.operation==='fill') result = await fillMatchedPage({profile,resume:Buffer.from(resume??'','base64'),url:body.expectedUrl,
           root:pageMatchingRoot(root,body.expectedUrl),workflow:'C3.2',signal:AbortSignal.timeout(Math.max(1,expiresAt-Date.now())),
           call:async(action,matchingPlans,matchingRunId)=> {
@@ -287,12 +301,12 @@ export async function startProductServer(options: { root?: string; port?: number
               }
             }
             const observed=await bridge.call('pageAction',{...body,...(selected && {pageHandoff:selected.id}),operation:action==='status'?'inspect':'fill',expiresAt,
-              facts:effectiveProfileFacts(profile),matchingPlans,matchingRunId,...(action==='fill'&&resume?{resume:{name:'Resume.pdf',base64:resume}}:{})}) as MatchedPageResult;
+              facts:effectiveProfileFacts(profile),...currentAddress(),matchingPlans,matchingRunId,...(action==='fill'&&resume?{resume:{name:'Resume.pdf',base64:resume}}:{})}) as MatchedPageResult;
             if(observed.documentId!==body.documentId)throw new Error('The page changed. Inspect it again before filling.');
             return observed;
           }});
         else {
-          try { result = await bridge.call('pageAction',{...body,expiresAt,...(body.operation==='redo' && {aiConsentDecision:aiConsentAuthority(currentInput()?.profile)?.fact?.value ?? null}),...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
+          try { result = await bridge.call('pageAction',{...body,expiresAt,...currentAddress(),...(body.operation==='redo' && {aiConsentDecision:aiConsentAuthority(currentInput()?.profile)?.fact?.value ?? null}),...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
           catch (error) {
             if (!priorWorkdayPage || !(error instanceof Error) || error.message !== 'debugger_protected_extension') throw error;
             response.writeHead(400).end(JSON.stringify({

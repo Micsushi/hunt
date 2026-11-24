@@ -39,6 +39,11 @@ export function possibleUnmappedStep(key:string, page:URL):boolean {
   return true;
 }
 
+export function isBambooPosting(url: URL): boolean {
+  return url.protocol === 'https:' && !url.port && !url.username && !url.password &&
+    url.hostname.endsWith('.bamboohr.com') && /^\/careers\/\d+\/?$/u.test(url.pathname);
+}
+
 /** Explicit unfamiliar application targets. These never use the hosted Review or Submit path. */
 export function genericApplicationTarget(input: string): {
   url: string; key: string; host: string; posting: string; ats: "generic";
@@ -51,8 +56,8 @@ export function genericApplicationTarget(input: string): {
   let posting: string | undefined;
   if (host === "ats.rippling.com" || host === "ats.us1.rippling.com") {
     posting = pathname.match(/^\/[\w-]+\/jobs\/[a-f0-9-]{36}(?=\/apply$|$)/i)?.[0];
-  } else if (host.endsWith(".bamboohr.com")) {
-    posting = pathname.match(/^\/careers\/\d+$/)?.[0];
+  } else if (isBambooPosting(url)) {
+    posting = pathname;
   } else if (host.endsWith(".applytojob.com")) {
     posting = pathname.match(/^\/apply\/[\w-]+(?:\/[\w-]+)?$/)?.[0]?.split("/").slice(0, 3).join("/");
   } else if (host.endsWith(".recruitee.com")) {

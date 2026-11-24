@@ -1,3 +1,130 @@
+// BambooHR changes both the regional menu and postal field when Country changes.
+// Resolve those controls again after each change, including during Undo and Redo.
+export function createBambooAddress({fabricWidget, fabricState, fabricMenu, fabricClear, editable, write, checkDeadline, norm}) {
+  if (window !== window.top || !location.hostname.endsWith('.bamboohr.com') || !/^\/careers\/\d+\/?$/.test(location.pathname)) return null;
+  const forms = document.querySelectorAll('form#job-application-form');
+  if (forms.length !== 1 || forms[0].querySelector('input[type=password]')) return null;
+  const form = forms[0], url = location.href;
+  const current = () => form.isConnected && location.href === url && document.querySelector('form#job-application-form') === form;
+  const widget = name => {
+    if (!current()) return null;
+    const controls = form.querySelectorAll(`select[name="${name}.value"]`);
+    if (controls.length !== 1) return null;
+    const button = controls[0].closest('.fab-Select')?.querySelector('button.fab-SelectToggle');
+    const menu = button && editable(button) && fabricWidget(button);
+    return menu?.backing === controls[0] && menu.region === form ? menu : null;
+  };
+  const choice = menu => menu && JSON.parse(fabricState(menu));
+  const postal = () => {
+    const fields = form.querySelectorAll('input[name="zip.value"]');
+    return fields.length === 1 && fields[0].type === 'text' && fields[0].form === form && editable(fields[0]) ? fields[0] : null;
+  };
+  const regionName = country => country === 'Canada' ? 'Province' : country === 'United States' ? 'State' : null;
+  const read = () => {
+    const country = choice(widget('countryId')), menu = widget('state'), region = choice(menu), field = postal();
+    if (!country || !region || !field || !regionName(country.label) || menu.label !== regionName(country.label)) return null;
+    const expected = country.label === 'Canada' ? 'postal code' : 'zip';
+    if (field.labels.length !== 1 || norm(field.labels[0].textContent) !== expected) return null;
+    return {country, region, postal:field.value};
+  };
+  const same = (a,b) => a?.label === b.label && (b.value === undefined || a.value === b.value);
+  const matches = (a,b) => !!a && same(a.country,b.country) && same(a.region,b.region) && a.postal === b.postal;
+  const wait = async test => {
+    const end = Date.now() + 2200;
+    do {
+      checkDeadline();
+      if (!current()) throw new Error('The BambooHR application changed.');
+      const value = test();
+      if (value) return value;
+      await new Promise(resolve => setTimeout(resolve,40));
+    } while (Date.now() < end);
+    throw new Error('BambooHR did not confirm the address change.');
+  };
+  const select = async (name,target,guard) => {
+    const menu = widget(name);
+    if (!menu || !guard()) throw new Error('The BambooHR address changed during the action.');
+    if (same(choice(menu),target)) return;
+    if (target.label) {
+      const options = await fabricMenu(menu,true);
+      const matches = options.filter(option => option.textContent.trim() === target.label);
+      if (matches.length !== 1 || !guard()) {
+        if (menu.input.getAttribute('aria-expanded') === 'true') menu.input.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+        throw new Error('BambooHR did not offer the expected address choice.');
+      }
+      checkDeadline(); matches[0].click();
+    } else {
+      const clear = fabricClear(menu);
+      if (!clear) throw new Error('BambooHR did not offer to clear the regional choice.');
+      checkDeadline(); clear.click();
+    }
+    await wait(() => same(choice(widget(name)),target));
+  };
+  const transition = async (before,target) => {
+    const safePostal = value => value === before.postal || value === '';
+    await select('countryId',target.country,() => matches(read(),before));
+    const switched = await wait(() => {
+      const value = read();
+      return value && same(value.country,target.country) && value;
+    });
+    if (!safePostal(switched.postal) || switched.region.label && !same(switched.region,target.region)) {
+      throw new Error('The BambooHR address changed during the action.');
+    }
+    await select('state',target.region,() => matches(read(),switched));
+    const confirmed = read();
+    if (!confirmed || !same(confirmed.country,target.country) || !same(confirmed.region,target.region) || !safePostal(confirmed.postal))
+      throw new Error('The BambooHR address changed during the action.');
+    if (confirmed.postal !== target.postal) write(postal(),target.postal);
+    await new Promise(resolve => setTimeout(resolve,120));
+    const after = read();
+    const accepted = name => {
+      const menu = widget(name);
+      return menu && menu.backing.validity.valid && menu.input.getAttribute('aria-invalid') !== 'true' && menu.input.getAttribute('aria-expanded') !== 'true';
+    };
+    if (!matches(after,target) || target.country.label === 'Canada' && (!accepted('countryId') || !accepted('state') ||
+      !postal().validity.valid || postal().getAttribute('aria-invalid') === 'true')) throw new Error('BambooHR did not retain the province and postal code.');
+    return after;
+  };
+  const apply = async (before,target) => {
+    if (!matches(read(),before)) throw new Error('Fields changed since C3 filled them. Your edits were preserved.');
+    try { return await transition(before,target); }
+    catch (error) {
+      if (matches(read(),before)) throw error;
+      let now = read();
+      if (!now && same(choice(widget('countryId')),target.country)) {
+        // The dependent Province/State menu may never mount. Revert the country
+        // only while the old dependent data (or BambooHR's reset) is still visible.
+        const safe = () => {
+          const region = choice(widget('state')), zip = postal()?.value;
+          return same(choice(widget('countryId')),target.country) && (!region?.label || same(region,before.region)) &&
+            (zip === undefined || zip === '' || zip === before.postal);
+        };
+        if (safe()) {
+          await select('countryId',before.country,safe);
+          await new Promise(resolve => setTimeout(resolve,120));
+          now = await wait(read);
+          if (matches(now,before)) throw error;
+          if ((!now.region.label || same(now.region,before.region)) && ['',before.postal].includes(now.postal)) {
+            await transition(now,before);
+            throw error;
+          }
+        }
+      }
+      // Only reverse values the change could have written. A new owner edit wins.
+      if (now && same(now.country,target.country) && (!now.region.label || same(now.region,target.region)) &&
+          [before.postal,'',target.postal].includes(now.postal)) {
+        try { await transition(now,before); }
+        catch { throw new Error('BambooHR could not restore the original address. Review the address on the page.'); }
+        throw error;
+      }
+      throw new Error('BambooHR could not confirm the original address. Review the address on the page.');
+    }
+  };
+  const conflict = country => norm(country) === 'canada' && choice(widget('countryId'))?.label === 'United States';
+  const protectedControl = e => form.contains(e) && (e.matches('[name="countryId.value"],[name="state.value"],[name="zip.value"],[name="streetAddress.value"],[name="address1.value"],[name="address2.value"],[name="city.value"]') ||
+    !!e.closest('.fab-Select')?.querySelector('select[name="countryId.value"],select[name="state.value"]'));
+  return {form, url, conflict, protectedControl, read, apply};
+}
+
 export function createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery}) {
   const valueOf = e => e.getAttribute('aria-label') ?? '';
   const provinceContext = e => {

@@ -84,11 +84,15 @@ fill recognized empty fields and supported saved-answer choices on the current
 page. It can attach the saved resume to an unambiguous resume input in the main
 document on job applications. On a general web form it uses recognized profile
 answers and leaves passwords, unrelated uploads and consent decisions to you.
-Click a résumé name in the popup to open that PDF. **Fill current page** uses your
-default résumé. An explicit current-page C2 import selects its PDF for the matching
-posting. If a paused job on a supported ATS has a different C2 PDF, the popup
-shows both filenames. You can choose the queued PDF for this page. **Prepare this
-job** keeps using the job's saved PDF.
+The **Resume** dropdown shows the PDF selected for **Fill current page**. It starts
+with your default PDF or an explicit current-page C2 import for this posting.
+Choose another saved PDF to use it on this page with your current profile.
+**Prepare this job** keeps using the job's saved PDF.
+
+On BambooHR, if the form shows United States and your saved country is Canada,
+**Fill current page** preserves that selection and leaves empty State and ZIP fields
+blank. Choose **Use Canada from my profile** to switch the country and apply your
+saved province and postal code. **Undo fill** restores the prior address fields.
 
 The popup reports partial completion, preserves existing entries and flags
 conflicts with saved answers. Some custom controls and attachments still require
@@ -132,14 +136,13 @@ restarts. The workspace tab can then be closed. Chrome or Brave requests debugge
 access so C3 can operate the selected application tabs.
 
 If your default browser differs, open the workspace in the browser where Hunt is
-installed and pair it using the key file printed by the launcher. The popup's
-**Connection settings** contains a manual **Pairing key** fallback and
-the extension version. Once connected, **Connect to local app** moves into
-that panel. A rejected key
+installed and pair it using the key file printed by the launcher. Choose
+**Open full menu**, then **Settings** for the **Pairing key**, browser connection
+details and **Connect Hunt website**. A rejected key
 does not replace your saved connection. If old workspace tabs contain different
 keys, close those tabs and retry. Omit `--open` when starting without a browser.
 
-Choose **Open workspace** in the extension. Enter your applicant details,
+Choose **Open full menu** in the extension. Enter your applicant details,
 choose a default PDF resume, and save. Existing prepared C3 profiles can also be
 imported. On Windows, **Save account** encrypts the application password and optional
 Gmail app password with Windows current-user protection in `account.dpapi` under

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium,type Page} from 'playwright';
 import {fillVisibleFields} from '../../extension/generic-fill.js';
+import {bambooAddressForm} from './bamboo-address-fixture.ts';
 
 const url='https://fixture.bamboohr.com/careers/123';
 const facts=[{factId:'given_name',value:'Fixture'},{factId:'email_address',value:'fixture@example.invalid'},
@@ -57,6 +58,42 @@ test('Bamboo data-menu-id portal selects saved province and Clear Selection rest
     await page.evaluate(()=>{(window as any).setProvince('Ontario');});
     await assert.rejects(page.evaluate(fillVisibleFields,{action:'undo' as const}),/Fields changed/);
     assert.equal(await page.locator('#province').getAttribute('aria-label'),'Province Ontario');
+
+    const dynamic = await browser.newPage();
+    await dynamic.route(url, route => route.fulfill({contentType:'text/html; charset=utf-8', body:bambooAddressForm}));
+    await dynamic.goto(url);
+    const address = {scope:'page' as const,facts:[...facts,{factId:'postal_code',value:'T2P 1J9'}]};
+    const zip = dynamic.locator('input[name="zip.value"]');
+    const state = dynamic.locator('select[name="state.value"]');
+    const country = dynamic.locator('select[name="countryId.value"]');
+    const read = async () => [await country.inputValue(),await state.inputValue(),await zip.inputValue()];
+    const preserved = await dynamic.evaluate(fillVisibleFields,address);
+    assert.deepEqual(await read(),['1','','']);
+    assert.equal(preserved.profileCountryConflict,true);
+    assert.deepEqual(preserved.skipped.filter(row => ['Country','State','ZIP'].includes(row.label)),[{label:'Country',reason:'saved_value_conflict'}]);
+    const pinnedCanada = await dynamic.evaluate(fillVisibleFields,{...address,currentProfileCountry:'United States'});
+    assert.equal(pinnedCanada.profileCountryConflict,undefined);
+    assert.deepEqual(await read(),['1','','']);
+    assert.deepEqual(pinnedCanada.skipped.filter(row => ['Country','State','ZIP'].includes(row.label)),[{label:'Country',reason:'saved_value_conflict'}]);
+    await dynamic.getByRole('button',{name:'State –Select–'}).click();
+    await dynamic.getByRole('menuitem',{name:'Colorado'}).click();
+    await zip.fill('80202');
+    const corrected = await dynamic.evaluate(fillVisibleFields,{...address,useProfileCountry:true});
+    assert.deepEqual(corrected.filled,['Country','Province','Postal Code']);
+    assert.deepEqual(await read(),['2','20','T2P 1J9']);
+    const undone = await dynamic.evaluate(fillVisibleFields,{...address,action:'undo' as const});
+    assert.deepEqual(await read(),['1','11','80202']);
+    assert.equal(undone.profileCountryConflict,true);
+    const redone = await dynamic.evaluate(fillVisibleFields,{...address,action:'redo' as const});
+    assert.equal(redone.profileCountryConflict,undefined);
+    assert.deepEqual(await read(),['2','20','T2P 1J9']);
+    await zip.fill('T3A 1J9');
+    const declinedUndo = await dynamic.evaluate(fillVisibleFields,{...address,action:'undo' as const});
+    assert.ok(declinedUndo.skipped.some(row => row.reason === 'bamboo_address_restore_unconfirmed'));
+    assert.deepEqual(await read(),['2','20','T3A 1J9']);
+    assert.equal(await dynamic.locator('input[name="streetAddress.value"]').inputValue(),'Owner street');
+    assert.equal(await dynamic.locator('input[name="city.value"]').inputValue(),'Owner city');
+    assert.equal(await dynamic.locator('form').getAttribute('data-submissions'),'0');
   }finally{await browser.close();}
 });
 
@@ -70,6 +107,31 @@ test('existing province, ambiguous option and conflicting menu binding stay unto
       const result=await page.evaluate(fillVisibleFields,{facts});assert.equal(result.filled.includes('Province'),false);
       assert.equal(await page.locator('#province').getAttribute('aria-label'),kind==='existing'?'Province Ontario':'Province –Select–');
       assert.equal(await page.evaluate('clears+selections+countryTouches+submits'),0);await page.close();
+    }
+    const unavailable = await browser.newPage();
+    await unavailable.route(url,route => route.fulfill({contentType:'text/html; charset=utf-8',body:bambooAddressForm}));
+    await unavailable.goto(url);
+    const refused = await unavailable.evaluate(fillVisibleFields,{scope:'page' as const,useProfileCountry:true,
+      facts:[{factId:'country',value:'Canada'},{factId:'region',value:'Missing province'},{factId:'postal_code',value:'T2P 1J9'}]});
+    assert.ok(refused.skipped.some(row => row.reason === 'bamboo_address_change_unconfirmed'));
+    assert.equal(await unavailable.locator('select[name="countryId.value"]').inputValue(),'1');
+    assert.equal(await unavailable.locator('select[name="state.value"]').inputValue(),'');
+    assert.equal(await unavailable.locator('input[name="zip.value"]').inputValue(),'');
+    for (const broken of [
+      bambooAddressForm.replace('item.onclick = () => choose(value)', 'item.onclick = () => choose(name === "countryId.value" ? "1" : value)'),
+      bambooAddressForm.replace('setTimeout(() => region(value), 35)','setTimeout(() => { if (value === "1") region(value); }, 35)'),
+    ]) {
+      const page = await browser.newPage();
+      await page.route(url,route => route.fulfill({contentType:'text/html; charset=utf-8',body:broken}));
+      await page.goto(url);
+      const failed = await page.evaluate(fillVisibleFields,{scope:'page' as const,useProfileCountry:true,
+        facts:[...facts,{factId:'postal_code',value:'T2P 1J9'}]});
+      assert.deepEqual(failed.filled,[]);
+      assert.ok(failed.skipped.some(row => row.reason === 'bamboo_address_change_unconfirmed'));
+      assert.equal(await page.locator('select[name="countryId.value"]').inputValue(),'1');
+      assert.equal(await page.locator('select[name="state.value"]').inputValue(),'');
+      assert.equal(await page.locator('input[name="zip.value"]').inputValue(),'');
+      await page.close();
     }
   }finally{await browser.close();}
 });

@@ -11,7 +11,7 @@ import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 
 /** Runs in the exact document selected by the injection boundary. */
-export async function runPageFill({ facts = [], action = 'fill', scope = 'application', allowProfileForms = true, expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, aiConsentDecision, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff } = {}, adapters) {
+export async function runPageFill({ facts = [], action = 'fill', scope = 'application', allowProfileForms = true, expectedUrl, expiresAt, resume, replaceExistingResume = false, matchingPlans, aiConsentDecision, matchingRunId, queuedScreening = false, queueHistory = false, pageHandoff, useProfileCountry = false, currentProfileCountry } = {}, adapters) {
   const {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, createFabricControl, createProvinceMenu, isPortalResumeBinding} = adapters;
   let checkedStep, checkedForm, checkedUpload;
   const checkDeadline = () => {
@@ -236,6 +236,22 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     async function replayHistory() {
       const from = historyState[action], to = historyState[action === 'undo' ? 'redo' : 'undo'], entry = from.at(-1);
       if (!entry) return;
+      const address = entry.length === 1 && entry[0].bambooAddress;
+      if (address) {
+        result.frameScope='document';
+        const undo = action === 'undo';
+        try {
+          if (!bamboo || bamboo.form !== address.form || bamboo.url !== address.url) throw new Error('The BambooHR application changed.');
+          await bamboo.apply(undo ? address.after : address.before, undo ? address.before : address.after);
+        } catch {
+          result.incomplete=true;
+          addSkip('Address','bamboo_address_restore_unconfirmed','browser_interaction','verify_field');
+          return;
+        }
+        from.pop(); to.push(entry);
+        result.filled = undo ? ['Country','State','ZIP'] : ['Country','Province','Postal Code'];
+        return;
+      }
       if (action === 'redo' && entry.some(change => change.aiConsentDecision === undefined
           ? /\b(?:ai|artificial intelligence|automated)\b/i.test(change.label)
           : change.aiConsentDecision !== null && change.aiConsentDecision !== aiConsentDecision)) {
@@ -301,6 +317,27 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const { choiceAliases, fact, canadaEligibility, answer, applicantName, profileLabel } = createLegacyAnswerReader({
       facts, norm
     });
+    const bamboo = scope === 'page' && adapters.createBambooAddress({fabricWidget, fabricState, fabricMenu, fabricClear, editable, write, checkDeadline, norm});
+    const profileCountry = currentProfileCountry === undefined ? fact('country') : currentProfileCountry;
+    const profileConflict = () => bamboo && bamboo.conflict(profileCountry);
+    const countryConflict = () => profileConflict() || bamboo && bamboo.conflict(fact('country'));
+    if (useProfileCountry) {
+      result.frameScope='document'; result.resume='unverified';
+      const before = bamboo && bamboo.read(), province = fact('region'), postal = fact('postal_code');
+      try {
+        if (action !== 'fill' || !profileConflict() || !bamboo.conflict(fact('country')) || !before || typeof province !== 'string' || !province.trim() || typeof postal !== 'string' || !postal.trim())
+          throw new Error('The current or saved address is unavailable.');
+        const after = await bamboo.apply(before,{country:{label:'Canada'},region:{label:province},postal});
+        changes.push({label:'Address', bambooAddress:{form:bamboo.form,url:bamboo.url,before,after}});
+        result.filled=['Country','Province','Postal Code'];
+      } catch {
+        result.incomplete=true;
+        const restored = !before || JSON.stringify(bamboo.read())===JSON.stringify(before);
+        addSkip('Address',restored?'bamboo_address_change_unconfirmed':'bamboo_address_restore_unconfirmed','browser_interaction','verify_field');
+        if (profileConflict()) result.profileCountryConflict=true;
+      }
+      return result;
+    }
     const dialComposite = e => {
       if(e.getAttribute('role')!=='combobox' || !/^\+\d{1,4}\s+[A-Z]{2}$/.test(e.value??''))return false;
       for(let owner=composedParent(e);owner && owner!==regionFor(e);owner=composedParent(owner)) {
@@ -425,7 +462,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     const screeningSelector = checkedForm?.screening ? 'fieldset[role=radiogroup],' : '';
     const privateControl = (e,label) => /(?:password|passcode|verification code|security code|one.time code|credit card|card number|social security|social insurance)/i.test(label) ||
       /(?:^|\s)(?:current-password|new-password|one-time-code|cc-\S+)(?:$|\s)/i.test(e.autocomplete ?? '');
-    const collectFields = () => deepQuery(applicationStep || document, screeningSelector+'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && scopedControl(e) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
+    const collectFields = () => deepQuery(applicationStep || document, screeningSelector+'input,textarea,select,button[aria-haspopup="listbox"],button[role="combobox"],'+menuToggleSelector).filter(e => editable(e) && scopedControl(e) && !(bamboo && bamboo.protectedControl(e) && countryConflict()) && !['g-recaptcha-response','h-captcha-response'].includes(e.name) &&
       !privateControl(e,labelFor(e)) &&
       (fabricWidget(e) || provinceMenu.context(e) || semanticChoiceButton(e) || !['hidden', 'password', 'file', 'submit', 'button', 'reset'].includes(e.type))).map(element => {
       const label = provinceMenu.context(element) ? 'Province' : dialComposite(element)?'Phone country code':labelFor(element);
@@ -497,6 +534,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       fileBinding(receipt.element) && regionFor(receipt.element)===receipt.region && receipt.element.files?.length===1 &&
       read(receipt.element)===receipt.file && receipt.element.validity.valid && receipt.element.getAttribute('aria-invalid')!=='true';
     const finalReport = () => {
+      if (countryConflict()) {
+        if (profileConflict()) result.profileCountryConflict = true;
+        addSkip('Country','saved_value_conflict');
+      }
       const receipt=state.resumeAttempt?.url===location.href ? state.resumeAttempt : null;
       if (result.resume === 'verified') {
         result.resumeEvidence=receipt?.attachmentEvidence?.() || (pickerHoldsAttempt(receipt) ? 'picker' :
@@ -745,6 +786,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       let e = currentElement(f);
       const skip = (reason, component, operation) => addSkip(f.label, reason, component, operation);
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}
+      if (bamboo && bamboo.protectedControl(e) && countryConflict()) continue;
       if(!editable(e)){skip('field_no_longer_editable', 'field_recognition', 'identify_field');continue;}
       if (!fabricWidget(e) && provinceMenu.context(e)) continue; // Process the unique province menu with its country below.
       const personal = profileOnly(f.region);
@@ -1144,7 +1186,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       const consent = matchingPlans?.find(plan => typeof plan.aiConsentDecision === 'boolean');
       for (const change of changes) change.aiConsentDecision = consent?.aiConsentDecision ?? null;
     }
-    if (action === 'fill' && changes.length) { if (matchingRunId && historyState.matchingRunId===matchingRunId && historyState.undo.length) historyState.undo.at(-1).push(...changes); else historyState.undo.push(changes); historyState.matchingRunId=matchingRunId; historyState.undo = historyState.undo.slice(-10); historyState.redo = []; }
+    if (action === 'fill' && changes.length) { if (!useProfileCountry && matchingRunId && historyState.matchingRunId===matchingRunId && historyState.undo.length) historyState.undo.at(-1).push(...changes); else historyState.undo.push(changes); historyState.matchingRunId=useProfileCountry?undefined:matchingRunId; historyState.undo = historyState.undo.slice(-10); historyState.redo = []; }
     const failed = result.skipped.find(row => row.componentFailure);
     if (failed) result.componentFailure = failed.componentFailure;
     state.busy = false; result.canUndo = historyState.undo.length > 0; result.canRedo = historyState.redo.length > 0;

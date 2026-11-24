@@ -62,6 +62,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
         result = {
           ...result,
           ...(observed.observation !== undefined && {observation: observed.observation}),
+          ...(typeof observed.profileCountryConflict === 'boolean' && {profileCountryConflict: observed.profileCountryConflict}),
           ...(observed.frames !== undefined && {frames: observed.frames}),
           ...(observed.componentFailure && {componentFailure: observed.componentFailure}),
           canUndo: observed.canUndo,

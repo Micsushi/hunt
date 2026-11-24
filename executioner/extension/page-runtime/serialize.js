@@ -3,7 +3,7 @@ import { uploadLabelKind, readUploadOwnerLabels, createInlineUploadLabelReader }
 import { createUploadReader } from './upload-reader.js';
 import { createLegacyAnswerReader } from './legacy-page-answers.js';
 import { createFabricControl } from '../page-adapters/fabric-control.js';
-import { createProvinceMenu } from '../page-adapters/bamboo-province.js';
+import { createBambooAddress, createProvinceMenu } from '../page-adapters/bamboo-province.js';
 import { createCompositeControlActions } from './composite-control-actions.js';
 import { readNavigationDiagnostics } from './navigation-diagnostics.js';
 import { createRequiredFieldReader } from './required-field.js';
@@ -33,7 +33,7 @@ import { runPageFill } from './fill.js';
 // Bind site-owned readers here, before serializing into the selected browser document.
 export function fillPageDocument(input) {
   return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices, createSmartRecruitersScreening,
-    createFabricControl, createProvinceMenu, isPortalResumeBinding, jobviteScreeningPanel, jobviteRetainedResume, watchJobviteScreening, createJobviteGroups, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
+    createFabricControl, createProvinceMenu, createBambooAddress, isPortalResumeBinding, jobviteScreeningPanel, jobviteRetainedResume, watchJobviteScreening, createJobviteGroups, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
     ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, wrappedUploadTitle:createLeverResumeTitleReader(), noticeMarkers:workdayNoticeMarkers});
 }
 
@@ -59,6 +59,7 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   createLegacyAnswerReader,
   createFabricControl,
   createProvinceMenu,
+  createBambooAddress,
   createCompositeControlActions,
   readNavigationDiagnostics,
   createRequiredFieldReader,

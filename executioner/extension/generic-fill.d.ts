@@ -4,6 +4,7 @@ export interface PartialFillResult {
   componentFailure?: ComponentFailure;
   status: 'partial';
   incomplete?: boolean;
+  profileCountryConflict?: boolean;
   matching?: PageQuestion[];
   filled: string[];
   skipped: { label: string; reason: string; componentFailure?: ComponentFailure; fieldId?: string; frameId?: string }[];
@@ -25,4 +26,6 @@ export function fillVisibleFields(input?: {
   expiresAt?: number;
   resume?: { name: string; base64: string };
   replaceExistingResume?: boolean;
+  useProfileCountry?: boolean;
+  currentProfileCountry?: string | null;
 }): Promise<PartialFillResult>;

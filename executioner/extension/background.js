@@ -69,7 +69,7 @@ function command(method, params, connection = socket) {
 }
 async function executeCommand(method, params, connection) {
   let tabId = params.tabId;
-  if (method === 'agentStatus') return {version:chrome.runtime.getManifest().version,browser:browserVersion(),extensionId:chrome.runtime.id,instanceId,reloadPending,capabilities:['pageAction-v1','pageAction-v2','selected-page-handoff-v1','question-matching-v1','consent-redo-v1','website-handoff-v1','generic-attach-v1','workday-account-v1','workday-create-account-v1','workday-account-fill-v1','workday-page-v1','self-reload-v1']};
+  if (method === 'agentStatus') return {version:chrome.runtime.getManifest().version,browser:browserVersion(),extensionId:chrome.runtime.id,instanceId,reloadPending,capabilities:['pageAction-v1','pageAction-v2','selected-page-handoff-v1','question-matching-v1','consent-redo-v1','profile-country-v1','website-handoff-v1','generic-attach-v1','workday-account-v1','workday-create-account-v1','workday-account-fill-v1','workday-page-v1','self-reload-v1']};
   if (reloadPending) throw new Error('Hunt is reloading. Wait for it to reconnect.');
   if (method === 'reloadExtension') {
     if (connection !== socket || connection.readyState !== WebSocket.OPEN || attached.size || accountSessions.size || pageActionTabs.size || attachmentChanges.size) throw new Error('Pause active C3 operations before reloading the extension.');

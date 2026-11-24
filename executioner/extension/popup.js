@@ -110,12 +110,16 @@ async function initializePopup() {
     $('resumes').hidden=!options.length;
   }
   renderSelection(null);
-  let canUndo=false,canRedo=false;
+  let canUndo=false,canRedo=false,profileCountryConflict=false;
+  const countryAction=$('use-profile-country');
+  const countryMismatch='Country is set to United States. Your profile uses Canada.';
   function controls(){
     $('fill').disabled=busy||!selection?.supportsQueue||!selection.queued||!!selection.queuedError||!serviceReady||!browserReady;
     $('partial').disabled=busy||!canPartial||!selection||!serviceReady||!browserReady;
     $('undo').disabled=busy||!canUndo;$('redo').disabled=busy||!canRedo;
     $('history').hidden=!canUndo&&!canRedo;
+    countryAction.hidden=!profileCountryConflict;
+    countryAction.disabled=busy||!profileCountryConflict||!serviceReady||!browserReady;
     $('resume-select').disabled=busy||$('resume-select').options.length<=1;
     $('connect-local').disabled=busy;$('batch').disabled=busy;
     if(compact){
@@ -193,7 +197,8 @@ async function initializePopup() {
       // Disabling or moving the clicked control can drop keyboard focus.
       // Restore it only if the user has not focused something else while waiting.
       if(document.activeElement===document.body&&(focused instanceof HTMLButtonElement||focused instanceof HTMLSelectElement)){
-        (focused.checkVisibility()&&!focused.disabled?focused:$('batch')).focus();
+        const fallback=focused===countryAction?(compact?$('compact-nav').querySelector('[data-panel=page]'):canUndo?$('undo'):$('partial')):$('batch');
+        (focused.checkVisibility()&&!focused.disabled?focused:fallback).focus();
       }
     }
   }
@@ -204,7 +209,7 @@ async function initializePopup() {
   function layoutMessage(reset=false){
     if(reset)messagePage=0;
     delete statusBox.dataset.paged;
-    if(statusBox.offsetHeight<=135){$('message-pages').hidden=true;return;}
+    if(statusBox.offsetHeight<=(compact&&profileCountryConflict?70:135)){$('message-pages').hidden=true;return;}
     const width=statusBox.clientWidth;
     statusBox.style.setProperty('--column-width',(width-20)+'px');
     statusBox.dataset.paged='';
@@ -240,7 +245,7 @@ async function initializePopup() {
   }
   async function pageReply(operation, expectedResumeSha256){
     const reply=await browserReply(chrome.runtime.sendMessage({action:'pageAction',operation,tabId:tab.id,expectedUrl:tab.url,documentId:pageDocumentId,
-      ...(currentPageJobId&&{currentPageJobId}),...(selectedResumeSha256&&{resumeSha256:selectedResumeSha256}),...(expectedResumeSha256&&{expectedResumeSha256}),expiresAt:Date.now()+12000}));
+      ...(currentPageJobId&&{currentPageJobId}),...(operation!=='use_profile_country'&&selectedResumeSha256&&{resumeSha256:selectedResumeSha256}),...(expectedResumeSha256&&{expectedResumeSha256}),expiresAt:Date.now()+12000}));
     if(!reply?.ok)throw new Error(reply?.error||'The page action was not confirmed. Inspect the draft before retrying.');
     pageDocumentId=reply.result.documentId;
     return reply.result;
@@ -273,20 +278,23 @@ async function initializePopup() {
     try{
       result=await pageReply(action,digest);
     }catch(error){
-      if(!/timed?\s*out|expir(?:ed|y)|not confirmed|did not respond/i.test(error.message))throw error;
+      const uncertain=/timed?\s*out|expir(?:ed|y)|not confirmed|did not respond/i.test(error.message);
+      if(!uncertain && action!=='use_profile_country')throw error;
       // A timed-out write can still have created undo history. Inspect it without repeating the write.
       try{
         const inspected=await inspectPage();
-        canUndo=inspected.canUndo;canRedo=inspected.canRedo;
-      }catch{/* Reopening the popup inspects the original tab again. */}
+        applyPageState(inspected);
+      }catch{profileCountryConflict=false;}
+      if(!uncertain)throw error;
       throw new Error(canUndo?'C3 could not confirm all changes. Check the page or use Undo fill.':'C3 could not confirm all changes. Check the page and reopen Hunt for Undo.');
     }
-    canUndo=result.canUndo;canRedo=result.canRedo;
+    applyPageState(result);
     if(result.accountPage){setStatus({summary:'Account fields filled.'});return;}
     const count=result.filled.length;
-    const summary=action==='fill'?`${count} ${count===1?'field changed':'fields changed'}.`:`${count} field changes ${action==='undo'?'undone':'restored'}.`;
-    const warnings=[], errors=[];
-    const conflictItems=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason));
+    const summary=['fill','use_profile_country'].includes(action)?`${count} ${count===1?'field changed':'fields changed'}.`:`${count} field changes ${action==='undo'?'undone':'restored'}.`;
+    const warnings=[], errors=profileCountryConflict?[countryMismatch]:[];
+    const conflictItems=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason)
+      && !(profileCountryConflict && item.reason==='saved_value_conflict' && /^country\b/i.test(item.label?.trim())));
     if(conflictItems.length){
       const names=[...new Set(conflictItems.map(item=>String(item.label||'').replace(/[\u2009*✱]/g,'').trim()).filter(Boolean))];
       errors.push(names.length
@@ -294,13 +302,17 @@ async function initializePopup() {
         : `${conflictItems.length} ${conflictItems.length===1?'field differs':'fields differ'} from saved answers or changed after filling.`);
     }
     collectAttachments(result, warnings, errors);
+    const addressReason=result.skipped?.find(item=>['bamboo_address_change_unconfirmed','bamboo_address_restore_unconfirmed'].includes(item.reason))?.reason;
+    if(addressReason)errors.push(addressReason==='bamboo_address_restore_unconfirmed'
+      ? 'C3 could not verify the restored address. Check Country, region and postal code on the form.'
+      : 'BambooHR did not confirm the address update. Check the address and your saved profile.');
     if(result.needsOwnerReview){
       const reviewNames=Array.isArray(result.reviewFields)?result.reviewFields.filter(Boolean):[];
       warnings.push(reviewNames.length
         ? `Review suggested or uncertain answers: ${reviewNames.join(', ')}.`
         : 'Suggested answers and uncertain matches need review.');
     }
-    if (result.componentFailure) {
+    if (result.componentFailure && !addressReason) {
       const {component, operation} = result.componentFailure;
       errors.push('Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').');
     }
@@ -308,24 +320,28 @@ async function initializePopup() {
     if(submissionDisabled)errors.push('The employer still has submission disabled.');
     if (result.frames?.some(frame => frame.status === 'unavailable')) {
       errors.push('A frame could not be reached. Check it before retrying.');
-    } else if (result.incomplete && !result.componentFailure && !submissionDisabled) {
+    } else if (result.incomplete && !result.componentFailure && !submissionDisabled && !addressReason) {
       errors.push('Check the incomplete fields before retrying.');
     }
     setStatus({summary, warnings, errors});
   }
   $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…');
+  countryAction.onclick=()=>run(()=>partial('use_profile_country'),countryAction,'Updating address…');
   $('undo').onclick=()=>run(()=>partial('undo'));
   $('redo').onclick=()=>run(()=>partial('redo'));
-  async function loadHistory(){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;canUndo=result.canUndo;canRedo=result.canRedo;
+  function applyPageState(result){
+    canUndo=result.canUndo;canRedo=result.canRedo;profileCountryConflict=result.profileCountryConflict===true;
+  }
+  async function loadHistory(){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;applyPageState(result);
     if(!busy&&!$('status').textContent){
-      const warnings=[], errors=[];
+      const warnings=[], errors=profileCountryConflict?[countryMismatch]:[];
       collectAttachments(result, warnings, errors);
       if(result.skipped?.some(item=>item.reason==='employer_submission_disabled'))errors.push('The employer still has submission disabled.');
       if(warnings.length||errors.length)setStatus({warnings, errors});
     }
     controls();}catch{}}
   async function refreshHistory(){
-    historyVersion++;canUndo=false;canRedo=false;controls();
+    historyVersion++;canUndo=false;canRedo=false;profileCountryConflict=false;controls();
     if(inspection)await inspection.catch(()=>{});
     pageDocumentId=undefined;
     await loadHistory();
