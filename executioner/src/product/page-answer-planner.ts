@@ -84,6 +84,7 @@ export function createPageAnswerPlanner(
     row: PageQuestion, observations: readonly PeerQuestion[], signal: AbortSignal,
   ): Promise<PageAnswerPlan> {
     const binding = {fieldId: row.fieldId, frameId: row.frameId, signature: row.signature};
+    if (!currentPage && !row.required) return {...binding, answer:null, provisional:false, reason:'optional_field'};
     const constraints = row.constraints as ApplicationFieldObservation['constraints'];
     const populated = row.selected === true || typeof row.selected === 'string' && !!row.selected.trim();
     const state = row.state ?? (populated ? 'populated' : 'empty');

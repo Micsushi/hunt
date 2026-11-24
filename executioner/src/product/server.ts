@@ -164,15 +164,24 @@ export async function startProductServer(options: { root?: string; port?: number
         let target;
         try { target = applicationTarget(url.href); } catch { /* The page can still use current-page fill. */ }
         const queuedJob = target && queue.jobs.find(job=>job.status!=='removed' && canonicalPostingKey(job.key)===target.key);
-        const queued = target ? queuedJob ? queue.resumeDocument(queuedJob) : currentPage : null;
+        let queued = target ? currentPage : null;
+        let queuedError;
+        if (queuedJob && body.workflow !== 'currentPage') {
+          try { queued = queue.resumeDocument(queuedJob); }
+          catch {
+            queued = null;
+            queuedError = 'Check the saved résumé in Applications before preparing this application.';
+          }
+        }
         if (body.workflow) {
+          if (body.workflow === 'queued' && queuedError) throw new Error(queuedError);
           const doc = body.workflow === 'queued' ? queued : currentPage;
           if (!doc || doc.metadata.sha256 !== body.sha256) throw new Error('The selected résumé changed. Reopen Hunt to check it.');
           response.setHeader('Content-Type','application/pdf');
           response.end(doc.pdf);return;
         }
         result = {supportsQueue:!!target,currentPage:currentPage?.metadata??null,
-          queued:queued ? {...queued.metadata,...(queuedJob && selectableQueueResume(queuedJob) && {jobId:queuedJob.id})} : null};
+          ...(queuedError && {queuedError}),queued:queued ? {...queued.metadata,...(queuedJob && selectableQueueResume(queuedJob) && {jobId:queuedJob.id})} : null};
       } else if (path === '/browser/page') {
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt','expectedResumeSha256','currentPageJobId'].includes(key)) ||
           !['inspect','fill','undo','redo'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string') throw new Error('Choose an HTTPS tab and a supported page action.');
@@ -224,7 +233,13 @@ export async function startProductServer(options: { root?: string; port?: number
           accountProfile !== undefined && effectiveProfileFacts(accountProfile).some(fact=>fact.factId==='terms_consent' && fact.value===true));
         const priorWorkdayPage = accountPage?.priorWorkdayPage;
         if (accountPage !== undefined && !priorWorkdayPage) {response.end(JSON.stringify(accountPage));return;}
-        const settings = selected ? queue.currentPageInput(selected) : queue.getSettings();
+        const currentInput = () => {
+          if (!selected) return queue.getSettings();
+          const pinned = queue.currentPageInput(selected);
+          // The known ATS chooser selects only the PDF; explicit imported handoffs retain their profile.
+          return body.currentPageJobId === undefined ? pinned : {profile:queue.getSettings()?.profile,resume:pinned.resume};
+        };
+        const settings = currentInput();
         const profile = settings?.profile as {profile?:{facts?:unknown[]}} | undefined;
         if (writesProfile && !Array.isArray(profile?.profile?.facts)) throw new Error('Save your profile before filling.');
         const resume = body.operation === 'fill' ? settings?.resume : undefined;
@@ -261,7 +276,7 @@ export async function startProductServer(options: { root?: string; port?: number
             return observed;
           }});
         else {
-          try { result = await bridge.call('pageAction',{...body,expiresAt,...(body.operation==='redo' && {aiConsentDecision:aiConsentAuthority((selected ? queue.currentPageInput(selected) : queue.getSettings())?.profile)?.fact?.value ?? null}),...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
+          try { result = await bridge.call('pageAction',{...body,expiresAt,...(body.operation==='redo' && {aiConsentDecision:aiConsentAuthority(currentInput()?.profile)?.fact?.value ?? null}),...(selected && {pageHandoff:selected.id}),...(priorWorkdayPage && {reportProtectedAttachment:true})}); }
           catch (error) {
             if (!priorWorkdayPage || !(error instanceof Error) || error.message !== 'debugger_protected_extension') throw error;
             response.writeHead(400).end(JSON.stringify({

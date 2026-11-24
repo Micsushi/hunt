@@ -76,7 +76,7 @@ async function initializePopup() {
     $('choice-row').hidden=!canChoose;
     $('choose-resume').checked=Boolean(chosen);
     $('prepare-action').hidden=!next?.supportsQueue;
-    $('support').textContent=error || (!canPartial?'Switch to a website, then reopen Hunt.':next?.supportsQueue?'Full application or current page':next?'Single-page fill':'');
+    $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':next?.supportsQueue?'Full application or current page':next?'Single-page fill':'');
     const separate=queued && selection.currentPage?.sha256!==queued.sha256;
     function renderRow(id,workflow,pdf,caption){
       const row=$(id);
@@ -98,7 +98,7 @@ async function initializePopup() {
   renderSelection(null);
   let canUndo=false,canRedo=false;
   function controls(){
-    $('fill').disabled=busy||!selection?.supportsQueue||!serviceReady||!browserReady;
+    $('fill').disabled=busy||!selection?.supportsQueue||!selection.queued||!!selection.queuedError||!serviceReady||!browserReady;
     $('partial').disabled=busy||!canPartial||!selection||!serviceReady||!browserReady;
     $('undo').disabled=busy||!canUndo;$('redo').disabled=busy||!canRedo;
     $('history').hidden=!canUndo&&!canRedo;

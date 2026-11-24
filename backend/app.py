@@ -5669,7 +5669,7 @@ def job_detail(
         <div class="actions" style="margin-top: 14px;">
           <button type="button" class="pill active" data-job-priority-set="1" data-job-id="{row["id"]}">Flag for queue</button>
           <button type="button" class="pill secondary" data-job-priority-set="0" data-job-id="{row["id"]}">Remove queue flag</button>
-          <a class="pill" href="/jobs/compare?a={row["id"]}" data-app-nav="true">Compare with another job</a>
+          <a class="pill" href="/legacy/jobs/compare?a={row["id"]}" data-app-nav="true">Compare with another job</a>
         </div>
       </div>
       <div class="panel">
@@ -5759,7 +5759,7 @@ def jobs_compare(
     body = f"""
     <section class="hero">
       <h1>Compare #{a} and #{b}</h1>
-      <p><a href="/jobs/{a}" data-app-nav="true">Open A</a> · <a href="/jobs/{b}" data-app-nav="true">Open B</a> · <a href="/jobs/compare" data-app-nav="true">New compare</a></p>
+      <p><a href="/jobs/{a}" data-app-nav="true">Open A</a> · <a href="/jobs/{b}" data-app-nav="true">Open B</a> · <a href="/legacy/jobs/compare" data-app-nav="true">New compare</a></p>
     </section>
     <div class="table-wrap">
       <table>

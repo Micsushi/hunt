@@ -145,20 +145,25 @@ test('explicit paused import keeps the exact portable contract and never schedul
     const headers={'Content-Type':'application/json',Authorization:`Bearer ${readFileSync(service.tokenPath,'utf8').trim()}`};
     const post=(path:string,body:unknown)=>fetch(`${service.origin}/${path}`,{method:'POST',headers,body:JSON.stringify(body)});
     const defaultPdf=Buffer.from('%PDF-current-page-default').toString('base64');
-    await post('settings',{applicant:{given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid'},resumeBase64:defaultPdf});
+    const applicant={given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',city:'Old City'};
+    await post('settings',{applicant,resumeBase64:defaultPdf});
     const result=await post('handoff/import-paused',bundle(job(1)));
     assert.equal(result.status,200);const added=await result.json() as {id:string;status:string}[];
     assert.equal(added[0]!.status,'paused');assert.equal(service.queue.jobs[0]!.status,'paused');
     assert.equal(JSON.parse(readFileSync(join(root,`${added[0]!.id}.input.json`),'utf8')).resume,job(1).resumeBase64);
     assert.equal((await post('handoff/import-paused',{...bundle(job(2)),accountPolicy:'create'})).status,400);
     assert.equal(service.queue.jobs.length,1);
+    assert.equal((await post('settings',{applicant:{...applicant,city:'Updated City'}})).status,200);
     const bridge=(service.queue as unknown as {bridge:ExtensionBridge}).bridge;
-    const uploads:string[]=[];
+    const uploads:string[]=[],cities:unknown[]=[];
     bridge.call=async(method,args={})=>{
       if(method==='agentStatus') return {capabilities:['pageAction-v2','question-matching-v1','consent-redo-v1','selected-page-handoff-v1']};
       if(method==='pageTabs') return [{tabId:1,url:job(1).url}];
       assert.equal(method,'pageAction');
-      if(args.operation==='fill') uploads.push((args.resume as {base64:string}).base64);
+      if(args.operation==='fill') {
+        uploads.push((args.resume as {base64:string}).base64);
+        cities.push((args.facts as {factId:string;value:unknown}[]).find(fact=>fact.factId==='city')?.value);
+      }
       return {tabId:args.tabId,url:args.expectedUrl,documentId:'fixture',matching:[],filled:[],skipped:[],canUndo:false,canRedo:false};
     };
     for(const operation of ['fill','redo']) {
@@ -180,8 +185,28 @@ test('explicit paused import keeps the exact portable contract and never schedul
     assert.equal((await post('browser/page',{...page,operation:'inspect'})).status,200);
     assert.equal((await post('browser/page',{...page,operation:'fill',documentId:'fixture'})).status,200);
     assert.deepEqual(uploads,[defaultPdf,job(1).resumeBase64,defaultPdf]);
+    assert.deepEqual(cities,['Updated City','Updated City','Updated City']);
     assert.equal(service.queue.jobs[0]!.status,'paused');
-    assert.equal(JSON.parse(readFileSync(join(root,`${added[0]!.id}.input.json`),'utf8')).resume,job(1).resumeBase64);
+    const inputPath=join(root,`${added[0]!.id}.input.json`);
+    const input=readFileSync(inputPath,'utf8');
+    assert.equal(JSON.parse(input).resume,job(1).resumeBase64);
+    assert.equal(effectiveProfileFacts(JSON.parse(input).profile).find(fact=>fact.factId==='city')?.value,'Old City');
+    for (const damaged of ['invalid JSON',JSON.stringify({...JSON.parse(input),resume:defaultPdf})]) {
+      writeFileSync(inputPath,damaged);
+      const selection=await (await post('browser/page-resume',page)).json();
+      assert.equal(selection.currentPage?.sha256,metadata.currentPage.sha256);
+      assert.equal(selection.queued,null);
+      assert.match(selection.queuedError,/Applications/);
+      const currentPdf=await post('browser/page-resume',{...page,workflow:'currentPage',sha256:metadata.currentPage.sha256});
+      assert.equal(currentPdf.status,200);
+      assert.equal(Buffer.from(await currentPdf.arrayBuffer()).toString('base64'),defaultPdf);
+      assert.equal((await post('browser/page-resume',{...page,workflow:'queued',sha256:job(1).resumeSha256})).status,400);
+      assert.equal((await post('browser/page-resume',{...chosen,workflow:'currentPage',sha256:job(1).resumeSha256})).status,400);
+      assert.equal((await post('jobs',{jobs:[{url:job(1).url,expectedResumeSha256:job(1).resumeSha256}]})).status,400);
+      assert.equal((await post('browser/page',{...page,operation:'fill',documentId:'fixture',expectedResumeSha256:metadata.currentPage.sha256})).status,200);
+      assert.equal(uploads.at(-1),defaultPdf);
+    }
+    writeFileSync(inputPath,input);
     const workday='https://fixture.wd5.myworkdayjobs.com/External/job/Developer_R1';
     service.queue.add([{url:workday,tabId:2}],{paused:true});
     service.queue.credentials={email:'fixture@example.invalid',password:'fixture-only'};
