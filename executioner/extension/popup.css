@@ -66,6 +66,30 @@ summary:hover { color: #fff; }
 .version { margin-top: 10px; }
 #browser-details:not(:empty)::before { content: "· "; }
 :focus-visible { outline: 2px solid #b4e7ce; outline-offset: 2px; }
+/* At high OS scaling Chrome can cap the entire action popup at 210 CSS pixels. */
+#compact-nav { display: flex; gap: 4px; margin-bottom: 5px; }
+#compact-nav button { flex: 1; min-height: 28px; font: 600 12px/16px "Segoe UI", system-ui, sans-serif; padding: 3px 4px; }
+#compact-nav [aria-pressed=true] { background: #8fd49d; color: #102317; }
+body[data-panel] { padding: 7px 10px; }
+body[data-panel] main { padding: 0; }
+body[data-panel]:not([data-panel=settings]) :is(header,.connection,details),
+body[data-panel]:not([data-panel=result]) :is(#status,#message-pages),
+body[data-panel=result] main, body[data-panel=settings] main,
+body[data-panel=resumes] :is(#actions,#history,#job,#support),
+body[data-panel=page] :is(#queued-resume,#choice-row) { display: none; }
+body[data-panel] #support { margin: 0 0 2px; }
+body[data-panel] #resumes { margin: 0 0 3px; }
+body[data-panel=settings] { display: grid; grid-template-columns: 1fr auto; align-items: center; }
+body[data-panel=settings] :is(#compact-nav, details) { grid-column: 1 / -1; }
+body[data-panel=settings] header { grid-row: 2; grid-column: 2; }
+body[data-panel=settings] .connection { grid-row: 2; grid-column: 1; padding: 0; }
+body[data-panel=settings] :is(h1,summary) { display: none; }
+body[data-panel=settings] .settings-content { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 6px; padding: 4px 0 0; }
+body[data-panel=settings] .pairing { grid-column: 1 / -1; grid-row: 2; margin: 0; }
+body[data-panel=settings] .settings-content label { grid-column: 1 / -1; grid-row: 1; margin: 0; }
+body[data-panel=settings] #pairing-actions,body[data-panel=settings] .version { margin: 0; }
+body[data-panel=settings] .version { grid-column: 1 / -1; }
+body[data-panel=settings] :is(button,input) { min-height: 26px; padding: 3px 6px; }
 .pdf-preview { width: 100vw; height: 100vh; margin: 0; padding: 0; }
 .pdf-preview iframe { width: 100%; height: 100%; border: 0; display: block; }
 .pdf-preview p { padding: 24px; font-size: 15px; }

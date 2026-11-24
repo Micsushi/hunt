@@ -1,7 +1,20 @@
 import { supportsCurrentPage } from './current-page-url.js';
 
 const $=id=>document.getElementById(id),origin='http://127.0.0.1:47831';
-if(!chrome.extension.getViews({type:'popup'}).includes(window))document.documentElement.classList.add('tab-view');
+const toolbar=chrome.extension.getViews({type:'popup'}).includes(window);
+if(!toolbar)document.documentElement.classList.add('tab-view');
+const compact=toolbar && screen.availHeight<590;
+function showPanel(panel){
+  if(!compact)return;
+  document.body.dataset.panel=panel;
+  $('settings').open=panel==='settings';
+  for(const button of $('compact-nav').children)button.setAttribute('aria-pressed',String(button.dataset.panel===panel));
+  layoutMessage();
+}
+if(compact){
+  $('compact-nav').hidden=false;
+  $('compact-nav').onclick=event=>{if(event.target.dataset.panel)showPanel(event.target.dataset.panel);};
+}
 const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
 const saved=await chrome.storage.local.get('token');
 const choiceKey='pageResume:'+tab?.id;
@@ -53,6 +66,10 @@ function controls(){
   $('choose-resume').disabled=busy;
   $('connect').disabled=busy;$('connect-local').disabled=busy;$('batch').disabled=busy;
   $('website').disabled=busy||!serviceReady||!browserReady;
+  if(compact){
+    $('compact-nav').querySelector('[data-panel=resumes]').disabled=$('resumes').hidden;
+    $('compact-nav').querySelector('[data-panel=result]').disabled=!$('status').textContent;
+  }
 }
 async function checkConnection(){
   serviceReady=false;browserReady=false;
@@ -71,7 +88,16 @@ async function checkConnection(){
         const metadata=await fetch(origin+'/browser/page-resume',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
           body:JSON.stringify({tabId:tab.id,expectedUrl:tab.url}),signal:AbortSignal.timeout(4000),redirect:'error'});
         if(!metadata.ok)throw new Error((await metadata.json()).error||'Open the workspace to check the selected résumé.');
-        renderSelection(await metadata.json());
+        const next=await metadata.json();
+        const formerChoice=currentPageJobId;
+        renderSelection(next);
+        if(preference?.url===tab.url && !currentPageJobId){
+          preference=null;
+          await chrome.storage.session.remove(choiceKey);
+          $('status').dataset.error='true';
+          $('status').textContent='The selected résumé changed. Check the current page résumé before filling.';
+          if(formerChoice)await refreshHistory();
+        }
       }catch(error){renderSelection(null,error.message||'Could not check the selected résumé.');}
     }
   }catch{$('connection').textContent='Start the local C3 app to connect';}
@@ -117,7 +143,15 @@ function layoutMessage(reset=false){
   $('next-message').disabled=messagePage===count-1;
   $('message-pages').hidden=count<2;
 }
-new MutationObserver(()=>layoutMessage(true)).observe(statusBox,{childList:true,characterData:true,subtree:true});
+new MutationObserver(()=>{
+  if(compact){
+    const hasResult=Boolean(statusBox.textContent);
+    $('compact-nav').querySelector('[data-panel=result]').disabled=!hasResult;
+    if(hasResult)showPanel('result');
+    else if(document.body.dataset.panel==='result')showPanel('page');
+  }
+  layoutMessage(true);
+}).observe(statusBox,{childList:true,characterData:true,subtree:true});
 window.addEventListener('resize',()=>layoutMessage());
 $('previous-message').onclick=()=>{messagePage--;layoutMessage();};
 $('next-message').onclick=()=>{messagePage++;layoutMessage();};
@@ -215,6 +249,12 @@ $('redo').onclick=()=>run(()=>partial('redo'));
 async function loadHistory(){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;canUndo=result.canUndo;canRedo=result.canRedo;
   if(!busy&&!$('status').textContent){showAttachments(result);showSubmissionWarning(result);}
   controls();}catch{}}
+async function refreshHistory(){
+  historyVersion++;canUndo=false;canRedo=false;controls();
+  if(inspection)await inspection.catch(()=>{});
+  pageDocumentId=undefined;
+  await loadHistory();
+}
 $('choose-resume').onchange=()=>run(async()=>{
   const queued=alternatives?.queued;
   const next=$('choose-resume').checked && queued?.jobId?{jobId:queued.jobId,sha256:queued.sha256,url:tab.url}:null;
@@ -222,10 +262,7 @@ $('choose-resume').onchange=()=>run(async()=>{
   else await chrome.storage.session.remove(choiceKey);
   preference=next;
   renderSelection(alternatives);
-  historyVersion++;canUndo=false;canRedo=false;
-  if(inspection)await inspection.catch(()=>{});
-  pageDocumentId=undefined;
-  await loadHistory();
+  await refreshHistory();
 });
 async function connectWithToken(token){
   if(!token)throw new Error('Enter a pairing key, or use Connect to local app.');
@@ -269,6 +306,7 @@ $('fill').onclick=()=>run(async()=>{const digest=selection?.queued?.sha256;const
   let response,result;try{response=await fetch(origin+'/jobs',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify(request),signal:AbortSignal.timeout(15000)});result=await response.json();}catch{throw new Error('No confirmation received. Check Applications for this job.');}if(!response.ok)throw new Error(typeof result?.error==='string'&&result.error?result.error:'C3 could not confirm this job. Check Applications before retrying.');const job=result?.[0];if(!job||typeof job.status!=='string')throw new Error('No confirmation received. Check Applications for this job.');$('status').textContent=['queued','running'].includes(job.status)?'Queued. C3 will stop at Review.':`${job.stage||job.status}. Open Applications to continue.`;});
 
 controls();await checkConnection();
+showPanel(browserReady && serviceReady?'page':'settings');
 if(canPartial && selection)void loadHistory();
 if(!saved.token)void run(connectLocal);
 setInterval(()=>{if(!busy)void checkConnection();},5000);
