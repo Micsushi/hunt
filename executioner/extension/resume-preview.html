@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Résumé · Hunt C3</title>
+  <title>Saved resumes · Hunt C3</title>
   <link rel="stylesheet" href="popup.css">
-  <script src="popup.js" type="module"></script>
+  <script src="resume-preview.js" type="module"></script>
 </head>
 <body class="pdf-preview">
-  <p id="preview-status" role="status">Opening résumé…</p>
-  <iframe id="pdf" title="Selected résumé PDF" hidden></iframe>
+  <details id="library" hidden><summary>Browse saved resumes</summary><ul id="files"></ul></details>
+  <p id="preview-status" role="status">Loading saved resumes…</p>
+  <iframe id="pdf" title="Resume PDF" hidden></iframe>
 </body>
 </html>

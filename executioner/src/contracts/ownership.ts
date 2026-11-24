@@ -565,6 +565,7 @@ export const productBoundary = {
       "extension/background.js",
       "extension/page-actions.js",
       "extension/popup.js",
+      "extension/resume-preview.js",
       "extension/website-handoff.js",
       "src/product/application-contract.ts",
       "src/product/application-wait.ts",

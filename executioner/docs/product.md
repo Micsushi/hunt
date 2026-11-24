@@ -87,6 +87,10 @@ answers and leaves passwords, unrelated uploads and consent decisions to you.
 The **Resume** dropdown shows the PDF selected for **Fill current page**. It starts
 with your default PDF or an explicit current-page C2 import for this posting.
 Choose another saved PDF to use it on this page with your current profile.
+Choose **Open PDF** to read the exact selected file in a new tab. In that
+tab, **Browse saved resumes** lets you open other PDFs without changing the
+selection for Fill current page. The local full menu also has this list under
+**Profile → Resume**.
 **Prepare this job** keeps using the job's saved PDF.
 
 On BambooHR, if the form shows United States and your saved country is Canada,

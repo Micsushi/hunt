@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 const proxied = location.pathname.startsWith('/api/c3/');
 const base = proxied ? '/api/c3/' : '/';
+$('browse-resumes').hidden = proxied;
 if (proxied) { $('pair').hidden = true; $('handoff-entry').hidden = true; $('pairing-settings').hidden = true; }
 const previousToken=sessionStorage.getItem('c3-token') ?? '';
 let urlToken = new URLSearchParams(location.hash.slice(1)).get('token');

@@ -63,12 +63,47 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const chooser=await openPopup();
     const resumeSelect=chooser.locator('#resume-select');
     await resumeSelect.waitFor();
-    assert.equal(await chooser.locator('#resumes a').count(),0,'popup resume selector has no link');
+    await context.addInitScript(() => {
+      const createObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = value => {
+        const url = createObjectURL(value);
+        if (value instanceof Blob && value.type === 'application/pdf') {
+          (window as any).pdfForTest = {url, blob:value};
+        }
+        return url;
+      };
+    });
+    async function previewBytes(view:typeof chooser) {
+      const pdf=view.locator('#pdf[src^="blob:"]');
+      await pdf.waitFor();
+      return pdf.evaluate(async(frame:HTMLIFrameElement)=>{
+        const shown=(window as any).pdfForTest;
+        return frame.src===shown.url ? btoa(await shown.blob.text()) : null;
+      });
+    }
+    const openPdf=chooser.getByRole('link',{name:'Open PDF'});
+    const [viewer]=await Promise.all([context.waitForEvent('page'),openPdf.click()]);
+    assert.equal(await previewBytes(viewer),resume);
+    await viewer.locator('summary').click();
+    await viewer.getByRole('link',{name:/Selected\.pdf/}).click();
+    assert.equal(await previewBytes(viewer),selected);
+    await viewer.close();
     assert.equal(await resumeSelect.inputValue(),choice.currentPage.sha256);
     assert.match(await resumeSelect.locator('option:checked').innerText(),/Default resume/);
     await resumeSelect.selectOption(choice.queued.sha256);
     assert.equal(await resumeSelect.inputValue(),choice.queued.sha256);
     assert.match(await resumeSelect.locator('option:checked').innerText(),/Selected\.pdf/);
+    const [picked]=await Promise.all([context.waitForEvent('page'),openPdf.click()]);
+    assert.equal(await previewBytes(picked),selected);
+    await picked.close();
+    const workspace=await context.newPage();
+    await workspace.goto(service.origin+'/#token='+token);
+    await workspace.locator('.section-nav a[href="#preferences"]').click();
+    const [library]=await Promise.all([context.waitForEvent('page'),workspace.getByRole('link',{name:'Browse saved resumes'}).click()]);
+    await library.getByRole('link',{name:/Selected\.pdf/}).click();
+    assert.equal(await previewBytes(library),selected);
+    await library.close();
+    await workspace.close();
     await resumeSelect.selectOption(choice.currentPage.sha256);
     assert.equal(await resumeSelect.inputValue(),choice.currentPage.sha256);
     await chooser.locator('#resume-select:not(:disabled)').waitFor();

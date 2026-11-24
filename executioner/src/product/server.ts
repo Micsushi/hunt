@@ -104,6 +104,11 @@ export async function startProductServer(options: { root?: string; port?: number
       response.writeHead(204).end(); return;
     }
     const path = new URL(request.url ?? "/", origin).pathname;
+    if (request.method === 'GET' && ['/resume-preview.html','/resume-preview.js','/popup.css'].includes(path)) {
+      response.setHeader('Content-Type', path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8');
+      response.setHeader('Content-Security-Policy', "default-src 'self'; frame-src blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+      response.end(readFileSync(join(uiRoot,'../extension',path.slice(1))));return;
+    }
     const asset = ({ "/": "index.html", "/app.js": "app.js", "/style.css": "style.css" } as Record<string, string>)[path];
     if (asset && request.method === "GET") {
       response.setHeader("Content-Type", asset.endsWith("html") ? "text/html; charset=utf-8" : asset.endsWith("js") ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
@@ -113,6 +118,15 @@ export async function startProductServer(options: { root?: string; port?: number
     if (!authenticate(request.headers.authorization)) { response.writeHead(401).end(JSON.stringify({ error: "Connect with your C3 pairing key." })); return; }
     response.setHeader("Content-Type", "application/json");
     try {
+      if (request.method === 'GET' && path === '/resumes') {
+        response.end(JSON.stringify(queue.availableResumes()));return;
+      }
+      if (request.method === 'GET' && /^\/resumes\/[a-f0-9]{64}$/.test(path)) {
+        const doc = queue.resumeBySha256(path.slice('/resumes/'.length));
+        if (!doc) { response.writeHead(404).end();return; }
+        response.setHeader('Content-Type','application/pdf');
+        response.end(doc.pdf);return;
+      }
       if (request.method==='GET' && path==='/matching/dictionary') {response.end(JSON.stringify({questions:matchingDictionary(),answers:answerDictionary()}));return;}
       if (request.method==='GET' && path==='/matching/backlog') {
         const params=new URL(request.url!,origin).searchParams;

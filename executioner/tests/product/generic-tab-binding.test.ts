@@ -158,6 +158,9 @@ test('unfamiliar applications stay on the current page and old selected inputs r
       {...currentPage,id:hash,jobId:selected.id},
     ]});
     const preview=await post('/browser/page-resume',{...selection,workflow:'currentPage',sha256:hash});
+    const catalogUrl=app.origin+'/resumes';
+    assert.equal((await fetchLocal(catalogUrl)).status,401);
+    assert.equal((await fetchLocal(catalogUrl+'/'+hash)).status,401);
     assert.equal(preview.headers.get('content-type'),'application/pdf');
     assert.deepEqual(Buffer.from(await preview.arrayBuffer()),resume);
     assert.equal((await post('/browser/page-resume',{...selection,workflow:'currentPage',sha256:'0'.repeat(64)})).status,400);

@@ -33,7 +33,9 @@ p:empty { display: none; }
 main { padding: 8px 0 0; display: flex; flex-direction: column; gap: 7px; }
 #support { margin-top: -3px; font-size: 11.5px; line-height: 15px; color: #b5c9ba; }
 .resume-field { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; }
-.resume-field span { flex: none; color: #bdcfc1; font-weight: 500; }
+.resume-field label { flex: none; color: #bdcfc1; font-weight: 500; }
+.resume-field a, .pdf-preview a { color: #b4e7ce; }
+.resume-field a { white-space: nowrap; padding: 5px 0; }
 .resume-field select { flex: 1; min-width: 0; min-height: 30px; padding: 4px 8px; background: #14221a; color: #e4f2e7; border-color: #486451; font-size: 12px; cursor: pointer; text-overflow: ellipsis; }
 .resume-field select:hover:not(:disabled) { background: #19291f; border-color: #73927b; }
 .resume-field select:disabled { opacity: .65; cursor: default; }
@@ -64,8 +66,11 @@ body[data-panel=result] main { display: none; }
 body[data-panel=result]:has(#use-profile-country:not([hidden])):has(#status[data-paged]) header { display: none; }
 body[data-panel=result] #use-profile-country { margin-top: 2px; }
 body[data-panel=result] #use-profile-country:not([hidden]) + #message-pages { margin-top: 1px; }
-.pdf-preview { width: 100vw; height: 100vh; margin: 0; padding: 0; }
-.pdf-preview iframe { width: 100%; height: 100%; border: 0; display: block; }
+.pdf-preview { height: 100vh; padding: 0; display: flex; flex-direction: column; }
+.pdf-preview details { padding: 10px 16px; max-height: 40vh; overflow: auto; }
+.pdf-preview summary { cursor: pointer; }
+.pdf-preview li { padding: 3px 0; }
+.pdf-preview iframe { width: 100%; flex: 1; border: 0; }
 .pdf-preview p { padding: 24px; font-size: 15px; }
 @media (forced-colors: active) {
   button, select { border: 1px solid ButtonText; }
