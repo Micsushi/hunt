@@ -120,11 +120,16 @@ export class ApplicationQueue {
   private fill: typeof fillApplication;
   private submit: typeof submitReviewedApplication;
   constructor(root: string, bridge: BrowserConnection,
-    fill = fillApplication, submit = submitReviewedApplication) {
+    fill = fillApplication, submit = submitReviewedApplication, pausedQueueHash?: string) {
     this.root = root; this.bridge = bridge; this.fill = fill; this.submit = submit;
     mkdirSync(root, { recursive: true, mode: 0o700 });
-    if (existsSync(join(root, "jobs.json"))) {
-      const saved = JSON.parse(readFileSync(join(root, "jobs.json"), "utf8"));
+    const queueFile = join(root, 'jobs.json');
+    if (pausedQueueHash !== undefined || existsSync(queueFile)) {
+      const bytes = readFileSync(queueFile);
+      if (pausedQueueHash !== undefined && createHash('sha256').update(bytes).digest('hex') !== pausedQueueHash) {
+        throw new Error('The saved queue changed before the maintenance restart.');
+      }
+      const saved = JSON.parse(bytes.toString('utf8'));
       if (!Array.isArray(saved.jobs) || !Number.isInteger(saved.concurrency) || saved.concurrency < 1 || saved.concurrency > 30 ||
           saved.jobs.some((job: ProductJob) => !job || (job.resumeExpected !== undefined && typeof job.resumeExpected !== "boolean") || !/^[a-f0-9-]{36}$/.test(job.id) || !["queued", "running", "paused", "review", "submitting", "submitted", "submission_uncertain", "removed"].includes(job.status)) ||
           new Set(saved.jobs.map((job: ProductJob) => job.id)).size !== saved.jobs.length) throw new Error("Saved C3 queue is invalid. Preserve its data before restoring a backup.");
@@ -144,7 +149,8 @@ export class ApplicationQueue {
       // Isolate every conflicting owner before normalizing any saved tabs or submission state.
       for (const job of this.jobs) {
         job.key=canonicalPostingKey(job.key);
-        delete job.tabId;
+        // A same-browser maintenance restart can retain paused references. Browser actions still verify their posting.
+        if (!pausedQueueHash || !['paused','removed'].includes(job.status) || !Number.isSafeInteger(job.tabId) || (job.tabId ?? 0) < 1) delete job.tabId;
         if (job.status === "submitting") { job.status = "submission_uncertain"; job.stage = "Check the employer site before doing anything else"; }
         else if (["running", "queued", "review"].includes(job.status)) { job.status = "paused"; job.stage = "Service restarted. Retry to inspect the saved application"; }
       }

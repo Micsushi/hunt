@@ -78,6 +78,8 @@ export function createControlInteraction({ state, checkDeadline, boundChoice, ed
     node.click();
   };
   const selectChoice = async (change,label) => {
+    const canKeep = choice => choice && choice.labels.length===1 && choice.labels[0]===label &&
+      (choice.clear || choice.retainsSelectionOnUndo || choice.pills.length===1 && choice.pills[0].remove);
     let current=boundChoice(change);
     if(!current || current.labels.length)throw new Error('An existing selection was preserved.');
     if(current.popupStatus!=='ready' || !current.options.some(option=>option.label===label)) {
@@ -95,13 +97,13 @@ export function createControlInteraction({ state, checkDeadline, boundChoice, ed
         await choicePause();
         current=boundChoice(change);
         // A widget can render its committed label before validation and the clear control settle.
-        if (current?.labels.length || !change.choiceWidget.input.isConnected || !change.region.isConnected) break;
+        if (canKeep(current) || !change.choiceWidget.input.isConnected || !change.region.isConnected) break;
       } while(Date.now()-started<1800);
     }
-    if(!current || current.labels.length!==1 || current.labels[0]!==label || !current.clear && (current.pills.length!==1 || !current.pills[0].remove))throw new Error('The selection or its reset was not confirmed.');
+    if(!canKeep(current))throw new Error('The selection or its reset was not confirmed.');
     closeChoice(change);await choicePause();
     current=boundChoice(change);
-    if(!current || current.labels.length!==1 || current.labels[0]!==label || !current.clear && !current.pills[0]?.remove || current.input.validity?.valid===false || current.input.getAttribute('aria-invalid')==='true')throw new Error('The selected item changed or was rejected.');
+    if(!canKeep(current) || current.input.validity?.valid===false || current.input.getAttribute('aria-invalid')==='true')throw new Error('The selected item changed or was rejected.');
     return choiceState(current);
   };
   const restoreChoice = async (change,value) => {

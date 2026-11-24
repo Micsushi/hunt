@@ -46,7 +46,7 @@ test('protected inspection reports the previously observed Workday page without 
       assert.equal(response.status,400);
       const body = await response.json() as {error:string;partialObservation?:unknown};
       if (conflict || !protection) {
-        assert.deepEqual(body,{error:'C3 could not access the selected tab. Inspect the draft before retrying.'});
+        assert.deepEqual(body,{error:protection?'Chrome blocked C3 from inspecting this tab because it contains protected extension content. Review the fields on the form.':'C3 could not access the selected tab. Inspect the draft before retrying.'});
       } else {
         assert.deepEqual(body.partialObservation,{kind,incomplete:true,reason:'debugger_protected_extension'});
         assert.match(body.error,/Chrome blocked detailed inspection/);

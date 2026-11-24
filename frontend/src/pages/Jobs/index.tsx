@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
 import { useSummary } from '@/hooks/useSummary'
 import { useUiStore } from '@/store/ui'
@@ -81,11 +81,11 @@ function mockDownloadHref(format: 'csv' | 'json'): string {
   return `data:${type};charset=utf-8,${encodeURIComponent(content)}`
 }
 
-// Columns and their sort keys (Attempts removed)
+// Display order matches the table cells.
 const COL_TIPS: Record<string, string> = {
-  ID: 'Database row ID',
-  Company: 'Employer name',
   Title: 'Job title',
+  Company: 'Employer name',
+  ID: 'Database row ID',
   Links: 'View listing or apply page',
   Enrichment: 'Current enrichment status',
   'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn - we skip those.',
@@ -289,6 +289,7 @@ export function JobsPage() {
         key={job.id}
         data-job-id={job.id}
         className={`${styles.jobRow} ${idx === focusIdx ? styles.focused : ''}`}
+        data-selected={checked || undefined}
         onClick={() => navigate(`/jobs/${job.id}${detailSearch}`)}
       >
         <td onClick={(e) => e.stopPropagation()}>
@@ -300,24 +301,16 @@ export function JobsPage() {
             aria-label={`Select job ${job.id}`}
           />
         </td>
-        <td className={styles.idCell}>
-          <a
-            href={`/jobs/${job.id}${detailSearch}`}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(`/jobs/${job.id}${detailSearch}`)
-            }}
-          >
-            #{job.id}
-          </a>
+        <td className={styles.titleCell} title={job.title ?? undefined}>
+          <Link to={`/jobs/${job.id}${detailSearch}`} onClick={(event) => event.stopPropagation()}>
+            {job.title || `Job #${job.id}`}
+          </Link>
         </td>
         <td className={styles.companyCell} title={job.company ?? undefined}>
           {job.company ?? '-'}
         </td>
-        <td className={styles.titleCell} title={job.title ?? undefined}>
-          {job.title ?? '-'}
-        </td>
-        <td onClick={(e) => e.stopPropagation()}>
+        <td className={styles.idCell}>#{job.id}</td>
+        <td className={styles.linksCell} onClick={(e) => e.stopPropagation()}>
           {job.job_url && (
             <a
               href={job.job_url}
@@ -328,9 +321,6 @@ export function JobsPage() {
             >
               Listing ↗
             </a>
-          )}
-          {job.job_url && job.apply_url && (
-            <span style={{ color: 'var(--line)', margin: '0 4px' }}>|</span>
           )}
           {job.apply_url && (
             <a
@@ -344,15 +334,11 @@ export function JobsPage() {
             </a>
           )}
         </td>
-        <td>
+        <td className={styles.statusCell}>
           <StatusBadge status={job.enrichment_status} size="sm" />
         </td>
         <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '-'}</td>
-        <td
-          className="mono"
-          style={{ fontSize: '0.8rem', color: 'var(--muted)' }}
-          title={job.date_scraped ?? undefined}
-        >
+        <td className={styles.addedCell} title={job.date_scraped ?? undefined}>
           {timeAgo(job.date_scraped)}
         </td>
       </tr>
@@ -454,7 +440,7 @@ export function JobsPage() {
         <table className={styles.table}>
           <thead>
             <tr>
-              <th style={{ width: '2rem', textAlign: 'center' }}>
+              <th scope="col" className={styles.selectHead}>
                 <input
                   type="checkbox"
                   checked={allChecked}
@@ -464,8 +450,30 @@ export function JobsPage() {
                   }}
                   onChange={() => (allChecked ? clearSelection() : selectAll(allIds))}
                   aria-label="Select all rows on this page"
+                  id="jobs-select-page"
                   title="Select or deselect all rows on this page"
                 />
+                <label htmlFor="jobs-select-page" className={styles.selectPageLabel}>
+                  Select page
+                </label>
+              </th>
+              <th className={styles.mobileHead} colSpan={7}>
+                <select
+                  aria-label="Sort this page"
+                  value={localSort ? `${localSort.field}:${localSort.dir}` : ''}
+                  onChange={(event) => {
+                    const [field, dir] = event.target.value.split(':')
+                    setLocalSort(field ? { field, dir: dir === 'desc' ? 'desc' : 'asc' } : null)
+                  }}
+                >
+                  <option value="">Sort this page</option>
+                  {Object.entries(COL_SORT_KEYS).map(([label, field]) => (
+                    <optgroup key={field} label={label}>
+                      <option value={`${field}:asc`}>{label} ↑</option>
+                      <option value={`${field}:desc`}>{label} ↓</option>
+                    </optgroup>
+                  ))}
+                </select>
               </th>
               {Object.keys(COL_TIPS).map((label) => (
                 <Th

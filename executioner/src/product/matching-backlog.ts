@@ -120,7 +120,7 @@ const requirementCodes=new Set(['required_empty','required_invalid','required_un
 const skipReasons = new Set(['password_field_preserved','account_fields_preserved','optional_field','existing_value_preserved',
   'needs_owner_answer','saved_value_conflict','address_country_conflict','postal_code_requires_review','optional_consent_skipped',
   'required_attachment_missing','required_resume_missing','resume_control_not_identified','existing_attachment_preserved',
-  'employer_submission_disabled','button_choice_interaction_unsupported','choice_not_unique','field_changed_before_fill']);
+  'employer_submission_disabled','button_choice_interaction_unsupported','choice_not_unique','field_changed_before_fill','radio_reset_unavailable','country_reset_unavailable']);
 const uncertainReasons = new Set(['page_action_not_confirmed','value_not_accepted','value_changed_after_fill','previous_control_write_unconfirmed',
   'required_attachment_unconfirmed','screening_choice_not_confirmed','choice_commit_or_reset_unconfirmed','resume_attachment_not_verified']);
 function fieldLabel(value:unknown) {

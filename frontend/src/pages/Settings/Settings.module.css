@@ -3,7 +3,8 @@
   flex-direction: column;
   gap: 16px;
 }
-.page > section:not([hidden]) {
+.sectionStack:not([hidden]) {
+  min-width: 0;
   display: grid;
   gap: 16px;
 }
@@ -21,7 +22,7 @@ details.panel > .panel {
 }
 .heroTitle {
   font-size: 1.5rem;
-  margin-bottom: 6px;
+  margin: 0;
 }
 .heroMeta {
   color: var(--muted);
@@ -64,46 +65,46 @@ details.panel > .panel {
   padding: 10px 14px;
   font-size: 0.86rem;
   color: var(--muted);
-  margin-bottom: 4px;
+  margin-bottom: 0;
+}
+
+.panel > .notice {
+  margin-bottom: 14px;
 }
 
 .tabBar {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-self: flex-start;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
 }
 
 .tabButton {
-  align-items: flex-start;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  padding: 6px 14px;
+  min-height: 36px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  color: var(--ink);
   cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 40px;
-  padding: 11px 12px;
-  text-align: left;
-  transition:
-    background var(--ease),
-    border-color var(--ease),
-    transform var(--ease);
+  font-size: 0.9rem;
+  font-weight: 650;
 }
 
 .tabButton:hover {
   background: var(--panel-strong);
-}
-
-.tabButton span {
-  font-size: 0.9rem;
-  font-weight: 750;
+  color: var(--ink);
 }
 
 .tabButtonActive {
   background: var(--accent-soft);
-  border-color: var(--accent);
+  color: var(--accent);
+  border-color: var(--line);
 }
 
 .gridTwo {
@@ -115,15 +116,16 @@ details.panel > .panel {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  font-size: 0.78rem;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.875rem;
   font-weight: 650;
-  color: var(--muted);
+  color: var(--ink);
   margin-bottom: 12px;
 }
 
 .fieldHint {
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   color: var(--muted);
   font-weight: 400;
   margin-top: 2px;
@@ -132,7 +134,8 @@ details.panel > .panel {
 .input {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--panel);
+  background: var(--panel-strong);
+  min-width: 0;
   color: var(--ink);
   padding: 8px 10px;
   font-size: 0.9rem;
@@ -146,7 +149,8 @@ details.panel > .panel {
 .textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--panel);
+  background: var(--panel-strong);
+  min-width: 0;
   color: var(--ink);
   padding: 8px 10px;
   font-size: 0.82rem;
@@ -174,13 +178,14 @@ details.panel > .panel {
 
 .lanesGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: 12px;
   margin-bottom: 12px;
 }
 
 .footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-top: 4px;
@@ -190,8 +195,7 @@ details.panel > .panel {
   border: 1px solid var(--line);
   background: var(--panel-strong);
   border-radius: var(--radius-sm);
-  padding: 9px 16px;
-  font-size: 0.9rem;
+
   font-weight: 600;
   color: var(--ink);
   cursor: pointer;
@@ -229,7 +233,7 @@ details.panel > .panel {
 }
 
 .errorMsg {
-  color: #e53e3e;
+  color: var(--danger);
   font-size: 0.82rem;
 }
 

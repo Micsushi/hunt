@@ -1,7 +1,7 @@
 .shell {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 20px 24px 60px;
+  padding: 16px 24px 60px;
 }
 
 .header {
@@ -9,11 +9,13 @@
   justify-content: space-between;
   align-items: center;
   gap: 14px;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
   position: sticky;
   top: 10px;
   z-index: 10;
-  background: var(--bg);
+  background: var(--nav-surface);
   border-radius: var(--radius-md);
 }
 
@@ -24,15 +26,14 @@
   gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 10px 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--panel-strong);
-  box-shadow: var(--shadow);
+  padding-left: 14px;
+  border-left: 1px solid var(--line-strong);
 }
 
 .navGroup {
   display: flex;
+  flex: 1;
+  justify-content: space-evenly;
   flex-wrap: wrap;
   gap: 2px;
   align-items: center;
@@ -51,13 +52,13 @@
   flex: 0 0 auto;
   font-weight: 800;
   font-size: 1rem;
-  color: var(--accent);
+  color: var(--ink);
   text-decoration: none;
   user-select: none;
 }
 
 .brand:hover {
-  color: var(--accent);
+  color: var(--ink);
   text-decoration: none;
 }
 
@@ -101,8 +102,12 @@
 }
 
 .navLink.active {
-  background: var(--accent-soft);
-  color: var(--good);
+  background: var(--good);
+  color: var(--ink-inverse);
+}
+
+.active .dot {
+  outline: 1px solid var(--ink-inverse);
 }
 
 .username {
@@ -111,6 +116,7 @@
 }
 
 .logoutBtn {
+  white-space: nowrap;
   border: 1px solid var(--line);
   background: transparent;
   border-radius: var(--radius-sm);
@@ -132,7 +138,23 @@
 }
 
 .main {
-  /* page handles its own layout */
+  min-width: 0;
+  scroll-margin-top: 80px;
+}
+.skipLink {
+  position: absolute;
+  left: 1rem;
+  top: 0;
+  z-index: 11;
+  transform: translateY(-130%);
+}
+.skipLink:focus {
+  transform: none;
+  padding: 0.6rem 1rem;
+  background: var(--panel);
+}
+.menuButton {
+  display: none;
 }
 
 /* Status dots */
@@ -157,50 +179,62 @@
   background: var(--line-strong);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 860px) {
+  .shell {
+    padding: 12px 16px 40px;
+  }
   .header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
+    gap: 0 12px;
+    padding: 4px 10px 4px 14px;
+    margin-bottom: 20px;
     position: static;
   }
-
+  .brand {
+    justify-self: start;
+    min-height: 44px;
+  }
+  .menuButton {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 8px;
+    color: var(--ink);
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-weight: 600;
+  }
   .nav {
-    display: contents;
-  }
-
-  .navGroup {
+    display: none;
     grid-column: 1 / -1;
-    grid-row: 2;
-    width: 100%;
-    flex-wrap: wrap;
-    border-bottom: 1px solid var(--line);
-    padding-bottom: 8px;
+    padding: 8px 0 4px;
+    border: 0;
+    border-top: 1px solid var(--line-strong);
   }
-
-  .navLink {
-    min-height: 44px;
-    padding: 6px 8px;
+  .nav[data-open='true'] {
+    display: grid;
   }
-
-  .navSecondary {
-    grid-column: 2;
-    grid-row: 1;
-    min-width: 0;
-    max-width: 210px;
-    justify-content: flex-end;
+  .navGroup {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
   }
-
-  .username {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
+  .navLink,
   .logoutBtn {
-    flex-shrink: 0;
     min-height: 44px;
+  }
+  .navSecondary {
+    justify-content: space-between;
+    padding-top: 8px;
+    border-top: 1px solid var(--line-strong);
+  }
+  .username {
+    overflow-wrap: anywhere;
+  }
+  .main {
+    scroll-margin-top: 12px;
   }
 }

@@ -1,5 +1,5 @@
-export function createRequiredFieldReader({ uploadHeading, markedRequired,
-  verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
+export function createRequiredFieldReader({ uploadHeading, markedRequired, readRequiredControl,
+  verifiedDialogUpload, fabricWidget, radioSelected, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
 }) {
   const requiredLabel=label=>label.matches('.Mui-required') || label.querySelector('abbr[title="required" i],[aria-label="required" i]');
   const isRequired = e => {
@@ -113,7 +113,10 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
     const targets=new Map(), issues=[];
     const controls=deepQuery(root,'input,select,textarea,button[aria-haspopup=listbox],[role=combobox],[role=listbox],[role=radiogroup],[role=checkbox],[role=switch],[role=textbox],[contenteditable=true]');
     const shown=e=>visible(e) && !composedClosest(e,'[hidden],[aria-hidden=true],[inert]') && e.checkVisibility({opacityProperty:true,visibilityProperty:true});
-    const placeholder=text=>/^(?:(?:please\s+)?(?:select|choose)(?:\s+(?:(?:a|an|your|one)\s+)?(?:country|state|province|state\/province|region|option|answer|item|one))?|[-–—]+|select\.\.\.)$/i.test(text.trim());
+    const placeholder=text=>{
+      const prompt=text.trim().replace(/^[-–—]+|[-–—]+$/g,'').trim();
+      return !prompt || /^(?:make a selection|(?:please\s+)?(?:select|choose)(?:\s+(?:(?:a|an|your|one)\s+)?(?:country|state|province|state\/province|region|option|answer|item|one))?|select\.\.\.)$/i.test(prompt);
+    };
     const issueFor=e=>{
       if (!e.isConnected || !inScope(e) || e.matches(':disabled') || e.readOnly || composedClosest(e,'[inert],[aria-disabled=true]') ||
           ['hidden','submit','reset','button','image'].includes(e.type) && !e.matches('[role=checkbox],[role=switch],[role=combobox],[aria-haspopup=listbox]')) return;
@@ -124,13 +127,16 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
       if(e.type==='password') label=/re[- ]?enter|confirm|repeat/i.test(label)?'Password (Re-enter)':'Password';
       const role=e.getAttribute('role');
       let reason;
-      if(attachment) reason=attachment.reason==='required_attachment_missing'?'required_empty':'required_unconfirmed';
+      const componentState=readRequiredControl(e,shown);
+      if(componentState==='complete')return;
+      if(componentState)reason=componentState;
+      else if(attachment) reason=attachment.reason==='required_attachment_missing'?'required_empty':'required_unconfirmed';
       else if(e.type==='file' && (otherAttachment(label) || externalAttachment(e))) return;
       else if(e.type==='radio'){
         const group=composedClosest(e,'[role=radiogroup],fieldset');
         if(group?.matches('[role=radiogroup][aria-required=true]'))return;
         const radios=e.name?controls.filter(other=>other.type==='radio' && other.name===e.name && other.form===e.form && other.getRootNode()===e.getRootNode()):[e];
-        if(radios.some(other=>other.checked) || radios.find(other=>shown(other) && !other.matches(':disabled') && isRequired(other))!==e)return;
+        if(radios.some(radioSelected) || radios.find(other=>shown(other) && !other.matches(':disabled') && isRequired(other))!==e)return;
         label=group?.querySelector('legend')?.textContent || group?.getAttribute('aria-label') || label;
         reason='required_empty';
       } else if(e.validity?.valueMissing) reason='required_empty';
@@ -143,7 +149,10 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired,
         if(!e.required)reason=e.matches(':placeholder-shown')?'required_empty':'required_unconfirmed';
       }
       else if(e.type==='checkbox' || role==='checkbox' || role==='switch'){if(!(e.checked || e.getAttribute('aria-checked')==='true'))reason='required_empty';}
-      else if(role==='radiogroup'){if(!e.querySelector('input[type=radio]:checked,[role=radio][aria-checked=true]'))reason='required_empty';}
+      else if(role==='radiogroup'){
+        label=e.getAttribute('aria-label') || e.querySelector('legend')?.textContent?.trim() || label;
+        if(![...e.querySelectorAll('input[type=radio]')].some(radioSelected) && !e.querySelector('[role=radio][aria-checked=true]'))reason='required_empty';
+      }
       else if(role==='listbox' || role==='combobox' || e.matches('[aria-haspopup=listbox]')){
         if(!selectedChoice(e,label) && !e.querySelector('[role=option][aria-selected=true]'))reason='required_unconfirmed';
       } else if(!String(e.value??e.textContent??'').trim())reason='required_empty';

@@ -66,15 +66,18 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     }
   }
   const regionFor = e => checkedForm?.screening ? checkedForm.region(e) ?? e.getRootNode() : verifiedDialogUpload(e)?.region || e.form || composedClosest(e, 'form,[role=form]') || customForm?.region(e) || e.getRootNode();
-  const { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
+  const { fabricWidget, fabricState, fabricRadioState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel } = createFabricControl({
     regionFor, norm, state, deepQuery, visible, editable, checkDeadline
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
   const screeningFields = adapters.createSmartRecruitersScreening(checkedForm,deepQuery,composedClosest,visible);
   const { semanticChoiceButton, rawLabelFor, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, wrappedUploadTitle:adapters.wrappedUploadTitle, composedClosest, deepQuery, fabricWidget, norm });
-  const labelFor = element => screeningFields.label(element) || baseLabelFor(element);
   const cityChoices = adapters.smartRecruitersCityChoices(createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
-  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
+  const locationChoices = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
+  const choices = currentPage ? adapters.greenhouseChoices(locationChoices, state, regionFor, visible) : locationChoices;
+  const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = choices;
+  const samePhoneCountry = (actual,country,dial) => !!country && norm(actual?.country)===norm(country) && (!dial || actual?.dial===dial);
+  const labelFor = element => choices.fieldLabel?.(element) || screeningFields.label(element) || baseLabelFor(element);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
   const pendingChoice = widget => {
     if(!widget?.widget)return null;
@@ -111,7 +114,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   const changeEditable = (e,change) => change.jobviteChoice ? e===change.element && screeningGroups.historyValue(change)!==null : change.screeningChoice ? editable(e) && screeningFields.historyValue(e,change.screeningChoice)!==null : change.choiceWidget ? editable(e) && boundChoice(change)?.input===e : change.fabric ? editable(e) && e===change.fabric.input && sameFabric(change.fabric) && fabricState(change.fabric)!==null : change.phoneCountry
     ? editable(e) && e===change.phoneCountry.input && regionFor(e)===change.region && phoneState(change.phoneCountry)!==null
     : provinceMenu.savedContext(change) ? editable(e) && provinceMenu.same(e,provinceMenu.savedContext(change))
-      : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region : editable(e);
+      : e.type === 'file' ? !!fileBinding(e) && !externalAttachment(e) && regionFor(e) === change.region :
+        editable(e) && (!change.pairedPhone || samePhoneCountry(choices.pairedPhone(e),change.pairedPhone.country,change.pairedPhone.dial));
   const identity = e => JSON.stringify([e.tagName,e.type,e.id,e.name,norm(labelFor(e))]);
   const controlIdentity = e => {
     const region=regionFor(e);
@@ -162,9 +166,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     if (screening !== undefined && (action === 'undo' || action === 'redo') && !step) return null;
     return step && (!insideStep(element,step) || state.resumeAttempt?.acknowledgedPanel?.() !== step) ? null : element;
   };
+  const radioSelected = e => e.checked && fabricRadioState(e)!==false;
   const read = e => isMenuToggle(e) ? e.getAttribute('aria-label') ?? '' :
     e.type === 'select-multiple' ? selection(e) :
-    e.type === 'file' ? e.files?.[0] ?? null : e.type === 'radio' || e.type === 'checkbox' ? e.checked : e.value;
+    e.type === 'file' ? e.files?.[0] ?? null : e.type === 'radio' ? radioSelected(e) : e.type === 'checkbox' ? e.checked : e.value;
   const pendingControlChange = e => {
     const pending=state.unconfirmedControls?.find(change=>regionFor(e)===change.region && currentElement(change)===e);
     if(pending && read(e)===pending.before) {
@@ -197,6 +202,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     }
     if (checkedStep && (!insideStep(element,checkedStep) || state.resumeAttempt?.acknowledgedPanel?.() !== checkedStep)) {
       throw new Error('The control moved outside the checked application step.');
+    }
+    if (element.type==='radio' && fabricRadioState(element)!==undefined) {
+      if (value===true && !radioSelected(element)) element.click();
+      return;
     }
     if (!checkedForm?.writePhone(element,value,nativeWrite)) nativeWrite(element,value);
   };
@@ -257,7 +266,18 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           : change.aiConsentDecision !== null && change.aiConsentDecision !== aiConsentDecision)) {
         throw new Error('AI screening consent needs a fresh check. Use Fill current page.');
       }
-      const changes=action==='undo'?[...entry].reverse():entry;
+      const ordered=action==='undo'?[...entry].reverse():entry;
+      // Required Fabric radios expose no action that clears a committed choice.
+      // Preserve them and undo the other fields in the same fill.
+      const changes=ordered.filter(c=>{
+        if (action==='undo' && c.choiceWidget?.retainsSelectionOnUndo) {
+          result.skipped.push({label:c.label,reason:'country_reset_unavailable'});
+          return false;
+        }
+        if(action!=='undo' || c.before!==false || c.after!==true || fabricRadioState(currentElement(c)??c.element)===undefined)return true;
+        result.skipped.push({label:c.label,reason:'radio_reset_unavailable'});
+        return false;
+      });
       const chronological=items=>action==='undo'?[...items].reverse():items;
       const previous = action === 'undo' ? 'after' : 'before', next = action === 'undo' ? 'before' : 'after';
       const current=changes.map(currentElement);
@@ -311,7 +331,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         throw error;
       }
       syncUploadHistory(changes,next);
-      from.pop(); to.push(chronological(changes)); result.filled = changes.map(c => c.label);
+      from.pop(); if(changes.length)to.push(chronological(changes)); result.filled = changes.map(c => c.label);
     }
     if (!historyAction && action !== 'fill' && action !== 'status') throw new Error('Unknown field action.');
     const { choiceAliases, fact, canadaEligibility, answer, applicantName, profileLabel } = createLegacyAnswerReader({
@@ -537,8 +557,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     }
     const knownProfileControl = e => e.matches('textarea,select:not([multiple]),input:not([type]),input:is([type=text],[type=email],[type=tel],[type=url],[type=date],[type=number])') &&
       !['listbox','combobox'].includes(e.getAttribute('role'));
-    const { isRequired, unresolvedAttachment, requiredIssues } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired,
-      verifiedDialogUpload, fabricWidget, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
+    const { isRequired, unresolvedAttachment, requiredIssues } = createRequiredFieldReader({ uploadHeading:adapters.uploadHeading, markedRequired:adapters.markedRequired, readRequiredControl:adapters.readRequiredControl,
+      verifiedDialogUpload, fabricWidget, radioSelected, composedClosest, composedParent, deepQuery, rawLabelFor, fileBinding, state, regionFor, resumeLabel, otherAttachment
     });
     const pickerHoldsAttempt = receipt => !!receipt && receipt.url===location.href && !receipt.externalized &&
       fileBinding(receipt.element) && regionFor(receipt.element)===receipt.region && receipt.element.files?.length===1 &&
@@ -598,8 +618,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return result;
     };
     const { observe:baseObserve } = createFieldObserver({
-      deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
-      sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
+      deepQuery, visible, norm, fabricWidget, fabricState, radioSelected, state, choiceDraft:widget=>historyState.choiceDrafts?.get(widget),
+      sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, pairedPhone:choices.pairedPhone, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
     const observe = (element,label) => {
       const row = screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
@@ -609,6 +629,11 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         signature:JSON.stringify([row.signature,loginEmail?'registration-email':'profile'])};
     };
     if (historyAction) return finalReport();
+    if(action==='status')state.matchingReviewTargets=new Map();
+    if(matchingRunId && action==='fill' && state.reviewRunId!==matchingRunId){
+      state.reviewRunId=matchingRunId;
+      state.reviewByField=new Map();
+    }
     const observations = () => {
       const rows=new Map();
       for (const f of collectFields()) {
@@ -635,6 +660,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         // A displayed dial prefix is only evidence after reading the committed
         // country. Keep this inspection separate from permission to write it.
         if (profileOnly(field.region) && (!allowProfileForms || !dialComposite(field.element))) continue;
+        if (currentPage && !profileOnly(field.region)) await sharedChoice(field.element)?.inspectOptions?.(choicePause);
         if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !screeningFields.read(field.element) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
           try {const proof=await inspectCommittedChoice(field.element);if(proof)state.committedChoices.set(field.element,proof);else state.committedChoices.delete(field.element);}
           catch {state.committedChoices.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}
@@ -649,6 +675,14 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       return finalReport();
     }
     const reportMatch = (row, plan, outcome, reason, observedAnswer) => {
+      if(plan && row.canReveal){
+        state.reviewByField??=new Map();
+        const kind=reason==='existing_value_preserved' && outcome==='unconfirmed' ? 'conflict' :
+          plan.provisional && outcome==='verified' && reason==='product_readback_confirmed' ? 'suggestion' : null;
+        if(kind)state.reviewByField.set(row.fieldId,{kind,question:row.question,selected:observedAnswer??row.selected});
+        else if(!(plan.provisional && reason==='existing_value_confirmed' && row.previousReview==='suggestion'))
+          state.reviewByField.delete(row.fieldId);
+      }
       if (!plan && outcome==='observed') result.matching.push({...row,outcome});
       else result.matching.push({...row,chosenAnswer:plan?.answer??null,provisional:plan?.provisional??true,outcome,reason,observedAnswer});
     };
@@ -791,7 +825,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         skip(plan.reason, 'answer_matching', 'match_field');
         reportMatch(row, plan, 'unconfirmed', plan.reason, row.selected);
       } else if (!same) {
-        skip('saved_value_conflict');
+        skip('saved_value_conflict',undefined,undefined,row.canReveal ? row.fieldId : undefined);
         reportMatch(row, plan, 'unconfirmed', 'existing_value_preserved', row.selected);
       } else if (!row.valid) {
         skip('value_not_accepted');
@@ -800,6 +834,12 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         skip('saved_value_already_present');
         reportMatch(row, plan, 'verified', 'existing_value_confirmed', row.selected);
       }
+    };
+    const reviewId = element => {
+      if(!element?.isConnected)return;
+      const group=element.type==='radio' && composedClosest(element,'fieldset,[role=radiogroup]');
+      const id=state.matchingIds?.get(group || element);
+      if(state.matchingReviewTargets?.get(id)?.())return id;
     };
     const dateValue = (element,label,value) => {
       if (element.type!=='text' || norm(element.placeholder)!=='mm/dd/yyyy') return value;
@@ -815,7 +855,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
     for (const f of fields) {
       if (checkedStep || checkedForm) checkDeadline();
       let e = currentElement(f);
-      const skip = (reason, component, operation) => addSkip(f.label, reason, component, operation);
+      const skip = (reason, component, operation, fieldId) => addSkip(f.label, reason, component, operation,
+        fieldId ?? (reason==='saved_value_conflict' ? reviewId(e) : undefined));
       if(!e){skip('field_replaced_without_stable_identity', 'field_recognition', 'identify_field');continue;}
       if (bamboo && bamboo.protectedControl(e) && countryConflict()) continue;
       if(!editable(e)){skip('field_no_longer_editable', 'field_recognition', 'identify_field');continue;}
@@ -828,7 +869,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         continue;
       }
       if(!isRequired(e) && !screeningFields.read(e)?.required){
-        const row = currentPage && knownProfileControl(e) && observe(e,f.label);
+        const row = currentPage && (knownProfileControl(e) || sharedChoice(e)?.inspectOptions) && observe(e,f.label);
         if(!row || !matchingPlans?.some(plan=>plan.fieldId===row.fieldId && plan.signature===row.signature && plan.reason==='saved_profile_field')){
           skip('optional_field');continue;
         }
@@ -885,7 +926,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         const querying=typeof plan.query==='string' && plan.query.length>0 && plan.answer==null;
         if(!querying && (typeof plan.answer!=='string' || !row.options.includes(plan.answer))) {skip(plan.reason, 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;}
         const reusable=ownedDraft && (changes.includes(draft.change) || historyState.undo.at(-1)?.includes(draft.change));
-        const change=reusable?draft.change:{element:e,region:f.region,label:row.question,choiceWidget:searchChoice,before:choiceState(searchChoice),after:choiceState(searchChoice),searchQuery:querying?plan.query:searchChoice.query||plan.answer};
+        const change=reusable?draft.change:{element:e,region:f.region,label:row.question,choiceWidget:searchChoice,before:choiceState(searchChoice),after:choiceState(searchChoice),searchQuery:querying?plan.query:searchChoice.query||ownedDraft && draft.change.searchQuery||plan.answer};
         const beforeWrite=choiceState(searchChoice);touchedChoices.add(change);
         try {
           if(querying) {
@@ -955,7 +996,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         }
         continue;
       }
-      if (matchingPlans !== undefined && !e.matches('input.iti__tel-input[data-intl-tel-input-id]')) {
+      const pairedPhone=choices.pairedPhone?.(e);
+      if (matchingPlans !== undefined && (pairedPhone || !e.matches('input.iti__tel-input[data-intl-tel-input-id]'))) {
         if(e.getAttribute('role')==='combobox' && e.value) {
           state.committedChoices??=new WeakMap();
           try {const proof=await inspectCommittedChoice(e);if(proof)state.committedChoices.set(e,proof);else state.committedChoices.delete(e);}
@@ -969,6 +1011,10 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         }
         const signature=row.signature;
         if (!plan || plan.signature!==signature) {if(plan)addSkip(row.question, 'field_changed_before_fill', 'field_recognition', 'rebind_field', row.fieldId);reportMatch(row,plan,'observed','field_changed_or_new');continue;}
+        if (pairedPhone && !samePhoneCountry(pairedPhone,plan.phoneCountry,plan.phoneDial)) {
+          addSkip(row.question,'phone_country_requires_review',undefined,undefined,row.fieldId);
+          reportMatch(row,plan,'unconfirmed','phone_country_requires_review',row.selected);continue;
+        }
         if (plan.answer===null || plan.answer===undefined) {skip(plan.reason, 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed',plan.reason,row.selected);continue;}
         let value=dateValue(e,row.question,plan.answer);
         if (value===undefined) {skip('saved_date_format_unsupported', 'answer_matching', 'match_field');reportMatch(row,plan,'unconfirmed','saved_date_format_unsupported',row.selected);continue;}
@@ -980,6 +1026,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (row.control==='radio') {
           const group=composedClosest(e,'fieldset,[role=radiogroup]');
           const radios=deepQuery(group,'input[type=radio]').filter(editable);
+          if(radios.some(option=>!option.checked && fabricRadioState(option)===true)){skip('value_not_accepted','browser_interaction','verify_field');reportMatch(row,plan,'unconfirmed','value_not_accepted');continue;}
           const matches=radios.filter(radio=>labelFor(radio)===value);
           if (matches.length!==1 || !radios.every(radio=>radio.name===e.name)) {skip('choice_not_unique', 'field_recognition', 'identify_option');reportMatch(row,plan,'unconfirmed','choice_not_unique');continue;}
           e=matches[0];value=true;
@@ -999,7 +1046,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
         if (e.type!=='checkbox' && row.control!=='radio') value=String(value);
         if (read(e)===value && row.valid) {reportMatch(row,plan,'verified','existing_value_confirmed',row.selected);continue;}
         checkDeadline();
-        const change={element:e,identity:identity(e),controlIdentity:controlIdentity(e),boundLabels:[...e.labels??[]],region:f.region,before:read(e),label:row.question};
+        const change={element:e,identity:identity(e),controlIdentity:controlIdentity(e),boundLabels:[...e.labels??[]],region:f.region,before:read(e),label:row.question,...(pairedPhone && {pairedPhone})};
         write(e,value);const immediate=currentElement(change),written=read(immediate??e);await new Promise(resolve=>setTimeout(resolve,100));
         e=currentElement(change);
         // The employer may publish phone validity after it formats the number and handles blur.
@@ -1021,7 +1068,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           }
         }
         const formattedPhone = e?.type === 'tel' && row.control === 'text' && sameText(e,row.question,value);
-        if (!e || !editable(e) || !(unchanged(e,value) || formattedPhone) || !e.validity.valid || e.getAttribute('aria-invalid')==='true') {
+        if (!e || !editable(e) || !(unchanged(e,value) || formattedPhone) || !e.validity.valid || e.getAttribute('aria-invalid')==='true' ||
+            pairedPhone && !samePhoneCountry(choices.pairedPhone(e),plan.phoneCountry,plan.phoneDial)) {
           if(e && editable(e) && unchanged(e,e.type==='select-multiple' ? value : written)) {
             write(e,change.before);await new Promise(resolve=>setTimeout(resolve,100));e=currentElement(change);
           }
@@ -1099,14 +1147,14 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
           continue;
         }
         const radio = matches[0];
-        if (radios.some(option => option.checked)) {
-          result.skipped.push({label:groupLabel,reason:radio.checked?existingMatchReason(radio):'saved_value_conflict'});
+        if (radios.some(option => radioSelected(option) || fabricRadioState(option)===true)) {
+          result.skipped.push({label:groupLabel,reason:radioSelected(radio)?existingMatchReason(radio):'saved_value_conflict'});
           continue;
         }
         checkDeadline();
         write(radio, true);
         await new Promise(resolve => setTimeout(resolve, 100));
-        if (radio.isConnected && radio.checked && radio.validity.valid) {
+        if (radio.isConnected && radioSelected(radio) && radio.validity.valid) {
           changes.push({element:radio,identity:identity(radio),before:false,after:true,label:groupLabel});
           result.filled.push(groupLabel);
         } else {
@@ -1188,7 +1236,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       for(const history of [changes,...historyState.undo]) {const index=history.indexOf(change);if(index>=0)history.splice(index,1);}
       historyState.undo=historyState.undo.filter(entry=>entry.length);
       result.filled=result.filled.filter(label=>label!==change.label);
-      addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field');
+      addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field',reviewId(change.element));
       for(const row of result.matching.filter(row=>row.question===change.label && row.outcome==='verified')) {row.outcome='verification_failed';row.reason='value_changed_after_fill';row.provisional=true;}
     }
     // An upload can trigger the site's parser after individual writes have settled.
@@ -1207,7 +1255,7 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       if (change.element.type === 'file') result.resume = 'unverified';
       const filledIndex = result.filled.lastIndexOf(change.label);
       if (filledIndex >= 0) result.filled.splice(filledIndex, 1);
-      addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field');
+      addSkip(change.label, 'value_changed_after_fill', change.uploadReceipt?'uploads':'browser_interaction', change.uploadReceipt?'verify_attachment':'verify_field',reviewId(change.element));
       for (const row of result.matching.filter(row=>row.question===change.label && row.outcome==='verified')) {row.outcome='verification_failed';row.reason='value_changed_after_fill';row.provisional=true;}
     }
     return finalReport();

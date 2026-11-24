@@ -3,7 +3,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 12px;
+  padding-block: 4px;
 }
 
 .info {
@@ -22,6 +22,7 @@
   border: 1px solid var(--line);
   background: var(--panel);
   border-radius: var(--radius-sm);
+  min-height: 36px;
   padding: 6px 11px;
   font-size: 0.85rem;
   font-weight: 600;
@@ -45,7 +46,7 @@
 .pill.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-ink);
 }
 
 .ellipsis {

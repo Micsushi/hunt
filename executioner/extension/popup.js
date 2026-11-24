@@ -1,3 +1,5 @@
+import { summarizeFill, saveFillReview, showPageReview, reconcileFieldReview } from './fill-review-result.js';
+import { resolvePageResume } from './current-page-resume.js';
 import { supportsCurrentPage } from './website-handoff.js';
 
 async function initializePopup() {
@@ -8,6 +10,11 @@ async function initializePopup() {
   if(compact)document.body.dataset.compact='';
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
   const canPartial=supportsCurrentPage(tab?.url,origin);
+  if(toolbar && canPartial){
+    const port=chrome.runtime.connect({name:'current-page-toolbar'});
+    port.postMessage({tabId:tab.id,url:tab.url});
+    window.addEventListener('pagehide',()=>port.disconnect(),{once:true});
+  }
   if(canPartial){
     const heading=$('site-name'), platform=$('site-ats');
     heading.textContent=new URL(tab.url).hostname;
@@ -21,7 +28,7 @@ async function initializePopup() {
   const saved=await chrome.storage.local.get('token');
   const choiceKey='pageResume:'+tab?.id;
   let preference=(await chrome.storage.session.get(choiceKey))[choiceKey];
-  let busy=false, serviceReady=false, browserReady=false;
+  let busy=false, workerFilling=false, serviceReady=false, browserReady=false;
   $('actions').hidden=!canPartial;
   const pageHash=canPartial ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(tab.url))),byte=>byte.toString(16).padStart(2,'0')).join('').slice(0,24) : '';
   const reviewKey='fillReview:'+tab?.id;
@@ -177,15 +184,10 @@ async function initializePopup() {
     alternatives=next;
     const trash=next?.trashedResumes || [];
     const options=resumeOptions(next);
-    const queued=next?.queued;
-    const prefMatch=preference?.url===tab?.url
-      ? [...options,...trash].find(item=>item.sha256===preference.sha256 && (!preference.jobId || item.jobId===preference.jobId || item.sha256===queued?.sha256))
-      : null;
-    const implicitArchived=!next?.currentPageBound && trash.some(item=>item.sha256===next?.currentPage?.sha256);
-    const activeResume=prefMatch || (!implicitArchived && next?.currentPage) || null;
-    const matchesQueued=Boolean(prefMatch && queued?.source==='selected' && queued.jobId && activeResume?.sha256===queued.sha256 && queued.sha256!==next?.currentPage?.sha256);
-    currentPageJobId=matchesQueued?queued.jobId:undefined;
-    selectedResumeSha256=prefMatch && !matchesQueued && activeResume?.sha256!==next?.currentPage?.sha256 ? activeResume.sha256 : undefined;
+    const resolved=resolvePageResume(next,preference,tab?.url);
+    const {activeResume}=resolved;
+    currentPageJobId=resolved.currentPageJobId;
+    selectedResumeSha256=resolved.selectedResumeSha256;
     selection=next?{...next,currentPage:activeResume}:null;
     $('prepare-action').hidden=!next?.supportsQueue;
     $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':'');
@@ -203,16 +205,16 @@ async function initializePopup() {
   renderSelection(null);
   let canUndo=false,canRedo=false,profileCountryConflict=false;
   const countryAction=$('use-profile-country');
-  const countryMismatch='Country is set to United States. Your profile uses Canada.';
   function controls(){
-    $('fill').disabled=busy||!selection?.supportsQueue||!selection.queued||!!selection.queuedError||!serviceReady||!browserReady;
-    $('partial').disabled=busy||!canPartial||!selection?.currentPage||!serviceReady||!browserReady;
-    $('undo').disabled=busy||!canUndo;$('redo').disabled=busy||!canRedo;
+    const locked=busy || workerFilling;
+    $('fill').disabled=locked||!selection?.supportsQueue||!selection.queued||!!selection.queuedError||!serviceReady||!browserReady;
+    $('partial').disabled=locked||!canPartial||!selection?.currentPage||!serviceReady||!browserReady;
+    $('undo').disabled=locked||!canUndo;$('redo').disabled=locked||!canRedo;
     $('history').hidden=!canUndo&&!canRedo;
-    countryAction.disabled=busy||!profileCountryConflict||!serviceReady||!browserReady;
-    resumeButton.disabled=busy||!selection;
-    if(busy)togglePicker(false);
-    $('connect-local').disabled=busy;$('batch').disabled=busy;
+    countryAction.disabled=locked||!profileCountryConflict||!serviceReady||!browserReady;
+    resumeButton.disabled=locked||!selection;
+    if(locked)togglePicker(false);
+    $('connect-local').disabled=locked;$('batch').disabled=locked;
     $('more-actions').hidden=!selection?.supportsQueue && !canUndo && !canRedo;
     if($('more-actions').hidden)setMore(false);
   }
@@ -238,7 +240,7 @@ async function initializePopup() {
       const position='Issue '+(issueIndex+1)+' of '+issues.length;
       $('issue-position').textContent=issue.target?.section ? position+' · '+issue.target.section : position;
       $('issue-label').textContent=issue.label;
-      $('issue-message').textContent=issue.target ? issue.message+' Reopen Hunt after editing to recheck.' : issue.message;
+      $('issue-message').textContent=issue.message;
       $('show-field').hidden=!issue.target;
       countryAction.hidden=!issue.country || !profileCountryConflict;
       $('issue-navigation').hidden=issues.length<2;
@@ -250,9 +252,13 @@ async function initializePopup() {
       if(focus)$('partial').focus();
     }
   }
-  function rememberReview(){
-    savedReview={page:pageHash,documentId:issuesDocumentId,index:issueIndex};
-    return chrome.storage.session.set({[reviewKey]:savedReview});
+  function pageReview(review){
+    return toolbar && showPageReview(tab.id,tab.url,review,review?.browserDocumentId);
+  }
+  async function rememberReview(){
+    const status=savedReview?.browserDocumentId ? {browserDocumentId:savedReview.browserDocumentId,phase:issues.length?'review':'done'} : {};
+    savedReview=await saveFillReview(tab.id,pageHash,issuesDocumentId,issues,issueIndex,status);
+    return pageReview(issues.length?savedReview:null);
   }
   function stepIssue(direction){
     issueIndex=Math.max(0,Math.min(issues.length-1,issueIndex+direction));
@@ -260,8 +266,14 @@ async function initializePopup() {
   }
   $('previous-message').onclick=()=>stepIssue(-1);
   $('next-message').onclick=()=>stepIssue(1);
-  $('back-to-fill').onclick=()=>{setStatus();showReview(false,true);};
-  $('return-issues').onclick=()=>showReview(true,true);
+  $('back-to-fill').onclick=()=>{setStatus();showReview(false,true);void pageReview(null);};
+  $('return-issues').onclick=()=>{showReview(true,true);void rememberReview();};
+  $('close-review').onclick=async()=>{
+    await chrome.storage.session.remove(reviewKey);
+    savedReview=null;
+    await pageReview(null);
+    if(toolbar)window.close();else showReview(false,true);
+  };
   $('show-field').onclick=async()=>{
     const issue=issues[issueIndex];
     if(!issue?.target || busy)return;
@@ -271,7 +283,10 @@ async function initializePopup() {
       const reply=await browserReply(chrome.runtime.sendMessage({action:'revealIssue',tabId:tab.id,expectedUrl:tab.url,documentId:issuesDocumentId,
         frameId:issue.target.frameId,fieldId:issue.target.fieldId}));
       if(!reply?.ok)throw new Error();
-      if(toolbar)window.close();
+      if(toolbar){
+        if(await rememberReview())window.close();
+        else setStatus({errors:['Field highlighted. Chrome could not keep the review open on this page.']});
+      }
     }catch{
       try{
         const inspected=await inspectPage();
@@ -320,7 +335,7 @@ async function initializePopup() {
     }
   }
   async function run(action,control,message){
-    if(busy)return;
+    if(busy || workerFilling)return;
     const focused=document.activeElement;
     busy=true;controls();setStatus({summary:message||''});
     const label=control?.textContent;if(control){control.textContent=message;control.setAttribute('aria-busy','true');}
@@ -341,9 +356,12 @@ async function initializePopup() {
     try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),15000);})]);}
     finally{clearTimeout(timer);}
   }
-  let pageDocumentId, inspection;
+  let pageDocumentId, inspection, lastInspection;
   function inspectPage(){
-    if(!inspection)inspection=pageReply('inspect').finally(()=>{inspection=null;});
+    if(!inspection)inspection=pageReply('inspect').then(result=>{
+      lastInspection={documentId:result.documentId,requiredIssues:result.requiredIssues??[]};
+      return result;
+    }).finally(()=>{inspection=null;});
     return inspection;
   }
   async function pageReply(operation, expectedResumeSha256){
@@ -353,113 +371,87 @@ async function initializePopup() {
     pageDocumentId=reply.result.documentId;
     return reply.result;
   }
-  function collectAttachments(result, warnings, errors){
-    const rows=result.skipped??[], reasons=new Set(rows.map(row=>row.reason));
-    if(['undo','redo'].includes(result.operation) && (reasons.has('remote_upload_preserved')||reasons.has('client_attachment_preserved')))warnings.push('The attachment stayed on the employer page.');
-    if(reasons.has('different_resume_requires_manual_review'))errors.push('Your selected PDF differs from the earlier resume selection on this page. Check which resume the employer has.');
-    else if(reasons.has('resume_filename_differs'))errors.push('The employer shows a different resume filename. Check it against your selected PDF.');
-    else if(result.resumeEvidence==='filename'||reasons.has('resume_filename_visible_contents_unverified'))warnings.push('The employer shows the matching resume filename. PDF contents unverified.');
-    else if(result.resumeEvidence==='earlier_filename')warnings.push('The previous step showed the matching resume filename. PDF contents unverified.');
-    else if(reasons.has('resume_filename_visible'))warnings.push('The employer shows a resume filename. Check it against your selected PDF. Contents unverified.');
-    else if(reasons.has('resume_picker_occupied'))warnings.push('The local resume picker contains a file. Check it against your selected PDF. Employer contents unverified.');
-    else if(['existing_attachment_preserved','existing_remote_attachment_requires_review','existing_smartrecruiters_attachment_requires_review','remote_upload_preserved','client_attachment_preserved'].some(reason=>reasons.has(reason)))warnings.push('A resume is already present. Check it against your selected PDF.');
-    else if(reasons.has('required_resume_missing') || result.operation==='inspect' && result.resume==='missing')errors.push('The required resume field is empty.');
-    else if(reasons.has('resume_control_not_identified'))errors.push('C3 could not identify the resume field. Check the employer page.');
-    else if(['resume_attachment_not_verified','resume_upload_already_attempted_review_attachment','uploaded_attachment_requires_review','attachment_not_verified_native_file_retained','ambiguous_resume_attachment','resume_parsing_pending_profile_not_filled'].some(reason=>reasons.has(reason)))errors.push('The resume attachment was not confirmed. Check it on the employer page.');
-    for(const row of rows){
-      if(!['required_attachment_missing','required_attachment_unconfirmed'].includes(row.reason))continue;
-      const name=/transcript|relev[ée] de notes/i.test(row.label)?'transcript':/cover[ -]?letter|lettre de/i.test(row.label)?'cover letter':'document';
-      errors.push(row.reason==='required_attachment_missing'?`The required ${name} is missing.`:`Check the required ${name}. Its upload is unconfirmed.`);
-    }
-  }
   async function partial(action){
     historyVersion++;
     const digest=action==='fill'?selection?.currentPage?.sha256:undefined;
     if(!pageDocumentId)await inspectPage();
+    const originalDocument=pageDocumentId;
     let result;
     try{
       result=await pageReply(action,digest);
     }catch(error){
       const uncertain=/timed?\s*out|expir(?:ed|y)|not confirmed|did not respond/i.test(error.message);
-      if(!uncertain && action!=='use_profile_country')throw error;
-      // A timed-out write can still have created undo history. Inspect it without repeating the write.
+      const interrupted=uncertain || /no usable page area|lost access to the page|could not access the selected tab|could not be read|protected extension content|another debugger is attached/i.test(error.message);
+      if(!interrupted && action!=='use_profile_country')throw error;
+      // Read the same document again. Never repeat a write to recover its result.
+      const previous=lastInspection;
+      let inspected;
       try{
-        const inspected=await inspectPage();
-        applyPageState(inspected);
+        inspected=await inspectPage();
       }catch{profileCountryConflict=false;}
-      if(!uncertain)throw error;
-      throw new Error(canUndo?'C3 could not confirm all changes. Check the page or use Undo fill.':'C3 could not confirm all changes. Check the page and reopen Hunt for Undo.');
+      if(inspected?.documentId===originalDocument){
+        applyPageState(inspected);
+        issuesDocumentId=originalDocument;
+        presentResult(inspected);
+        await rememberReview();
+      }else{
+        issues=[];canUndo=false;canRedo=false;profileCountryConflict=false;showReview(false);
+        if(!inspected && interrupted && previous?.documentId===originalDocument && previous.requiredIssues.length){
+          issues=previous.requiredIssues.map(field=>({label:field.label,message:
+            (field.section?field.section+'. ':'')+'Flagged before this attempt. C3 could not recheck this field.'}));
+          issueIndex=0;issuesDocumentId=originalDocument;showReview(true);await rememberReview();
+        }
+      }
+      if(!interrupted)throw error;
+      if(inspected && inspected.documentId!==originalDocument)throw new Error('The page changed during this action. Reopen Hunt on the current page.');
+      if(inspected)throw new Error('C3 could not confirm all changes. The page was rechecked.');
+      throw new Error(uncertain?'C3 could not confirm all changes or recheck the form. Review the draft before retrying.':
+        error.message+' C3 could not recheck which changes were saved.');
     }
     applyPageState(result);
-    if(result.accountPage){issues=[];showReview(false);setStatus({summary:'Account fields filled.'});return;}
+    if(result.accountPage){issues=[];showReview(false);await pageReview(null);setStatus({summary:'Account fields filled.'});return;}
     issuesDocumentId=result.documentId;
     presentResult(result);
     await rememberReview();
   }
   function presentResult(result,index=0){
-    const warnings=[],errors=[],fieldIssues=[];
-    const required=(result.requiredIssues??[]).map(target=>({
-      label:target.label,
-      message:target.reason==='required_empty'?'This required field is empty.':
-        target.reason==='required_invalid'?'The current value needs a correction.':'C3 could not verify this required field.',
-      target,
-    }));
-    const conflictItems=(result.skipped||[]).filter(item=>['saved_value_conflict','value_changed_after_fill'].includes(item.reason)
-      && !(profileCountryConflict && item.reason==='saved_value_conflict' && /^country\b/i.test(item.label?.trim())));
-    for(const label of new Set(conflictItems.map(item=>String(item.label||'Field').replace(/[\u2009*✱]/g,'').trim()))){
-      fieldIssues.push({label,message:'The form value differs from your saved answer or changed after filling.'});
-    }
-    collectAttachments(result, warnings, errors);
-    const addressReason=result.skipped?.find(item=>['bamboo_address_change_unconfirmed','bamboo_address_restore_unconfirmed'].includes(item.reason))?.reason;
-    if(addressReason)errors.push(addressReason==='bamboo_address_restore_unconfirmed'
-      ? 'C3 could not verify the restored address. Check Country, region and postal code on the form.'
-      : 'BambooHR did not confirm the address update. Check the address and your saved profile.');
-    for(const label of new Set(result.reviewFields??[])){
-      if(label && !required.some(issue=>issue.label===label) && !fieldIssues.some(issue=>issue.label===label))
-        fieldIssues.push({label,message:'Check the suggested answer on the form.'});
-    }
-    if (result.componentFailure && !addressReason) {
-      const {component, operation} = result.componentFailure;
-      errors.push('Check ' + component.replaceAll('_', ' ') + ' (' + operation.replaceAll('_', ' ') + ').');
-    }
-    const submissionDisabled=Boolean(result.skipped?.some(item=>item.reason==='employer_submission_disabled'));
-    if(submissionDisabled)errors.push('The employer still has submission disabled.');
-    if (result.frames?.some(frame => frame.status === 'unavailable')) {
-      errors.push('C3 could not inspect an embedded section. Check it on the form.');
-    } else if (result.incomplete && !result.componentFailure && !submissionDisabled && !addressReason && !required.length && !fieldIssues.length && !warnings.length && !errors.length && !profileCountryConflict) {
-      errors.push('Check the incomplete fields before retrying.');
-    }
-    if(result.needsOwnerReview && !fieldIssues.length && !required.length && !errors.length && !warnings.length && !profileCountryConflict)
-      warnings.push('Some answers need review. Check the page before continuing.');
-    const normalize=str=>str.toLowerCase().replace(/[^a-z0-9]/g,'');
-    const duplicatesRequired=message=>required.some(issue=>{
-      const label=normalize(issue.label);
-      return label && (message==='The required resume field is empty.' && /resume|cv/.test(label) ||
-        /^The required .+ is missing\.$/.test(message) && normalize(message.slice(13,-12))===label);
-    });
-    const secondary=[...new Set([...errors,...warnings])].filter(text=>!duplicatesRequired(text));
-    issues=[...required,...fieldIssues,...(profileCountryConflict?[{label:'Country',message:countryMismatch,country:true}]:[]),
-      ...secondary.map(message=>({label:message.includes('resume')||message.includes('PDF')?'Review attachment':'Check the form',message}))];
+    const review=summarizeFill(result);
+    issues=review.issues;
     issueIndex=Math.max(0,Math.min(Number.isInteger(index)?index:0,issues.length-1));
     setMore(false);
     showReview(issues.length>0);
-    const count=result.filled?.length??0;
-    const summary=result.operation==='inspect'?'':result.operation==='undo'?count+' field changes undone.':
-      result.operation==='redo'?count+' field changes restored.':count+' '+(count===1?'field changed.':'fields changed.');
-    const note=result.resumeEvidence==='picker'?'The local file picker matches the selected PDF. Employer contents unverified.':'';
-    setStatus({summary:issues.length?'':[summary,note].filter(Boolean).join(' ')});
+    setStatus({summary:review.summary});
   }
-  $('partial').onclick=()=>run(()=>partial('fill'),$('partial'),'Filling page…');
+  $('partial').onclick=()=>run(async()=>{
+    if(!toolbar){await partial('fill');return;}
+    const digest=selection?.currentPage?.sha256;
+    if(!digest)throw new Error('Choose a resume before filling.');
+    // The worker owns the write after acknowledging the click, so Chrome can
+    // destroy this popup without interrupting the fill or its review.
+    const reply=await browserReply(chrome.runtime.sendMessage({action:'startCurrentPageFill',tabId:tab.id,
+      expectedUrl:tab.url,documentId:pageDocumentId,expectedResumeSha256:digest}));
+    if(!reply?.ok)throw new Error(reply?.error||'Hunt could not start this fill.');
+    window.close();
+  },$('partial'),'Filling page…');
   countryAction.onclick=()=>run(()=>partial('use_profile_country'),countryAction,'Updating address…');
   $('undo').onclick=()=>run(()=>partial('undo'));
   $('redo').onclick=()=>run(()=>partial('redo'));
   function applyPageState(result){
     canUndo=result.canUndo;canRedo=result.canRedo;profileCountryConflict=result.profileCountryConflict===true;
   }
-  async function loadHistory(){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;applyPageState(result);
-    if(!busy && savedReview?.page===pageHash && savedReview.documentId===result.documentId){
+  async function loadHistory(restored=false){const version=historyVersion;try{const result=await inspectPage();if(version!==historyVersion)return;applyPageState(result);
+    if(restored && savedReview?.page===pageHash && savedReview.documentId===result.documentId){
+      // Refresh located findings against the actual page; retain fill-only
+      // notices (for example, employer attachment confirmation).
+      if(savedReview.phase==='review'){
+        const fresh=reconcileFieldReview(issues,issueIndex,result);
+        issues=fresh.issues;issueIndex=fresh.index;showReview(issues.length>0);
+        if(toolbar)await rememberReview();
+      }
+    }else if(!busy && savedReview?.page===pageHash && savedReview.documentId===result.documentId){
       issuesDocumentId=result.documentId;
       presentResult(result,savedReview.index);
+      if(toolbar)await rememberReview();
     }
     controls();}catch{
       if(!busy && savedReview?.page===pageHash)setStatus({errors:['C3 could not check this page for remaining issues.']});
@@ -524,8 +516,32 @@ async function initializePopup() {
     const request={jobs:[{url:tab.url,tabId:tab.id,title:tab.title,...(digest&&{expectedResumeSha256:digest})}]};
     let response,result;try{response=await fetch(origin+'/jobs',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+(token||'')},body:JSON.stringify(request),signal:AbortSignal.timeout(15000)});result=await response.json();}catch{throw new Error('No confirmation received. Check Applications for this job.');}if(!response.ok)throw new Error(typeof result?.error==='string'&&result.error?result.error:'C3 could not confirm this job. Check Applications before retrying.');const job=result?.[0];if(!job||typeof job.status!=='string')throw new Error('No confirmation received. Check Applications before retrying.');setStatus({summary:['queued','running'].includes(job.status)?'Queued. C3 will stop at Review.':`${job.stage||job.status}. Open Applications to continue.`});});
 
+  async function restoreWorkerView(review){
+    if(!review?.phase || !review.browserDocumentId || review.page!==pageHash)return false;
+    const id=await chrome.tabs.sendMessage(tab.id,{action:'identifyFillDocument',expectedUrl:tab.url},
+      {documentId:review.browserDocumentId}).catch(()=>null);
+    if(id!==review.browserDocumentId || savedReview!==review)return false;
+    workerFilling=review.phase==='filling';
+    issues=review.issues??[];issueIndex=Math.max(0,Math.min(review.index??0,issues.length-1));
+    issuesDocumentId=review.documentId;profileCountryConflict=issues.some(issue=>issue.country);
+    showReview(!workerFilling && issues.length>0);
+    setStatus(workerFilling?{summary:'Filling current page…'}:review.error && !issues.length?{errors:[review.error]}:{summary:review.summary??''});
+    controls();
+    return true;
+  }
+  // A user can open the toolbar while the invitation's fill is running.
+  // Keep that view in sync even if it missed the original click.
+  if(toolbar)chrome.storage.onChanged.addListener((changes,area)=>{
+    const change=changes[reviewKey];
+    if(area!=='session' || !change || !(change.newValue?.liveUpdate || change.newValue?.phase==='filling' || change.oldValue?.phase==='filling'))return;
+    historyVersion++;
+    savedReview=change.newValue;
+    void restoreWorkerView(savedReview);
+  });
+  savedReview=(await chrome.storage.session.get(reviewKey))[reviewKey];
+  const restored=await restoreWorkerView(savedReview);
   controls();await checkConnection();
-  if(canPartial && selection)void loadHistory();
+  if(canPartial && selection && !workerFilling)void loadHistory(restored);
   if(!saved.token)void run(connectLocal);
   setInterval(()=>{if(!busy)void checkConnection();},5000);
 }

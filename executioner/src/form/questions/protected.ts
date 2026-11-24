@@ -68,6 +68,7 @@ export function isAiConsentControl(behavior: string, options: readonly string[])
 export const contractApprovedPrivacyChoices = Object.freeze([
   "Prefer not to answer",
   "Prefer not to say",
+  "I prefer not to say",
   "I do not wish to provide this information",
   "I do not want to answer",
   "Decline to self-identify",

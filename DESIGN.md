@@ -1,7 +1,7 @@
-﻿---
+---
 name: Hunt
 version: beta
-description: Dark olive-green theme derived from coolors.co/474a2c-636940-59a96a-9bdeac-b4e7ce. Operational job pipeline control dashboard. Saturated green accent on deep olive-black surfaces, data-dense layout. Updated 2026-04-25.
+description: Dark olive-green theme derived from coolors.co/474a2c-636940-59a96a-9bdeac-b4e7ce. Operational job pipeline control dashboard. Saturated green accent on deep olive-black surfaces, data-dense layout. Updated 2026-11-24.
 palette_source: "https://coolors.co/474a2c-636940-59a96a-9bdeac-b4e7ce"
 palette_swatches:
   dark-olive:  "#474a2c"
@@ -10,28 +10,29 @@ palette_swatches:
   light-green: "#9bdeac"
   mint:        "#b4e7ce"
 colors:
-  bg: "#0f1a14"
-  bg-gradient-top: "#0f1a14"
-  bg-gradient-bottom: "#0b120e"
-  panel: "#172212"
-  panel-strong: "#1d2b18"
-  panel-hover: "#223320"
-  text-primary: "#d4f0dc"
-  text-secondary: "#9bb69f"
-  border: "#2a3f2a"
-  border-strong: "#3a5a3a"
-  accent: "#59a96a"
-  accent-soft: "#1e3a26"
+  bg: "#141a15"
+  bg-gradient-top: "#141a15"
+  bg-gradient-bottom: "#111612"
+  nav-surface: "#243d2b"
+  panel: "#202820"
+  panel-strong: "#2a352b"
+  panel-hover: "#324133"
+  text-primary: "#edf2e9"
+  text-secondary: "#b4c3b2"
+  border: "#394739"
+  border-strong: "#5a715c"
+  accent: "#90d59b"
+  accent-soft: "#304b34"
   accent-ink: "#07100a"
-  accent-dim: "#4f965f"
+  accent-dim: "#78be85"
   warning: "#f0b429"
   warning-soft: "#2d2410"
-  danger: "#f05252"
+  danger: "#ff8c81"
   danger-soft: "#2d1414"
   positive: "#9bdeac"
   positive-soft: "#1a2e1e"
-  info: "#7bc4d8"
-  info-soft: "#102030"
+  info: "#b2d8b6"
+  info-soft: "#273c2b"
 chart_colors:
   note: "Charts use a diverse independent palette for readability - not brand colors."
   pie: ["#60a5fa","#34d399","#fbbf24","#f87171","#a78bfa","#fb923c","#38bdf8","#e879f9"]

@@ -52,7 +52,7 @@ test("concurrent source saves with one revision allow exactly one writer", async
   assert.equal(rejected[0].reason.code, "CONFLICT");
 });
 
-test("UI output no-overwrite remains atomic when a target appears during the build", async () => {
+test("UI output saves the current preview and preserves concurrently created files", async () => {
   const root = await fixtureRoot();
   let markStarted;
   let releaseBuild;
@@ -62,20 +62,16 @@ test("UI output no-overwrite remains atomic when a target appears during the bui
   const buildGate = new Promise((resolvePromise) => {
     releaseBuild = resolvePromise;
   });
-  const output = createOutputService({
+  const outputService = createOutputService({
     repoRoot: root,
-    buildPdfImpl: async ({ outDir }) => {
+    readPreview: async () => {
       markStarted();
       await buildGate;
-      await mkdir(outDir, { recursive: true });
-      const pdfPath = join(outDir, "current.pdf");
-      await writeFile(pdfPath, "generated", "utf8");
-      return { pdfPath, engine: "fixture" };
+      return Buffer.from("preview");
     }
   });
 
-  const saving = output.save({
-    source: "resume/source/current.tex",
+  const saving = outputService.save({
     name: "selected.pdf"
   });
   await started;
@@ -86,6 +82,35 @@ test("UI output no-overwrite remains atomic when a target appears during the bui
 
   await assert.rejects(saving, (error) => error.code === "OUTPUT_EXISTS");
   assert.equal(await readFile(target, "utf8"), "external");
+  const { createPreviewService } = await import("./preview-server.mjs");
+  let builds = 0;
+  const preview = createPreviewService({
+    repoRoot: root,
+    buildPdfImpl: async ({ outDir }) => {
+      builds += 1;
+      await mkdir(outDir, { recursive: true });
+      const pdfPath = join(outDir, "current.pdf");
+      await writeFile(pdfPath, "Preview PDF " + builds);
+      return { pdfPath, engine: "fixture" };
+    }
+  });
+  const { revision } = await preview.getSource();
+  const output = { name: "current-preview.pdf", revision };
+  const conflict = (error) => error.code === "CONFLICT";
+  await assert.rejects(preview.saveOutput(output), conflict);
+  await assert.rejects(preview.compile("outdated"), conflict);
+  const first = await preview.compile(revision);
+  const second = await preview.compile(revision);
+  await assert.rejects(preview.saveOutput({ ...output, buildId: first.buildId }), conflict);
+  const request = { ...output, buildId: second.buildId };
+  await preview.saveOutput(request);
+  assert.equal(
+    await readFile(join(root, "resume", "output", output.name), "utf8"),
+    "Preview PDF 2"
+  );
+  await writeFile(join(root, "resume", "source", "current.tex"), "external edit");
+  await assert.rejects(preview.saveOutput({ ...request, overwrite: true }), conflict);
+  assert.equal(builds, 2);
 });
 
 async function fixtureRoot() {

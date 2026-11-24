@@ -727,17 +727,15 @@ export function createApplicationAnswerResolver(
         }, "synthetic_test_default");
       }
       if (question.source.kind === "neutral_disclosure") {
+        if (field.state === 'populated' && field.populatedValueValid === true) {
+          return success({kind:'readback_only', fieldId:field.fieldId});
+        }
         if (!fallbackAllowed) return failure("protected_answer_denied");
         for (const candidate of contractApprovedPrivacyChoices) {
           const matched = matchedChoiceIntent(field, candidate);
           if (matched !== undefined) return success(matched);
         }
-        const generated = generatedLearningIntent(
-          field, request.resumeArtifact, generatedDate, stableRandomIndexFor(request),
-        );
-        return generated === undefined
-          ? failure("protected_answer_denied")
-          : generatedSuccess(field, generated);
+        return failure("protected_answer_denied");
       }
       if (question.source.kind === "synthetic_placeholder") {
         if (!fallbackAllowed) return failure("protected_answer_denied");
@@ -795,10 +793,14 @@ export function createApplicationAnswerResolver(
             typeof savedSource==='string' && ownerDefaults.applicationSources.some(value=>normalizeCatalogText(value)===normalizeCatalogText(savedSource)))) {
         // These are owner-approved alternatives, not semantically identical labels.
         const preferences=typeof savedSource==='string'?[savedSource,...ownerDefaults.applicationSources]:ownerDefaults.applicationSources;
+        let deferred;
         for (const value of preferences) {
           const intended=intentFor(field,canonicalQuestionId,value,'owner_provided','live_owner_fact');
-          if (intended.kind==='resolved') return success(intended);
+          if (intended.kind !== 'resolved') continue;
+          if (intended.intent.kind !== 'choice' || intended.intent.optionId !== 'deferred-search') return success(intended);
+          deferred ??= intended;
         }
+        if (deferred) return success(deferred);
       }
       if (answer.value.kind === "profile_answer_missing") {
         if (question.source.factId==='associate_referral' && ownerDefaults) {

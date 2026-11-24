@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createReadStream, realpathSync } from "node:fs";
-import { copyFile, mkdir, rename, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,21 @@ import {
 } from "./ui-services.mjs";
 
 const sessionCookieName = "resume_cooker_session";
+
+function currentPreviewBuildId(preview, revision) {
+  return revision &&
+    preview?.state === "current" &&
+    preview.ok &&
+    !preview.stale &&
+    preview.source_revision === revision &&
+    preview.artifact_revision === revision &&
+    preview.artifact &&
+    preview.pdfUrl &&
+    preview.lastGoodBuildId &&
+    preview.buildId === preview.lastGoodBuildId
+    ? preview.lastGoodBuildId
+    : null;
+}
 
 export function createPreviewService({
   repoRoot = getRepoRoot(),
@@ -31,7 +46,7 @@ export function createPreviewService({
   const previewPdf = join(previewDir, `${basename(sourcePath, extname(sourcePath))}.pdf`);
   const artifact = relative(repoRoot, previewPdf).replaceAll("\\", "/");
   const reports = createReportOperationService({ repoRoot, runCheckImpl, idFactory, nowImpl });
-  const outputs = createOutputService({ repoRoot, buildPdfImpl });
+  const outputs = createOutputService({ repoRoot, readPreview: () => readFile(previewPdf) });
   let active = null;
   let generation = 0;
   let transitionQueue = Promise.resolve();
@@ -50,21 +65,22 @@ export function createPreviewService({
     builtAt: null
   };
 
-  const compile = async () => {
+  const compile = async (revision) => {
     const buildId = idFactory();
-    const { operationGeneration, controller } = await withTransition(() => {
+    const { operationGeneration, controller, loaded } = await withTransition(async () => {
+      const loaded = await sourceFiles.load(normalizedSource);
+      if (revision !== undefined && loaded.revision !== revision)
+        throw typed("CONFLICT", "Source changed on disk. Reload it before building.");
       const operationGeneration = ++generation;
       active?.controller.abort();
       const controller = new AbortController();
       active = { buildId, controller };
-      return { operationGeneration, controller };
+      return { operationGeneration, controller, loaded };
     });
     const operationDir = join(previewDir, "builds", String(operationGeneration));
     const operationPdf = join(operationDir, basename(previewPdf));
     const replacement = join(previewDir, `.${basename(previewPdf)}.${operationGeneration}.tmp`);
-    let loaded;
     try {
-      loaded = await sourceFiles.load(normalizedSource);
       if (controller.signal.aborted || operationGeneration !== generation)
         return withTransition(refreshStatus);
       status = {
@@ -155,7 +171,14 @@ export function createPreviewService({
     previewDir,
     previewPdf,
     reports,
-    outputs,
+    saveOutput({ name, overwrite, revision, buildId }) {
+      return withTransition(async () => {
+        const preview = await refreshStatus();
+        if (!buildId || currentPreviewBuildId(preview, revision) !== buildId)
+          throw typed("CONFLICT", "Build the current source before saving its PDF.");
+        return outputs.save({ name, overwrite: overwrite === true });
+      });
+    },
     compile,
     cancelCompile() {
       if (active) active.controller.abort();
@@ -315,7 +338,8 @@ export function createPreviewServer({
         return sendJson(res, await service.saveSource(body));
       }
       if (route === "POST /api/compile") {
-        const result = await service.compile();
+        const { revision } = await readJsonBody(req);
+        const result = await service.compile(revision);
         return sendJson(
           res,
           result,
@@ -335,34 +359,34 @@ export function createPreviewServer({
         const body = await readJsonBody(req);
         const loaded = await service.getSource();
         const previewStatus = await service.getStatus();
-        return sendJson(
-          res,
-          await service.reports.run({
-            source: loaded.source,
-            pdf:
-              previewStatus.lastGoodBuildId && previewStatus.artifact_revision === loaded.revision
-                ? previewStatus.artifact
-                : undefined,
-            jd: body.jd,
-            profile: body.profile,
-            suite: body.suite
-          })
-        );
+        const buildId = currentPreviewBuildId(previewStatus, loaded.revision);
+        if (
+          previewStatus.source_revision !== loaded.revision ||
+          (body.revision !== undefined && body.revision !== loaded.revision) ||
+          (body.buildId !== undefined && body.buildId !== buildId)
+        )
+          throw typed("CONFLICT", "Source or preview changed. Refresh before checking.");
+        const result = await service.reports.run({
+          source: loaded.source,
+          pdf: buildId ? previewStatus.artifact : undefined,
+          jd: body.jd,
+          profile: body.profile,
+          suite: body.suite
+        });
+        const latest = await service.getStatus();
+        if (
+          latest.source_revision !== loaded.revision ||
+          currentPreviewBuildId(latest, loaded.revision) !== buildId
+        )
+          throw typed("CONFLICT", "Source or preview changed during checks. Run them again.");
+        return sendJson(res, { ...result, revision: loaded.revision, buildId });
       }
       if (route === "POST /api/check/cancel") {
         return sendJson(res, service.reports.cancel());
       }
       if (route === "POST /api/output") {
         const body = await readJsonBody(req);
-        return sendJson(
-          res,
-          await service.outputs.save({
-            source: (await service.getSource()).source,
-            name: body.name,
-            overwrite: body.overwrite === true,
-            engine: body.engine || "auto"
-          })
-        );
+        return sendJson(res, await service.saveOutput(body));
       }
       return sendText(res, 404, "Not found");
     } catch (error) {

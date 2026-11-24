@@ -313,20 +313,6 @@ export function OpsPage() {
         </div>
         <div className={styles.buttons}>
           <button
-            className={styles.btn}
-            disabled={!!loadingBtn}
-            onClick={() => runC1('status', fetchC1Status)}
-          >
-            Status
-          </button>
-          <button
-            className={styles.btn}
-            disabled={!!loadingBtn}
-            onClick={() => runC1('queue', fetchC1Queue)}
-          >
-            Queue
-          </button>
-          <button
             className={`${styles.btn} ${styles.btnPrimary}`}
             disabled={!!loadingBtn}
             onClick={() => runC1('Search', () => triggerC1Scrape(true))}
@@ -355,9 +341,27 @@ export function OpsPage() {
           </details>
         ) : null}
         <section className={styles.coverage} aria-labelledby="coverage-heading">
-          <h3 id="coverage-heading" className={styles.panelTitle}>
-            Search coverage
-          </h3>
+          <div className={styles.coverageHeader}>
+            <h3 id="coverage-heading" className={styles.panelTitle}>
+              Search coverage
+            </h3>
+            <div className={styles.buttons}>
+              <button
+                className={styles.btn}
+                disabled={!!loadingBtn}
+                onClick={() => runC1('status', fetchC1Status)}
+              >
+                Check status
+              </button>
+              <button
+                className={styles.btn}
+                disabled={!!loadingBtn}
+                onClick={() => runC1('queue', fetchC1Queue)}
+              >
+                View queue
+              </button>
+            </div>
+          </div>
           {scan?.state && (
             <div className={styles.coverageNote}>
               <p role="status">
@@ -505,9 +509,7 @@ export function OpsPage() {
         </section>
       </div>
 
-      <div className={styles.panel}>
-        <CompanyPreview />
-      </div>
+      <CompanyPreview />
 
       <SystemStatusPanel />
 
@@ -730,8 +732,8 @@ export function OpsPage() {
         <div className={styles.panel}>
           <h2 className={styles.panelTitle}>Bulk requeue by status</h2>
           <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 12 }}>
-            Moves all rows with the selected statuses back to pending. Operates across all sources.
-            Server caps batch size. Use dry run first to count before committing.
+            Count matches before moving jobs back to pending. This includes all sources, up to the
+            server's batch limit.
           </p>
           <div className={styles.checkboxRow}>
             {BULK_STATUS_OPTIONS.map((o) => (

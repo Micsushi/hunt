@@ -8,11 +8,19 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 type DotState = 'ok' | 'warn' | 'error' | 'unknown'
 
 function StatusDot({ state }: { state: DotState }) {
+  const description = {
+    ok: 'Online',
+    warn: 'Needs attention',
+    error: 'Unavailable',
+    unknown: 'Status unknown',
+  }[state]
   return (
     <span
       className={`${styles.dot} ${styles[`dot${state.charAt(0).toUpperCase()}${state.slice(1)}`]}`}
-      aria-hidden="true"
-    />
+      title={description}
+    >
+      <span className="sr-only"> · {description}</span>
+    </span>
   )
 }
 
@@ -33,11 +41,11 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Overview', exact: true },
   { to: '/jobs', label: 'Jobs' },
+  { to: '/ops', label: 'Hunter', dotKey: 'c1' },
   { to: '/fletcher', label: 'Fletcher', dotKey: 'c2' },
   { to: '/executioner', label: 'Applications' },
-  { to: '/settings', label: 'Settings' },
-  { to: '/ops', label: 'Hunter', dotKey: 'c1' },
   { to: '/logs', label: 'Logs' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 interface Props {
@@ -49,6 +57,9 @@ interface Props {
 
 export function Layout({ children, username, onLogout, loggingOut }: Props) {
   const [logoutError, setLogoutError] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuButton = useRef<HTMLButtonElement>(null)
+  const main = useRef<HTMLElement>(null)
   const submitting = useRef(false)
   const mounted = useRef(false)
   const brand = useRef<HTMLAnchorElement>(null)
@@ -93,20 +104,57 @@ export function Layout({ children, username, onLogout, loggingOut }: Props) {
     <>
       <LoadingBar />
       <div className={styles.shell}>
-        <header className={styles.header}>
-          <Link ref={brand} className={styles.brand} to="/" aria-label="Hunt overview">
+        <a className={styles.skipLink} href="#console-content">
+          Skip to content
+        </a>
+        <header
+          className={styles.header}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && menuOpen && menuButton.current?.offsetWidth) {
+              setMenuOpen(false)
+              menuButton.current.focus()
+            }
+          }}
+        >
+          <Link
+            ref={brand}
+            className={styles.brand}
+            to="/"
+            aria-label="Hunt overview"
+            onClick={() => setMenuOpen(false)}
+          >
             <span className={styles.brandIconFrame}>
               <img className={styles.brandIcon} src="/favicon.svg" alt="" aria-hidden="true" />
             </span>
             <span>Hunt</span>
           </Link>
-          <nav className={styles.nav} aria-label="Main navigation">
+          <button
+            type="button"
+            className={styles.menuButton}
+            ref={menuButton}
+            aria-expanded={menuOpen}
+            aria-controls="console-navigation"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            Menu <span aria-hidden="true">{menuOpen ? '▴' : '▾'}</span>
+          </button>
+          <nav
+            id="console-navigation"
+            className={styles.nav}
+            data-open={menuOpen}
+            aria-label="Main navigation"
+          >
             <div className={styles.navGroup}>
               {NAV_ITEMS.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
                   end={item.exact}
+                  onClick={(event) => {
+                    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+                    if (menuOpen && menuButton.current?.offsetWidth) main.current?.focus()
+                    setMenuOpen(false)
+                  }}
                   className={({ isActive }) => `${styles.navLink} ${isActive ? styles.active : ''}`}
                 >
                   {item.label}
@@ -118,7 +166,6 @@ export function Layout({ children, username, onLogout, loggingOut }: Props) {
               {username && <span className={styles.username}>{username}</span>}
               <button
                 className={styles.logoutBtn}
-                style={{ whiteSpace: 'nowrap' }}
                 onClick={handleLogout}
                 aria-disabled={loggingOut}
               >
@@ -128,7 +175,9 @@ export function Layout({ children, username, onLogout, loggingOut }: Props) {
           </nav>
         </header>
         {logoutError && <p role="alert">Sign out failed: {logoutError}</p>}
-        <main className={styles.main}>{children}</main>
+        <main id="console-content" ref={main} tabIndex={-1} className={styles.main}>
+          {children}
+        </main>
       </div>
     </>
   )

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
+import { fillVisibleFields } from '../../extension/generic-fill.js';
 import { fillApplication } from '../../src/product/engine.ts';
 import { applicantProfile, effectiveProfileFacts, productSources } from '../../src/product/sources.ts';
 import type { parseApplicationProfile } from '../../src/profile/application-profile.ts';
@@ -33,7 +34,8 @@ test('hosted campaign questions fill from saved profile authority and flag requi
       <button onclick="window.submitted=true">Submit application</button>`}));
     const profile = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
       address_line1:'123 Fixture St', city:'Edmonton', region:'Alberta', postal_code:'T5A 0A1', country:'Canada',
-      education_gpa:'3.7', education_gpa_scale:'4.0', official_coop_program:'true', sponsorship_required_canada:'false', application_source:'Job board', salary_expectations:'CAD 80,000 per year'}) as {profilePlan:ProfilePagePlan};
+      education_gpa:'3.7', education_gpa_scale:'4.0', official_coop_program:'true', sponsorship_required_canada:'false', application_source:'Job board', salary_expectations:'CAD 80,000 per year',
+      relocation_preference:'Anywhere in Canada',languages:'English: native; French: intermediate'}) as {profilePlan:ProfilePagePlan};
     const employer = 'Northwind Labs';
     const choices = ['Community event', 'LinkedIn Job Posting', 'Other'];
     const yesNo = ['Yes', 'No'];
@@ -51,7 +53,73 @@ test('hosted campaign questions fill from saved profile authority and flag requi
     ] as const;
     const sources = productSources(profile, Buffer.from('%PDF-fixture'));
     try {
+      const contact = await browser.newPage();
+      const applyUrl = 'https://recruiting.ultipro.ca/fixture/JobBoard/test/OpportunityApply';
+      await contact.route(applyUrl, route => route.fulfill({contentType:'text/html',body:`
+        <form><label>First Name<input value="Fixture"></label>
+        <label>Address 1<input id="street" required></label>
+        <label>Zip / Postal Code<input id="postal" required></label></form>`}));
+      await contact.goto(applyUrl);
+      const currentPlan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), null, undefined, true);
+      const fillAddress = async () => {
+        const {matching = []} = await contact.evaluate(fillVisibleFields, {scope:'page',action:'status'} as const);
+        for (const label of ['Address 1','Zip / Postal Code']) {
+          assert.ok(matching.some(field => field.question === label && field.profileOnly));
+        }
+        const matchingPlans = await Promise.all(matching.map(field => currentPlan(field,matching,AbortSignal.timeout(3000))));
+        return contact.evaluate(fillVisibleFields,{scope:'page' as const,matchingPlans});
+      };
+      await fillAddress();
+      assert.equal(await contact.locator('#street').inputValue(),'123 Fixture St');
+      assert.equal(await contact.locator('#postal').inputValue(),'T5A 0A1');
+      await contact.evaluate(fillVisibleFields,{scope:'page',action:'undo'} as const);
+      assert.equal(await contact.locator('#street').inputValue(),'');
+      assert.equal(await contact.locator('#postal').inputValue(),'');
+      await contact.locator('#street').fill('Manually entered');
+      await fillAddress();
+      assert.equal(await contact.locator('#street').inputValue(),'Manually entered');
+      await contact.locator('form').evaluate(form => form.insertAdjacentHTML('beforeend', `
+        <div data-automation="panel-list-item">
+          <label>School Name<input class="tt-input" data-automation="school-textbox" data-bind="value: SchoolName, typeahead: {}" role="combobox" required value="Fixture School"></label>
+          <label>Degree<input class="tt-input" data-automation="degree-textbox" data-bind="value: DegreeName, typeahead: {}" role="combobox" required value="Fixture Degree"></label>
+        </div>
+        <div data-automation="skills-panel"><div class="panel-body">
+          <label>Skills<input class="tt-input" data-automation="item-typeahead" role="combobox" required></label>
+          <button type="button" data-automation="item-add-button">Add</button>
+          <div data-automation="skills-panel"><div data-automation="selected-item">
+            <span data-automation="skill-label" data-bind="text: SkillName">Fixture skill</span>
+          </div></div>
+        </div></div>`));
+      const issues = async () => (await contact.evaluate(fillVisibleFields, {scope:'page',action:'status'} as const))
+        .requiredIssues?.map(({label,reason}) => [label,reason]);
+      assert.deepEqual(await issues(),[]);
+      await contact.getByLabel('School Name').evaluate(input => input.setAttribute('aria-expanded','true'));
+      await contact.getByLabel('Degree').evaluate(input => input.setAttribute('aria-invalid','true'));
+      await contact.locator('[data-automation="selected-item"]').evaluate(item => item.remove());
+      assert.deepEqual(await issues(),[['School Name','required_unconfirmed'],['Degree','required_invalid'],['Skills','required_empty']]);
+      await contact.getByLabel('Skills').fill('Unadded skill');
+      assert.ok((await issues())?.some(([label,reason]) => label==='Skills' && reason==='required_unconfirmed'));
+      await contact.getByLabel('School Name').evaluate(input => {
+        input.setAttribute('aria-expanded','false');
+        input.setAttribute('data-bind','value: SchoolId, typeahead: {}');
+      });
+      assert.ok((await issues())?.some(([label,reason]) => label==='School Name' && reason==='required_unconfirmed'));
+      await contact.close();
       const plan = createPageAnswerPlanner(sources, effectiveProfileFacts(profile), employer);
+      const relocate = {pageId:'page',formId:'application',frameId:'main',fieldId:'relocate',signature:'fixture',
+        question:'If you are not currently based in Ottawa, are you willing to relocate? *',options:yesNo,
+        selected:'',required:true,control:'radio',valid:false};
+      const canada = {...relocate,fieldId:'eligibility',question:'Are you legally entitled to work in Canada? *'};
+      const signal=AbortSignal.timeout(3000);
+      const local=await plan(relocate,[canada],signal);
+      assert.deepEqual([local.answer,local.provisional],['Yes',false]);
+      for(const [wording,formId] of [[relocate.question,'other'],[relocate.question.replace('Ottawa','Paris'),'application']]){
+        assert.equal((await plan({...relocate,question:wording!},[{...canada,formId:formId!}],signal)).provisional,true);
+      }
+      const french={...relocate,control:'text',options:[],question:'Please tell us a bit about your level of fluency in written and spoken French? *'};
+      const level=await plan(french,[],signal);
+      assert.deepEqual([level.answer,level.provisional],['French: intermediate',false]);
+      assert.equal((await plan({...french,question:french.question.replace('French','German')},[],signal)).provisional,true);
       const results = [];
       for (const [question, options, selected, readOnly] of cases) {
         const row = {pageId:'page', fieldId:'choice', signature:'fixture', question, options, selected,
@@ -168,4 +236,52 @@ test('bilingual screening uses Canadian eligibility, separates background consen
       assert.ok(otherCountry.provisional);
     } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
   }
+});
+
+test('current-page education dates and searchable profile choices use the corresponding saved facts', async () => {
+  const profile = applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
+    country:'Canada',city:'Edmonton',region:'Alberta',application_source:'Job board',sponsorship_required_canada:'false',
+    education_institution:'Fixture University',education_field_of_study:'Computer Science',education_degree:'Bachelor of Science',
+    education_start_year:'2019',education_end_year:'2023',earliest_start_date:'2027-06-15'});
+  const sources = productSources(profile,Buffer.from('%PDF-fixture'));
+  try {
+    const facts = effectiveProfileFacts(profile);
+    const makePlan = (saved = facts) => createPageAnswerPlanner(sources,saved,'Example Company',undefined,true);
+    const plan = makePlan();
+    const row = {pageId:'application',fieldId:'question',signature:'fixture',required:true,selected:'',valid:false};
+    for (const [question,options,expected] of [
+      ['Location (City)', ['Edmonton, Kentucky, United States','Edmonton, Alberta, Canada'], 'Edmonton, Alberta, Canada'],
+      ['School', ['Other','Fixture University'], 'Fixture University'],
+      ['Discipline', ['Mathematics','Computer Science'], 'Computer Science'],
+      ['Degree', ['Associate Degree',"Bachelor's Degree"], "Bachelor's Degree"],
+      ['Country', ['United States +1','Canada +1'], 'Canada +1'],
+      ['Which U.S. State or Canadian Province do you reside in?', ['Alabama','Alberta'], 'Alberta'],
+      ['How did you first learn about Example Company as an employer?', ['Company blog','LinkedIn'], 'LinkedIn'],
+      ['Do you now, or will you in the future, require immigration sponsorship to work for Example Company in Canada?', ['Yes','No'], 'No'],
+      ['Have you previously been employed at Example Company for any length of time?',
+        ['I have been employed at Example Company as an intern','I have not previously been employed at Example Company'],
+        'I have not previously been employed at Example Company'],
+    ] as const) {
+      const choice = {...row,question,options,control:'listbox',queryable:true};
+      const result = await plan(choice,[],AbortSignal.timeout(3000));
+      assert.deepEqual([result.answer,result.provisional], [expected,false],question);
+    }
+    const school = {...row,question:'School',control:'listbox',required:false,queryable:true,options:[]};
+    const schoolQuery = await plan(school,[],AbortSignal.timeout(3000));
+    assert.deepEqual([schoolQuery.query,schoolQuery.reason],['Fixture University','saved_profile_field']);
+    const schoolChoice = await plan({...school,options:['Fixture University']},[],AbortSignal.timeout(3000));
+    assert.deepEqual([schoolChoice.answer,schoolChoice.reason],['Fixture University','saved_profile_field']);
+    assert.equal((await plan({...school,searchQuery:'Fixture University',options:['Fixture College']},[],AbortSignal.timeout(3000))).answer,null);
+    const pronouns = {...row,question:'Pronouns',control:'listbox',queryable:true,options:['He/him/his','She/her/hers','I prefer not to say']};
+    const neutral = await plan(pronouns,[],AbortSignal.timeout(3000));
+    assert.deepEqual([neutral.answer,neutral.provisional],['I prefer not to say',true]);
+    assert.equal((await plan({...pronouns,options:['He/him/his','She/her/hers']},[],AbortSignal.timeout(3000))).answer,null);
+    assert.equal((await plan({...pronouns,selected:'She/her/hers',valid:true},[],AbortSignal.timeout(3000))).answer,null);
+    for (const [question,expected] of [['Education start date year','2019'],['Education end date year','2023'],['Start date year',null],['End date year',null]] as const) {
+      const year = {...row,question,options:[],control:'text',constraints:{inputType:'number'}};
+      assert.equal((await plan(year,[],AbortSignal.timeout(3000))).answer,expected);
+      const missingYears = makePlan(facts.filter(fact => !['education_start_year','education_end_year'].includes(fact.factId)));
+      assert.equal((await missingYears(year,[],AbortSignal.timeout(3000))).answer,null);
+    }
+  } finally { disposeResumeArtifact(sources.resumeIntent.artifact); }
 });

@@ -39,7 +39,7 @@
 
 .runBtn {
   background: var(--accent);
-  color: white;
+  color: var(--accent-ink);
   border: none;
   border-radius: var(--radius-pill);
   padding: 9px 16px;

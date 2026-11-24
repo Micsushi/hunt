@@ -8,12 +8,13 @@ or enable provider calls.
 
 - Source: loading, saved, dirty, conflict, or error. A SHA-256 revision token protects explicit
   saves from external modification.
-- Build: idle, running, current, stale, failed, or cancelled. Each operation has an ID and exact
-  source revision. A last-good PDF remains viewable but is labeled stale after later failure.
+- Build: idle, running, current, stale, failed, or cancelled. Save editor changes before building.
+  Each build has an ID and a source revision. A last-good PDF remains viewable when stale.
 - Check: idle, running, complete, failed, or cancelled. Backend schema/status is authoritative;
   skipped or incomplete evidence never becomes pass.
-- Output: idle, saving, saved, conflict, or failed. Saved output requires an approved `.pdf`
-  filename and explicit overwrite confirmation.
+- Output: idle, saving, saved, conflict, or failed. Saving copies the current preview PDF.
+  The request must identify its build and source revision. Overwriting an approved `.pdf`
+  filename requires explicit confirmation.
 
 ## HTTP boundary
 

@@ -213,9 +213,7 @@ function InlineField({
   const display = value != null && value !== '' ? String(value) : null
 
   return (
-    <div
-      className={`${styles.inlineField} ${styles.inlineFieldEditable} ${type === 'textarea' ? styles.inlineFieldBlock : ''}`}
-    >
+    <div className={`${styles.inlineField} ${type === 'textarea' ? styles.inlineFieldBlock : ''}`}>
       {label && <span className={styles.inlineLabel}>{label}</span>}
       {editing ? (
         type === 'select' && options ? (
@@ -268,7 +266,9 @@ function InlineField({
           {display ?? (
             <span className={styles.inlinePlaceholder}>{placeholder ?? 'Click to edit...'}</span>
           )}
-          <span className={styles.editHint}>✎</span>
+          <span aria-hidden="true" className={styles.editHint}>
+            ✎
+          </span>
         </button>
       )}
       {editing && (
@@ -277,7 +277,11 @@ function InlineField({
           <button className={styles.actionBtn} disabled={saving} onClick={() => void commit()}>
             {saving ? 'Saving...' : error ? 'Retry save' : 'Save'}
           </button>
-          <button className={styles.actionBtn} disabled={saving} onClick={cancel}>
+          <button
+            className={`${styles.actionBtn} ${styles.actionBtnSecondary}`}
+            disabled={saving}
+            onClick={cancel}
+          >
             Cancel edit
           </button>
         </div>
@@ -574,7 +578,7 @@ function ApplicationActions({ job }: { job: JobDetail }) {
             : 'Fill application'}
       </button>
       <button
-        className={styles.actionBtn}
+        className={`${styles.actionBtn} ${styles.actionBtnSecondary}`}
         disabled={queuing || downloading || !!eligibilityBlocked}
         onClick={downloadHandoff}
       >

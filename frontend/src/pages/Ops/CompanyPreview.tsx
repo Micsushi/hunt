@@ -10,8 +10,8 @@ export function CompanyPreview() {
   const preview = useMutation({ mutationFn: () => previewCompany(company.trim(), url.trim()) })
   const result = preview.data
   return (
-    <details className={styles.coverage}>
-      <summary>Preview an employer</summary>
+    <details className={styles.panel}>
+      <summary className={styles.sectionSummary}>Preview an employer</summary>
       <form
         onSubmit={(event) => {
           event.preventDefault()

@@ -10,7 +10,7 @@ import {startProductServer} from '../../src/product/server.ts';
 import {fixtureApplicantProfile} from './fixture.ts';
 import {bambooAddressForm} from './bamboo-address-fixture.ts';
 
-test('actual popup transport rejects synthetic profiles and keeps queued and current-page resumes independent', {timeout:150000},async()=>{
+test('actual popup transport rejects synthetic profiles and keeps queued and current-page resumes independent', {timeout:210000},async()=>{
   const root=mkdtempSync(join(tmpdir(),'c3-popup-safety-'));
   const service=await startProductServer({root:join(root,'service'),port:0});
   const token=readFileSync(service.tokenPath,'utf8').trim();
@@ -44,10 +44,10 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const issueMessages=async(view:typeof popup)=>{
       await view.locator('#issue-view').waitFor();
       const previous=view.locator('#previous-message'),next=view.locator('#next-message');
-      while(await previous.isVisible() && await previous.isEnabled())await previous.click();
+      while(await previous.isVisible() && await previous.isEnabled())await previous.press('Enter');
       const rows=[await view.locator('#issue-description').innerText()];
       while(await next.isVisible() && await next.isEnabled()){
-        await next.click();rows.push(await view.locator('#issue-description').innerText());
+        await next.press('Enter');rows.push(await view.locator('#issue-description').innerText());
       }
       return rows;
     };
@@ -280,6 +280,8 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
       <label>Resume<input type=file required></label><label>Transcript<input type=file required></label>
       <button>Submit application</button></form>`}));
     await page.goto(attachmentsUrl);
+    await page.locator('form').evaluate(form=>form.insertAdjacentHTML('beforeend',
+      '<label>Interview session<select required><option value="0">— Make a Selection —</option></select></label>'));
     const attachments=await openPopup();
     const resumeInput=page.locator('input[type=file]').first();
     const transcript=page.getByLabel('Transcript',{exact:true});
@@ -289,12 +291,71 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.match(await resumeSelect2.innerText(),/Default resume/);
     assert.equal(await resumeSelect2.getAttribute('value'),defaultDigest);
     assert.equal(await attachments.locator('#issue-view').isVisible(),false,'fresh popup shows no pre-fill issues');
+    // The form changed successfully, then its write reply was lost. Recovery must only inspect.
+    await attachments.evaluate(()=>{
+      const runtime=(globalThis as any).chrome.runtime, send=runtime.sendMessage.bind(runtime);
+      runtime.sendMessage=async(message:any)=>{
+        const response=await send(message);
+        if(message.action==='pageAction' && message.operation==='fill'){
+          (globalThis as any).fillRequests=((globalThis as any).fillRequests??0)+1;
+          return {ok:false,error:'This tab has no usable page area. Resize or restore its browser window, then retry.'};
+        }
+        return response;
+      };
+      (globalThis as any).restoreSend=()=>{runtime.sendMessage=send;};
+    });
     for(const [action,message] of [
       ['partial','Transcript'],
       ['undo','Resume'],
       ['redo','The local resume picker contains a file.']
     ]){
       await runPopupAction(attachments,action!);
+      if(action==='partial'){
+        assert.match(await attachments.locator('#status').innerText(),/page was rechecked/i);
+        assert.equal(await attachments.evaluate(()=>{(globalThis as any).restoreSend();return (globalThis as any).fillRequests;}),1);
+        // Reopen the real toolbar against this two-issue draft, then edit the
+        // employer form after Show field has dismissed Chrome's toolbar view.
+        await worker.evaluate(()=>(globalThis as any).chrome.action.openPopup());
+        await attachments.waitForFunction(()=>{
+          const toolbar=(globalThis as any).chrome.extension.getViews({type:'popup'})[0];
+          return toolbar?.document.getElementById('issue-view')?.hidden===false;
+        });
+        await page.locator('#hunt-c3-field-review').waitFor({state:'hidden'});
+        await attachments.evaluate(()=>{
+          const toolbar=(globalThis as any).chrome.extension.getViews({type:'popup'})[0];
+          toolbar.document.getElementById('show-field').click();
+        });
+        await attachments.waitForFunction(()=>!(globalThis as any).chrome.extension.getViews({type:'popup'}).length);
+        await page.locator('#hunt-c3-field-review').waitFor();
+        await page.getByLabel('First name').click();
+        const panelButton=async(name:string)=>{
+          const session=await context!.newCDPSession(page);
+          try{
+            const {root}=await session.send('DOM.getDocument',{depth:-1,pierce:true});
+            const children=(node:any):any[]=>[node,...[...(node.shadowRoots??[]),...(node.children??[])].flatMap(children)];
+            const host=children(root).find(n=>n.attributes?.includes('hunt-c3-field-review'));
+            assert.ok(host,'review stays visible while editing the form');
+            const button=children(host).find(n=>n.nodeName==='BUTTON' && (n.children?.[0]?.nodeValue===name || n.attributes?.includes(name)));
+            assert.ok(button,name);
+            const {model}=await session.send('DOM.getBoxModel',{nodeId:button.nodeId});
+            const [left,top,,,right,bottom]=model.border;
+            assert.ok(left!==undefined && top!==undefined && right!==undefined && bottom!==undefined);
+            await page.mouse.click((left+right)/2,(top+bottom)/2);
+          }finally{await session.detach();}
+        };
+        await panelButton('Next');
+        await panelButton('Show field');
+        await page.waitForFunction(()=>document.querySelector('select')?.getAnimations().length,undefined,{timeout:5000});
+        await panelButton('Previous');
+        await panelButton('Show field');
+        await page.waitForFunction(()=>document.querySelectorAll('input[type=file]')[1]?.getAnimations().length,undefined,{timeout:5000});
+        await panelButton('Close field review');
+        await page.locator('#hunt-c3-field-review').waitFor({state:'detached'});
+        await findIssue(attachments,/Interview session/i);
+        await attachments.getByRole('button',{name:'Show field'}).click();
+        await page.waitForFunction(()=>document.querySelector('select')?.getAnimations().length,undefined,{timeout:5000});
+        await page.getByRole('combobox').evaluate(field=>field.closest('label')!.remove());
+      }
       const issues=(await issueMessages(attachments)).join(' ');
       assert.match(issues,/Transcript/i);
       assert.ok(issues.includes(message!),issues);
@@ -371,7 +432,7 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     const bambooUrl='https://fixture.bamboohr.com/careers/72/';
     await context.route(bambooUrl,route=>route.fulfill({contentType:'text/html',body:bambooAddressForm}));
     service.queue.configure(fixtureApplicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'fixture@example.invalid',
-      country:'Canada',region:'Alberta',postal_code:'T2P 1J9'}),resume);
+      country:'Canada',region:'Alberta',postal_code:'T2P 1J9',languages:'French: intermediate'}),resume);
     await page.goto(bambooUrl);
     const address=()=>page.locator('form').evaluate(form=>{
       const values=(name:string)=>form.querySelector<HTMLInputElement|HTMLSelectElement>('[name="'+name+'.value"]')!.value;
@@ -409,6 +470,96 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.deepEqual(await address(),{...canada,postal:'Owner edit'});
     await bambooPopup.close();
 
+    const feedbackUrl=new URL('/fixture/jobs/126',url).href;
+    await context.route(feedbackUrl,route=>route.fulfill({contentType:'text/html',body:`<form>
+      <label>First name<input autocomplete="given-name" required></label><label>Email<input type=email required></label>
+      <label>Please tell us a bit about your level of fluency in written and spoken French?<input name=french required value="Answer already on the draft"></label>
+      <label>Describe your preferred project cadence<textarea required></textarea></label>
+      <label>Resume<input type=file required></label><button>Submit application</button></form>`}));
+    await page.goto(feedbackUrl);
+    const feedback=await openPopup();
+    await page.evaluate(()=>document.addEventListener('submit',e=>{e.preventDefault();document.documentElement.dataset.submitted='yes';}));
+    await worker.evaluate(()=>(globalThis as any).chrome.action.openPopup());
+    await feedback.waitForFunction(()=>{
+      const view=(globalThis as any).chrome.extension.getViews({type:'popup'})[0];
+      return view?.document.getElementById('partial')?.disabled===false && view.document.getElementById('issue-view').hidden;
+    });
+    await feedback.evaluate(()=>(globalThis as any).chrome.extension.getViews({type:'popup'})[0].document.getElementById('partial').click());
+    await feedback.waitForFunction(()=>!(globalThis as any).chrome.extension.getViews({type:'popup'}).length);
+    await page.locator('#hunt-c3-field-review').waitFor();
+    assert.equal(await page.getByLabel('First name').inputValue(),'Fixture');
+    assert.equal(await page.locator('input[type=file]').evaluate((e:HTMLInputElement)=>e.files![0]!.text()),Buffer.from(resume,'base64').toString());
+    await worker.evaluate(()=>(globalThis as any).chrome.action.openPopup());
+    await feedback.waitForFunction(()=>{
+      const view=(globalThis as any).chrome.extension.getViews({type:'popup'})[0];
+      return view?.document.getElementById('issue-view')?.hidden===false;
+    });
+    await page.locator('#hunt-c3-field-review').waitFor({state:'hidden'});
+    await feedback.evaluate(()=>(globalThis as any).chrome.extension.getViews({type:'popup'})[0].close());
+    await page.locator('#hunt-c3-field-review').waitFor();
+    const toolbarHistory=await fetch(service.origin+'/browser/page-fill-log',{method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({tabId,expectedUrl:feedbackUrl})});
+    assert.equal(toolbarHistory.ok,true);
+    assert.equal((await toolbarHistory.json()).runs.length,1,'one toolbar click fills once and reopening only reviews');
+    assert.equal(await page.locator('html').getAttribute('data-submitted'),null);
+    await feedback.reload();
+    await findIssue(feedback,/written and spoken French/);
+    await feedback.getByRole('button',{name:'Show field'}).click();
+    const french=page.locator('input[name=french]');
+    await page.waitForFunction(()=>document.querySelector('input[name=french]')?.getAnimations().length);
+    assert.equal(await french.inputValue(),'Answer already on the draft');
+    await findIssue(feedback,/project cadence/);
+    await feedback.getByRole('button',{name:'Show field'}).click();
+    await page.waitForFunction(()=>document.querySelector('textarea')?.getAnimations().length);
+    await findIssue(feedback,/written and spoken French/);
+    await french.evaluate(e=>e.replaceWith(e.cloneNode(true)));
+    await feedback.getByRole('button',{name:'Show field'}).click();
+    await feedback.waitForFunction(()=>document.getElementById('status')?.textContent?.includes('could not be located'));
+    assert.equal(await french.evaluate(e=>e.getAnimations().length),0,'a replacement with the same label cannot receive the old jump');
+    await feedback.close();
+    // Use the same review renderer as the toolbar to inspect manual edits independently of Fill.
+    const editUrl=new URL('/fixture/jobs/edit-count',url).href;
+    await context.route(editUrl,route=>route.fulfill({contentType:'text/html',body:`
+      <form><label>Email<input type="email" value="fixture@example.invalid"></label>
+      <label>Address<input required minlength="3"></label><label>Postal code<input required></label>
+      <button type="button">Submit application</button></form>`}));
+    await page.goto(editUrl);
+    const initial=await send('inspect',undefined,editUrl);
+    assert.equal(initial.ok,true);
+    assert.deepEqual(initial.result.requiredIssues.map((issue:any)=>issue.label),['Address','Postal code']);
+    await popup.evaluate(async({tabId,editUrl,result})=>{
+      const path=(globalThis as any).chrome.runtime.getURL('fill-review-result.js');
+      const {summarizeFill,saveFillReview,showPageReview}=await import(path);
+      const {issues}=summarizeFill(result);
+      const saved=await saveFillReview(tabId,'fixture',result.documentId,issues);
+      if(!await showPageReview(tabId,editUrl,saved))throw new Error('Review did not open.');
+    },{tabId,editUrl,result:initial.result});
+    const panel=page.locator('#hunt-c3-field-review');
+    const manualAddress=page.getByLabel('Address');
+    const postal=page.getByLabel('Postal code');
+    const waitCount=async(labels:string[],message?:string)=>{
+      const key='fillReview:'+tabId;
+      let row;
+      for(let tries=0;tries<80;tries++){
+        row=await worker.evaluate(async key=>(await (globalThis as any).chrome.storage.session.get(key))[key],key);
+        if(JSON.stringify(row?.issues.map((i:any)=>i.label))===JSON.stringify(labels) &&
+           (!message || row.issues[0].message===message))return;
+        await new Promise(r=>setTimeout(r,100));
+      }
+      assert.deepEqual(row?.issues.map((i:any)=>[i.label,i.message]),labels,'live field review');
+    };
+    await panel.waitFor();
+    await manualAddress.fill('1');
+    await waitCount(['Address','Postal code'],'The current value needs a correction.');
+    await manualAddress.fill('123 Fixture Street');
+    await waitCount(['Postal code']);
+    assert.equal(await manualAddress.evaluate(node=>document.activeElement===node),true);
+    await postal.fill('K1A 0B1');
+    await waitCount([]);
+    await panel.waitFor({state:'hidden'});
+    await manualAddress.fill('');
+    await waitCount(['Address']);
+    await panel.waitFor();
     const libraryUrl=new URL('/fixture/jobs/301',url).href;
     await context.route(libraryUrl.replace('301','30*'), route=>route.fulfill({contentType:'text/html',
       body:'<form><label>First name<input autocomplete="given-name" required></label><label>Email<input type="email" required></label><label>Resume<input type="file" accept=".pdf" required></label><button>Submit application</button></form>'}));

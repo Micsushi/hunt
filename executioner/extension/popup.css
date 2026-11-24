@@ -103,6 +103,8 @@ body[data-compact] #resume-list { max-height: 108px; }
 #status:not(:empty) { margin-top: 6px; font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
 #status[data-error=true] { color: #ffccc6; }
 #issue-view { padding-top: 5px; }
+.review-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+#close-review { min-width:32px; min-height:32px; padding:0; font-size:20px; }
 #issue-description { border-left: 2px solid #e8bd79; padding-left: 9px; max-height: 130px; overflow-y: auto; }
 #issue-position { font-size: 11px; color: #eccc99; }
 #issue-label { white-space: normal; overflow-wrap: anywhere; font-size: 15px; line-height: 20px; }

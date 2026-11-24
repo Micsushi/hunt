@@ -2,7 +2,7 @@
 
 ## Layout
 
-Top navigation bar (sticky) + full-width content area. No sidebar.
+Desktop navigation stays above the workspace. At 860px and below, the Menu button opens navigation and account controls above the page.
 
 - Content max-width: 1280px, centred, 24px horizontal padding.
 - Page sections stack vertically, 24px gap.

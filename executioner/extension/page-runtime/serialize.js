@@ -14,6 +14,7 @@ import { createUploadVerification } from './upload-verification.js';
 import { createControlInteraction } from './control-interaction.js';
 import { createPhoneReader } from './phone-reader.js';
 import { ripplingLocationChoices } from '../page-adapters/rippling-location.js';
+import { greenhouseChoices } from '../page-adapters/greenhouse-select.js';
 import { revealRipplingPhoneSelection } from '../page-adapters/rippling-phone.js';
 
 import { observeWorkdayDocument } from '../workday-page.js';
@@ -22,6 +23,7 @@ import { addressGroupLabel } from '../page-adapters/jazz-address.js';
 import { createLeverResumeTitleReader } from '../page-adapters/lever-resume.js';
 import { clientAttachmentState, verifiedClientAttachment } from '../page-adapters/client-attachment.js';
 import { markedRequired, smartRecruitersUploadHeading } from '../page-adapters/required-markers.js';
+import { readUkgRequiredControl } from '../page-adapters/ukg-profile.js';
 import { createSmartRecruitersScreening } from '../page-adapters/smartrecruiters-screening.js';
 import { smartRecruitersCityChoices, smartRecruitersOptions } from '../page-adapters/smartrecruiters-city.js';
 import { createSearchChoiceReader } from '../page-adapters/workday-choice.js';
@@ -34,7 +36,7 @@ import { runPageFill } from './fill.js';
 export function fillPageDocument(input) {
   return runPageFill(input, {observeCurrentDocument, currentPageInterruption, createSearchChoiceReader, smartRecruitersCityChoices, createSmartRecruitersScreening,
     createFabricControl, createProvinceMenu, createBambooAddress, isPortalResumeBinding, jobviteScreeningPanel, jobviteRetainedResume, watchJobviteScreening, createJobviteGroups, createUploadStatusReader, addressGroupLabel, markedRequired, clientAttachmentState, verifiedClientAttachment,
-    ripplingLocationChoices, revealRipplingPhoneSelection, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, wrappedUploadTitle:createLeverResumeTitleReader(), noticeMarkers:workdayNoticeMarkers});
+    greenhouseChoices, ripplingLocationChoices, revealRipplingPhoneSelection, readRequiredControl:readUkgRequiredControl, customApplicationForm:smartRecruitersForm, uploadHeading:smartRecruitersUploadHeading, wrappedUploadTitle:createLeverResumeTitleReader(), noticeMarkers:workdayNoticeMarkers});
 }
 
 // Only shipped module functions enter the serialized program. Applicant data travels as a separate argument.
@@ -71,12 +73,14 @@ export const pageFillSource = isolatedFunction(fillPageDocument, [
   createPhoneReader,
   revealRipplingPhoneSelection,
   ripplingLocationChoices,
+  greenhouseChoices,
   observeWorkdayDocument,
   observeFormDocument,
   currentPageInterruption,
   addressGroupLabel,
   createLeverResumeTitleReader,
   markedRequired,
+  readUkgRequiredControl,
   clientAttachmentState,
   verifiedClientAttachment,
   isPortalResumeBinding,

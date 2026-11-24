@@ -4,7 +4,7 @@ import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const backgroundSource = readFileSync("extension/background.js", "utf8").replace(/^import .*workday-account.*\r?\n/m, "").replace(/^import .*page-actions.*\r?\n/m, "const pageActionTabs = new Set();\n").replace(/^import .*website-handoff.*\r?\n/m, "const registerWebsiteHandoff = () => {};\n").replace(/^import .*page-viewport.*\r?\n/m,"const preparePageViewport = globalThis.viewportFixture ?? (async()=>async()=>{}); const viewportOwnership = globalThis.ownershipFixture ?? (()=>({has:async()=>false})); const viewportCleanupPending = \"Hunt could not restore this tab's page size. Retry the job or page action to finish cleanup before filling.\";\n");
+const backgroundSource = readFileSync("extension/background.js", "utf8").replace(/^import .*current-page-fill.*\r?\n/m,"const createCurrentPageFill=()=>({busy:()=>false});\n").replace(/^import .*(?:workday-account|fill-review-result).*\r?\n/gm, "").replace(/^import .*page-actions.*\r?\n/m, "const pageActionTabs = new Set();\n").replace(/^import .*website-handoff.*\r?\n/m, "const registerWebsiteHandoff = () => {};\n").replace(/^import .*page-viewport.*\r?\n/m,"const preparePageViewport = globalThis.viewportFixture ?? (async()=>async()=>{}); const viewportOwnership = globalThis.ownershipFixture ?? (()=>({has:async()=>false})); const viewportCleanupPending = \"Hunt could not restore this tab's page size. Retry the job or page action to finish cleanup before filling.\";\n");
 const workerGlobals = { crypto: webcrypto, setTimeout, clearTimeout, setInterval, clearInterval };
 
 test('unsolicited detach preserves owned cleanup and never reattaches or clears',async()=>{
@@ -97,7 +97,7 @@ test("failed created tabs and failed CDP setup reuse the same tab without closin
     const url = "https://fixture.wd1.myworkdayjobs.com/en-US/Test/job/City/Job_R1";
     const event = { addListener() {} };
     const tabs = new Map<number, { id: number; url: string; status: string }>();
-    const chrome = { storage: { local: { get: async () => ({}) } }, runtime: { onMessage: event, onStartup: event },
+    const chrome = { storage: { local: { get: async () => ({}) }, session: {remove:async()=>{}} }, runtime: { onMessage: event, onStartup: event },
       tabs: {
         create: async () => { const tab = { id: ++created, url, status: failure === "load" ? "loading" : "complete" }; tabs.set(created, tab); return tab; },
         get: async (id: number) => { if (!tabs.has(id)) throw new Error(`No tab with id: ${id}`); return tabs.get(id); },

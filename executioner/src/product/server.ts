@@ -22,7 +22,7 @@ import { readMatchingBacklog, readPageFillLog, listFillHistoryPages } from './ma
 import { matchingDictionary } from '../form/questions/catalog.ts';
 import { answerDictionary } from '../deterministic/answer-equivalence.ts';
 
-export async function startProductServer(options: { root?: string; port?: number } = {}) {
+export async function startProductServer(options: { root?: string; port?: number; pausedQueueHash?: string } = {}) {
   const root = resolve(options.root ?? process.env.HUNT_C3_PRODUCT_ROOT ?? join(process.env.LOCALAPPDATA ?? homedir(), "Hunt", "c3-product"));
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const tokenPath = join(root, "service-token");
@@ -423,7 +423,7 @@ export async function startProductServer(options: { root?: string; port?: number
   const bridge = new ExtensionBridge(server, token, origin);
   let queue: ApplicationQueue;
   try {
-    queue = new ApplicationQueue(root, bridge);
+    queue = new ApplicationQueue(root, bridge, undefined, undefined, options.pausedQueueHash);
     if (!queue.snapshot().configured && process.env.HUNT_C3_PROFILE_PATH && process.env.HUNT_C3_RESUME_PATH) {
       const resumePath=process.env.HUNT_C3_RESUME_PATH;
       queue.configure(JSON.parse(readFileSync(process.env.HUNT_C3_PROFILE_PATH, "utf8")), readFileSync(resumePath).toString("base64"), basename(resumePath));

@@ -96,7 +96,7 @@ export async function fillMatchedPage(input:{profile:unknown;resume:Buffer;url:s
       for(const row of result.matching??[]) if(row.outcome==='verified' &&
           result.matching?.filter(other=>other.fieldId===row.fieldId && other.frameId===row.frameId).length===1) {
         for(const [key,skip] of skipped) if(skip.fieldId===row.fieldId && skip.frameId===row.frameId &&
-          skip.label===row.question && skip.reason==='field_changed_before_fill') skipped.delete(key);
+          skip.label===row.question && ['field_changed_before_fill','phone_country_requires_review'].includes(skip.reason)) skipped.delete(key);
       }
       for(const row of result.matching??[]) backlog.record({...row,provisional:row.provisional || row.outcome!=='verified'});
       if(finalRound)result={...result,incomplete:true};

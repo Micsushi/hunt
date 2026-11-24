@@ -7,12 +7,12 @@
     <style>
       :root {
         color-scheme: light;
-        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        font-family: "Segoe UI", system-ui, sans-serif;
         --ink: #18211b;
         --muted: #5d675f;
-        --paper: #f4f1e8;
-        --panel: #fffdf7;
-        --line: #d8d2c3;
+        --paper: #eef3ef;
+        --panel: #ffffff;
+        --line: #c1d0c5;
         --accent: #285c45;
         --danger: #a12d2d;
         --warning: #8a5b00;
@@ -30,19 +30,50 @@
         gap: 1rem;
         align-items: center;
         justify-content: space-between;
-        padding: 0.75rem 1rem;
-        background: var(--panel);
+        flex-wrap: wrap;
+        padding: 1rem clamp(1rem, 3vw, 2.5rem);
+        background: #193d2c;
+        color: #f5faf6;
         border-bottom: 1px solid var(--line);
+      }
+      header > div {
+        min-width: 0;
+      }
+      header .status {
+        color: #c4d9c9;
+        overflow-wrap: anywhere;
+      }
+      header .status[data-state="error"] {
+        color: #ffc5ba;
+      }
+      header button {
+        border-color: #8da797;
+      }
+      header button.secondary {
+        background: transparent;
+        color: #f5faf6;
+      }
+      header #build {
+        background: #b9dfbc;
+        color: #173b25;
+        border-color: transparent;
+      }
+      header button span,
+      #check span {
+        font-size: 0.75em;
+        margin-left: 0.25em;
+        opacity: 0.85;
       }
       h1,
       h2 {
         margin: 0;
       }
       h1 {
-        font-size: 1.1rem;
+        font-size: clamp(1.4rem, 2.2vw, 1.8rem);
+        line-height: 1.2;
       }
       h2 {
-        font-size: 0.95rem;
+        font-size: 1.05rem;
       }
       button,
       input,
@@ -64,7 +95,13 @@
       }
       button:disabled {
         opacity: 0.55;
-        cursor: wait;
+        cursor: not-allowed;
+      }
+      main button:disabled {
+        background: #e5ece6;
+        border-color: #bccabd;
+        color: #4b5d50;
+        opacity: 1;
       }
       button:focus-visible,
       input:focus-visible,
@@ -97,7 +134,7 @@
       }
       .column {
         min-width: 0;
-        padding: 1rem;
+        padding: clamp(0.75rem, 2vw, 1.5rem);
       }
       .column + .column {
         border-left: 1px solid var(--line);
@@ -106,15 +143,16 @@
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 0.5rem;
-        padding: 0.8rem;
-        margin-bottom: 0.8rem;
+        padding: clamp(0.85rem, 2vw, 1.25rem);
+        margin-bottom: 1rem;
       }
       .section-header {
         display: flex;
         justify-content: space-between;
         gap: 0.75rem;
         align-items: center;
-        margin-bottom: 0.65rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.85rem;
       }
       textarea {
         width: 100%;
@@ -135,7 +173,23 @@
         min-height: 52vh;
         border: 1px solid var(--line);
         border-radius: 0.35rem;
-        background: #e7e5df;
+        background: #e2ebe4;
+      }
+      iframe:not([src]),
+      iframe[src] + .preview-empty {
+        display: none;
+      }
+      .preview-empty {
+        margin: 0;
+        border: 1px dashed var(--line);
+        border-radius: 0.35rem;
+        padding: 2rem 1rem;
+        color: var(--muted);
+        text-align: center;
+      }
+      #tools {
+        padding-left: 1.2rem;
+        line-height: 1.6;
       }
       #findings {
         margin: 0;
@@ -175,9 +229,21 @@
         white-space: nowrap;
         border: 0;
       }
+      @media (max-width: 560px) {
+        .toolbar {
+          gap: 0.4rem;
+        }
+        header button span,
+        #check span {
+          display: none;
+        }
+        .output-controls input[type="text"] {
+          max-width: 100%;
+        }
+      }
       @media (max-width: 960px) {
         main {
-          grid-template-columns: 1fr;
+          grid-template-columns: minmax(0, 1fr);
         }
         .column + .column {
           border-left: 0;
@@ -194,10 +260,12 @@
       </div>
       <div class="toolbar" aria-label="Source and build actions">
         <span id="dirty-state" class="status">Saved</span>
-        <button id="save" type="button" disabled>
+        <button id="save" type="button" class="secondary" disabled>
           Save <span aria-hidden="true">Ctrl+S</span>
         </button>
-        <button id="build" type="button">Build <span aria-hidden="true">Ctrl+B</span></button>
+        <button id="build" type="button" disabled>
+          Build <span aria-hidden="true">Ctrl+B</span>
+        </button>
         <button id="cancel-build" type="button" class="secondary" disabled>Cancel</button>
       </div>
     </header>
@@ -217,7 +285,7 @@
             <h2 id="checks-title">Local findings</h2>
             <div class="toolbar">
               <span id="privacy" class="privacy">Stayed local</span>
-              <button id="check" type="button">
+              <button id="check" type="button" disabled>
                 Run checks <span aria-hidden="true">Ctrl+Enter</span>
               </button>
             </div>
@@ -233,6 +301,7 @@
             <span id="build-status" class="status">Not built</span>
           </div>
           <iframe id="pdf" title="Temporary resume PDF preview"></iframe>
+          <p class="preview-empty">Build a preview to see your PDF here.</p>
         </div>
         <div class="section" aria-labelledby="output-title">
           <div class="section-header">
@@ -242,7 +311,7 @@
             <label for="output-name">Filename</label>
             <input id="output-name" type="text" value="resume.pdf" autocomplete="off" />
             <label><input id="overwrite" type="checkbox" /> Confirm overwrite</label>
-            <button id="save-output" type="button">Save verified PDF</button>
+            <button id="save-output" type="button" disabled>Save verified PDF</button>
           </div>
           <p id="output-status" class="status">Preview files are temporary until saved here.</p>
         </div>
@@ -285,7 +354,14 @@
         source: "",
         revision: "",
         savedText: "",
-        building: false,
+        preview: null,
+        saving: false,
+        compiling: false,
+        checking: false,
+        exporting: false,
+        checkKey: "",
+        outputMessage: "",
+        saveError: "",
         statusRequest: 0,
         refreshing: false
       };
@@ -306,10 +382,75 @@
         elements["live-status"].textContent = message;
       }
 
-      function renderDirty() {
+      function currentPreviewBuildId(preview, revision) {
+        return revision &&
+          preview?.state === "current" &&
+          preview.ok &&
+          !preview.stale &&
+          preview.source_revision === revision &&
+          preview.artifact_revision === revision &&
+          preview.artifact &&
+          preview.pdfUrl &&
+          preview.lastGoodBuildId &&
+          preview.buildId === preview.lastGoodBuildId
+          ? preview.lastGoodBuildId
+          : null;
+      }
+
+      function syncControls() {
+        const preview = state.preview;
         const dirty = elements.editor.value !== state.savedText;
-        elements["dirty-state"].textContent = dirty ? "Unsaved changes" : "Saved";
-        elements.save.disabled = !dirty;
+        const loaded = Boolean(state.revision);
+        const outsideEdit = preview && preview.source_revision !== state.revision;
+        const busyBuild = state.compiling || preview?.state === "running";
+        const saved = loaded && !dirty && !state.saving && !outsideEdit;
+        const buildId = currentPreviewBuildId(preview, state.revision);
+        const current = saved && !busyBuild && Boolean(buildId);
+        elements.save.disabled = !dirty || state.saving;
+        elements.build.disabled = !saved || busyBuild;
+        elements["cancel-build"].disabled = !busyBuild;
+        elements.check.disabled = !saved || !preview || busyBuild || state.checking;
+        elements["save-output"].disabled = !current || state.exporting;
+        elements["dirty-state"].textContent =
+          state.saveError || (dirty ? "Unsaved changes" : "Saved");
+        elements["dirty-state"].dataset.state = state.saveError ? "error" : "";
+
+        const key =
+          saved && preview && !busyBuild ? state.revision + "/" + (buildId || "source") : "";
+        if (state.checkKey !== key) {
+          state.checkKey = key;
+          elements.findings.replaceChildren();
+          elements["check-summary"].textContent = dirty
+            ? "Save your edits to run checks."
+            : outsideEdit
+              ? "Reload the changed source to run checks."
+              : "Run checks on the saved version.";
+          state.outputMessage = "";
+          elements["output-status"].dataset.state = "";
+        }
+        elements["output-status"].textContent = current
+          ? state.outputMessage || "Save a copy of the PDF shown above."
+          : dirty
+            ? "Save your edits, then build their PDF."
+            : "Build a current preview to save its PDF.";
+        const previousMessage = elements["build-status"].textContent;
+        elements["build-status"].textContent = dirty
+          ? elements.pdf.hasAttribute("src")
+            ? "Preview shows the last built version. Save your edits before building."
+            : "Save your edits before building."
+          : outsideEdit
+            ? "The source changed on disk. Reload it before building."
+            : busyBuild
+              ? "Building preview..."
+              : preview?.message || "Preview freshness unavailable.";
+        elements["build-status"].dataset.state =
+          dirty || outsideEdit || preview?.stale || !preview
+            ? "warning"
+            : !preview.ok && preview.state === "failed" && preview.buildId !== null
+              ? "error"
+              : "";
+        if (previousMessage !== elements["build-status"].textContent)
+          announce(elements["build-status"].textContent);
       }
 
       async function loadSource() {
@@ -320,12 +461,15 @@
         elements.editor.value = source.text;
         elements.editor.disabled = false;
         elements["source-name"].textContent = source.name;
-        renderDirty();
+        state.saveError = "";
+        syncControls();
         announce("Source loaded.");
       }
 
       async function saveSource() {
-        elements.save.disabled = true;
+        state.saving = true;
+        state.saveError = "";
+        syncControls();
         try {
           const source = await request("/api/source", {
             method: "PUT",
@@ -333,34 +477,30 @@
           });
           state.revision = source.revision;
           state.savedText = source.text;
-          renderDirty();
+          state.preview = null;
+          state.statusRequest += 1;
           announce("Source saved.");
         } catch (error) {
-          elements["dirty-state"].textContent = error.message;
-          elements["dirty-state"].dataset.state = "error";
+          state.saveError = error.message;
           announce(error.message);
+        } finally {
+          state.saving = false;
+          syncControls();
+          void refreshBuild();
         }
       }
 
       function renderBuild(data) {
         state.statusRequest += 1;
-        const previousMessage = elements["build-status"].textContent;
-        state.building = data.state === "running";
-        elements.build.disabled = state.building;
-        elements["cancel-build"].disabled = !state.building;
-        const suffix = data.stale ? " (last good PDF is stale)" : "";
-        elements["build-status"].textContent = `${data.message}${suffix}`;
-        elements["build-status"].dataset.state = data.ok ? "" : data.stale ? "warning" : "error";
+        state.preview = data;
         if (data.pdfUrl && elements.pdf.getAttribute("src") !== data.pdfUrl)
           elements.pdf.src = data.pdfUrl;
         if (data.pdfUrl === "" && data.state !== "running") elements.pdf.removeAttribute("src");
-        if (previousMessage !== elements["build-status"].textContent) {
-          announce(elements["build-status"].textContent);
-        }
+        syncControls();
       }
 
       async function refreshBuild() {
-        if (state.refreshing || document.hidden || !state.csrf) return;
+        if (state.compiling || state.refreshing || document.hidden || !state.csrf) return;
         state.refreshing = true;
         const requestId = ++state.statusRequest;
         try {
@@ -368,9 +508,8 @@
           if (requestId === state.statusRequest) renderBuild(data);
         } catch {
           if (requestId === state.statusRequest) {
-            elements["build-status"].textContent =
-              "Preview freshness unavailable. Reconnect or reload to verify.";
-            elements["build-status"].dataset.state = "warning";
+            state.preview = null;
+            syncControls();
           }
         } finally {
           state.refreshing = false;
@@ -386,27 +525,60 @@
       });
 
       async function build() {
-        renderBuild({ state: "running", message: "Building…", stale: false, ok: false });
+        if (elements.build.disabled) return;
+        state.compiling = true;
+        state.statusRequest += 1;
+        syncControls();
         try {
-          renderBuild(await request("/api/compile", { method: "POST", body: "{}" }));
+          renderBuild(
+            await request("/api/compile", {
+              method: "POST",
+              body: JSON.stringify({ revision: state.revision })
+            })
+          );
         } catch (error) {
-          renderBuild({ state: "failed", message: error.message, stale: false, ok: false });
+          renderBuild({ state: "failed", message: error.message, source_revision: state.revision });
+        } finally {
+          state.compiling = false;
+          syncControls();
+          void refreshBuild();
         }
       }
 
       async function runChecks() {
-        elements.check.disabled = true;
+        if (elements.check.disabled) return;
+        state.checking = true;
+        const key = state.checkKey;
+        const buildId = currentPreviewBuildId(state.preview, state.revision);
+        syncControls();
         elements["check-summary"].textContent = "Running local checks…";
         try {
           const result = await request("/api/check", {
             method: "POST",
-            body: JSON.stringify({ suite: "local", profile: "normal" })
+            body: JSON.stringify({
+              suite: "local",
+              profile: "normal",
+              revision: state.revision,
+              buildId
+            })
           });
-          elements["check-summary"].textContent = result.message;
+          if (
+            state.checkKey !== key ||
+            result.revision !== state.revision ||
+            result.buildId !== buildId
+          )
+            return;
+          elements.findings.replaceChildren();
+          if (result.state !== "complete" || !result.report) {
+            elements["check-summary"].textContent = result.message;
+            announce(result.message);
+            return;
+          }
+          elements["check-summary"].textContent =
+            result.message + (buildId ? " Checked source and PDF." : " Checked source only.");
           elements.privacy.textContent = result.report?.content_left_machine
             ? "Content left this machine"
             : "Stayed local";
-          elements.findings.replaceChildren();
           for (const finding of result.report?.checks || []) {
             if (finding.status === "pass") continue;
             const item = document.createElement("li");
@@ -423,32 +595,46 @@
           }
           announce(`Checks complete: ${result.status}.`);
         } catch (error) {
-          elements["check-summary"].textContent = error.message;
-          announce(error.message);
+          if (state.checkKey === key) {
+            elements["check-summary"].textContent = error.message;
+            announce(error.message);
+          }
         } finally {
-          elements.check.disabled = false;
+          state.checking = false;
+          syncControls();
         }
       }
 
       async function saveOutput() {
-        elements["save-output"].disabled = true;
+        if (elements["save-output"].disabled) return;
+        state.exporting = true;
+        const key = state.checkKey;
+        syncControls();
         try {
           const result = await request("/api/output", {
             method: "POST",
             body: JSON.stringify({
+              revision: state.revision,
+              buildId: currentPreviewBuildId(state.preview, state.revision),
               name: elements["output-name"].value,
               overwrite: elements.overwrite.checked
             })
           });
-          elements["output-status"].textContent =
-            `${result.name} saved and verified.`;
-          announce(elements["output-status"].textContent);
+          if (state.checkKey === key) {
+            state.outputMessage = result.name + " saved and verified.";
+            elements["output-status"].dataset.state = "";
+            announce(state.outputMessage);
+          }
         } catch (error) {
-          elements["output-status"].textContent = error.message;
-          elements["output-status"].dataset.state = "error";
-          announce(error.message);
+          if (state.checkKey === key) {
+            state.outputMessage = error.message;
+            elements["output-status"].dataset.state = "error";
+            announce(error.message);
+          }
         } finally {
-          elements["save-output"].disabled = false;
+          state.exporting = false;
+          syncControls();
+          void refreshBuild();
         }
       }
 
@@ -472,7 +658,10 @@
         }
       }
 
-      elements.editor.addEventListener("input", renderDirty);
+      elements.editor.addEventListener("input", () => {
+        state.saveError = "";
+        syncControls();
+      });
       elements.save.addEventListener("click", saveSource);
       elements.reload.addEventListener("click", loadSource);
       elements.build.addEventListener("click", build);

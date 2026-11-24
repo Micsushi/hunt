@@ -562,6 +562,8 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
           {editingBlockId ? (
             <div className={styles.smallStack}>
               <textarea
+                key={editingBlockId}
+                autoFocus
                 className={styles.textarea}
                 aria-label={
                   blocks.find((block) => block.blockId === editingBlockId)?.label ?? 'Resume text'
@@ -884,21 +886,22 @@ function ReviewToolbar({
   const compileFailed = !!version?.compile_status && version.compile_status !== 'ok'
   const pdfUnavailable = compileFailed && !version?.compiled_revision
   const statusSuffix = dirty
-    ? ' : unsaved draft'
+    ? 'Unsaved draft'
     : version?.dirty
-      ? ' : uncompiled edits'
+      ? 'Uncompiled edits'
       : pdfUnavailable
-        ? ' : PDF compile failed'
+        ? 'PDF compile failed'
         : compileFailed
-          ? ' : latest compile failed'
+          ? 'Latest compile failed'
           : ''
   return (
     <div className={styles.toolbar}>
       <div className={styles.toolbarGroup}>
-        <div className={styles.segmented}>
+        <div className={styles.segmented} role="group" aria-label="Resume version">
           {versions.map((item) => (
             <button
               key={item}
+              aria-pressed={item === versionName}
               className={item === versionName ? styles.active : ''}
               onClick={() => onVersion(item)}
             >
@@ -912,10 +915,10 @@ function ReviewToolbar({
         </div>
         <span className={styles.meta}>
           {changedCount} changed block{changedCount === 1 ? '' : 's'}
-          {statusSuffix}
+          {statusSuffix && ` · ${statusSuffix}`}
         </span>
       </div>
-      <div className={styles.toolbarGroup}>
+      <div className={styles.toolbarGroup} role="group" aria-label="Edit history">
         <button className={styles.button} disabled={!canUndo} onClick={onUndo}>
           Undo
         </button>
@@ -925,6 +928,8 @@ function ReviewToolbar({
         <button className={styles.button} onClick={onUndoAll}>
           Undo all
         </button>
+      </div>
+      <div className={styles.toolbarGroup} role="group" aria-label="Save and compile">
         <button
           className={styles.buttonPrimary}
           disabled={!dirty || saving || compiling || editing}
@@ -933,12 +938,14 @@ function ReviewToolbar({
           {saving ? 'Saving...' : 'Save'}
         </button>
         <button
-          className={styles.buttonPrimary}
+          className={dirty ? styles.button : styles.buttonPrimary}
           disabled={compiling || saving || editing}
           onClick={onCompile}
         >
           {compiling ? 'Compiling...' : 'Compile'}
         </button>
+      </div>
+      <div className={styles.toolbarGroup} role="group" aria-label="Open files">
         <button
           className={styles.button}
           disabled={!version?.pdf_url || pdfUnavailable}
@@ -954,7 +961,11 @@ function ReviewToolbar({
         >
           TeX
         </button>
-        <button className={styles.button} onClick={() => onOpenLink(review.log_url)}>
+        <button
+          className={styles.button}
+          disabled={!review.log_url}
+          onClick={() => onOpenLink(review.log_url)}
+        >
           Log
         </button>
       </div>

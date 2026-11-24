@@ -15,7 +15,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 8px;
+}
+
+.checkResults:empty {
+  margin: 0;
 }
 
 .checkResults ul {
@@ -32,7 +35,7 @@
 
 .pageHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
@@ -98,6 +101,16 @@
   gap: 12px;
 }
 
+.uploadGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 20px 24px;
+}
+.uploadGrid > section,
+.uploadGrid > .activeRunNotice {
+  grid-column: 1 / -1;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -133,7 +146,7 @@
   font-size: 0.875rem;
   color: var(--ink);
   resize: vertical;
-  min-height: 110px;
+  min-height: 96px;
   font-family: inherit;
   font-weight: 400;
   text-transform: none;
@@ -147,6 +160,12 @@
 
 .fileRow {
   display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  min-height: 96px;
+  padding: 14px;
+  background: var(--panel-strong);
+  border: 1px dashed var(--line);
   align-items: center;
   gap: 8px;
   border-radius: var(--radius-sm);
@@ -171,8 +190,6 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 36px;
-  padding: 0 14px;
   border-radius: var(--radius-sm);
   font-size: 0.875rem;
   font-weight: 500;
@@ -233,7 +250,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 16px;
   border-radius: var(--radius-sm);
   font-size: 0.875rem;
   font-weight: 600;
@@ -244,13 +260,10 @@
   transition:
     background var(--ease),
     border-color var(--ease);
-  white-space: nowrap;
   text-decoration: none;
-
   min-height: 40px;
   height: auto;
   padding: 8px 16px;
-  font-size: 0.875rem;
   line-height: 1.4;
   white-space: normal;
 }
@@ -313,17 +326,16 @@
   gap: 4px;
   padding: 10px 14px;
   border-radius: var(--radius-sm);
-  background: var(--warn-soft, #fff8e1);
-  color: var(--warn, #a07000);
-  border: 1px solid var(--warn, #a07000);
+  background: var(--warning-soft);
+  color: var(--warning);
+  border: 1px solid var(--warning);
   font-size: 0.875rem;
 }
 
 .llmErrorDetail {
-  font-size: 0.78rem;
-  opacity: 0.75;
-  font-family: monospace;
-  word-break: break-all;
+  font-size: 0.82rem;
+  color: var(--danger);
+  overflow-wrap: anywhere;
 }
 
 .activeRunNotice {
@@ -346,7 +358,6 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 18px;
-  box-shadow: var(--shadow);
 }
 
 .queueHeader {
@@ -359,7 +370,7 @@
 
 .queueList {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 
 .queueListScrollable {
@@ -374,20 +385,16 @@
   grid-template-columns: minmax(0, 1fr) minmax(360px, 36%);
   align-items: center;
   gap: 12px;
-  height: 112px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--panel-strong);
-  overflow: hidden;
+  padding: 14px 4px;
+  border-top: 1px solid var(--line);
 }
 
 .queueCardSelectable {
-  grid-template-columns: 28px minmax(0, 1fr) minmax(360px, 34%);
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   position: relative;
   min-height: 78px;
   height: auto;
-  padding: 8px 12px;
+  padding: 10px 4px;
   overflow: visible;
 }
 
@@ -498,32 +505,32 @@
 }
 
 .historyActions {
-  grid-template-columns: minmax(116px, 1fr) minmax(108px, 1fr) minmax(72px, 0.8fr) 40px;
-  overflow: visible;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.historyActions .btn {
+  width: auto;
 }
 
 .moreMenu {
-  position: relative;
-  justify-self: stretch;
-  width: 100%;
-  z-index: 2;
-}
-
-.moreMenu[open] {
-  z-index: 30;
+  text-align: right;
 }
 
 .moreMenu summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  min-height: 34px;
+  min-height: 40px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--panel-strong);
   color: var(--ink);
   cursor: pointer;
+  min-width: 40px;
+  width: auto;
   font-size: 1.18rem;
   font-weight: 800;
   line-height: 1;
@@ -544,32 +551,29 @@
 }
 
 .moreMenuPanel {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  z-index: 20;
   display: grid;
-  min-width: 164px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  box-shadow: var(--shadow);
+  text-align: left;
+  margin-top: 6px;
+  border-left: 2px solid var(--line);
 }
 
-.moreMenuPanel a {
-  display: block;
-  padding: 9px 12px;
+.moreMenuPanel a,
+.moreMenuPanel button {
+  padding: 8px 12px;
   color: var(--ink);
+  font: inherit;
   font-size: 0.84rem;
-  font-weight: 650;
+  font-weight: 600;
   text-decoration: none;
-  white-space: nowrap;
+  text-align: left;
+  border: 0;
+  background: transparent;
 }
-
-.moreMenuPanel a:hover {
+.moreMenuPanel .menuDanger {
+  color: var(--danger);
+}
+.moreMenuPanel :is(a, button):hover {
   background: var(--panel-hover);
-  text-decoration: none;
 }
 
 .batchToolbar {
@@ -830,23 +834,28 @@
     overflow: visible;
     white-space: normal;
   }
-  .workflowGrid {
-    grid-template-columns: 1fr;
+  .uploadGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
   }
-  .historyMetaGrid {
-    flex-wrap: wrap;
-    gap: 4px 12px;
+  .fileRow {
+    min-height: 64px;
+    padding: 10px;
   }
   .queueCard {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
-  .queueCardSelectable {
-    grid-template-columns: 28px minmax(0, 1fr);
+  .queueCardSelectable,
+  .queueCardActiveSelectable {
+    grid-template-columns: 24px minmax(0, 1fr);
     height: auto;
     min-height: 92px;
   }
-  .queueCardSelectable .queueActions {
+  .historyActions {
+    justify-content: flex-start;
+  }
+  .queueCard .queueActions {
     grid-column: 1 / -1;
   }
   .queueActions {

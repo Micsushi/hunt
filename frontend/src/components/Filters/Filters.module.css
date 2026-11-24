@@ -1,26 +1,24 @@
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 16px;
-  box-shadow: var(--shadow);
-  margin-bottom: 12px;
 }
 
 .filterRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 14px;
   align-items: flex-end;
 }
 
 .filterGroup {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   max-width: 100%;
 }
 
@@ -29,12 +27,10 @@
 }
 
 .filterLabel {
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--muted);
-  line-height: 1;
+  line-height: 1.25;
 }
 
 /* Search input with spinner overlay */
@@ -46,6 +42,7 @@
 
 .searchInput {
   width: 100%;
+  min-height: 40px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 8px 32px 8px 10px;
@@ -90,7 +87,7 @@
   background: var(--panel-strong);
   color: var(--ink);
   font-size: 0.9rem;
-  height: 36px;
+  min-height: 40px;
   min-width: 0;
   box-sizing: border-box;
 }
@@ -100,7 +97,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 0 14px;
-  height: 36px;
+  min-height: 40px;
   font-size: 0.88rem;
   font-weight: 600;
   cursor: pointer;
@@ -140,6 +137,7 @@
   background: var(--panel);
   color: var(--ink);
   border-radius: var(--radius-sm);
+  min-height: 36px;
   padding: 4px 10px;
   font-size: 0.82rem;
   font-weight: 600;
@@ -163,4 +161,24 @@
 
 .displayOptions[open] > div {
   margin-top: 10px;
+}
+
+@media (max-width: 620px) {
+  .filterRow {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .filterGroupSearch {
+    grid-column: 1 / -1;
+  }
+  .filterRow .select {
+    width: 100%;
+  }
+  .resetBtn {
+    width: fit-content;
+  }
+  .limitRow {
+    flex-wrap: wrap;
+  }
 }

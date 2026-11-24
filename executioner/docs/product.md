@@ -2,6 +2,15 @@
 
 **C3.1** prepares queued applications on Workday, Greenhouse, Workable, Lever and Ashby. **C3.2** is the extension's current-page fill.
 
+On recognized hiring sites, the top-right **Fill current page** button fills the form in one click using the résumé selected for that page. To check or change the résumé first, open Hunt from the Chrome toolbar. Choosing **Fill current page** there closes the toolbar popup while the fill runs. If a field needs attention, the review appears on the form. Opening the toolbar shows the same review.
+
+On Greenhouse, Hunt searches the application’s dropdowns and checks the selected
+answer after the menu closes. For Phone, it verifies the selected country before
+entering the number. If Greenhouse offers no way to clear that country, Undo
+keeps the selection and tells you. You can still change the country on the form.
+
+When a fill leaves issues, the field review stays on the form while you edit. Use **Show field** to highlight a located control, **Previous** and **Next** to move through the findings, and **×** to close the review. Reopen C3 to check which fields still need attention.
+
 Queued applications skip optional fields by default. **Fill current page** can fill
 an empty standard profile field when its label matches a saved answer, including
 an optional LinkedIn or portfolio URL. Existing entries are preserved. Fields that
@@ -108,6 +117,9 @@ After a fill, the popup shows fields that still need attention. Use **Previous**
 and **Next** to review them one at a time. **Show field** takes you to the
 corresponding control when C3 can identify it on the current page. Complete the
 field on the employer's form, then reopen the popup to recheck the page.
+If a fill is interrupted, C3 tries to read the same page again. A successful
+recheck enables **Show field** for controls that still need attention. If the
+page is inaccessible, the popup labels earlier observations as unconfirmed.
 
 Open **Full menu → Fill history** for the field-by-field record. Choose a page
 to see its recent fills, including fields that already matched and fields left
@@ -644,6 +656,13 @@ establish support for the entire Dover application flow or other unknown sites.
 
 ## Workday sign-in compatibility
 
+On any site where Chrome grants Hunt access, **Fill current page** can inspect the
+employer document and its same-origin embedded forms directly. This keeps field
+checks, Show field and Undo available when a password-manager suggestion is open.
+Open Hunt from the Chrome toolbar to grant access on a custom domain. Hunt leaves
+another extension's controls alone and reports inaccessible embedded sections.
+Completing an employer sign-in with saved credentials is a separate Workday feature.
+
 Extension 0.1.14 uses Chrome's isolated main-frame scripting API for existing-account
 Workday sign-in before attaching the application-filling debugger. It needs website
 access to `*.myworkdayjobs.com` and `*.myworkdaysite.com`; it does not inspect password
@@ -660,6 +679,13 @@ Application filling still stops for review before submission. Compatibility with
 particular password manager requires a live check; fixture coverage alone is not proof.
 
 ### Reloading the paired extension
+
+For a local service update while the same paired Chrome session stays open,
+pause the queue and verify the tab list. Pass
+`--preserve-paused-tabs=<SHA-256 of jobs.json>` to the product launcher for
+that restart only. A changed queue stops the restart. Paused and archived
+drafts keep their saved tab numbers, and Hunt checks the posting again before
+using a tab. Omit the option for a new Chrome session.
 
 From extension 0.1.15, `hunt_extension_reload` reloads Hunt through Chrome's own
 `runtime.reload()` API. The authenticated local endpoint is

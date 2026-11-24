@@ -172,6 +172,88 @@ test('generic React Select leaves the Sirion country unchanged without a verifie
   }
 });
 
+test('Greenhouse current-page fill verifies React selections, dependent phone and scoped education, then replays them', async () => {
+  const browser=await chromium.launch();
+  try {
+    const page=await browser.newPage(),url='https://job-boards.greenhouse.io/fixture/jobs/123';
+    const profile=applicantProfile({given_name:'Fixture',family_name:'Applicant',email_address:'test@example.invalid',
+      country:'Canada',region:'Alberta',city:'Edmonton',phone_number:'7805550148',education_institution:'Example University',
+      education_degree:"Bachelor's Degree",education_field_of_study:'Computer Science',education_start_year:'2019',education_end_year:'2023'});
+    const fields=[
+      ['country','Country'],['candidate-location','Location (City)'],['school--0','School'],
+      ['degree--0','Degree'],['discipline--0','Discipline'],['source','How did you first learn about Fixture as an employer?'],
+    ];
+    const picker=([id,label]:string[])=>`<label for="${id}">${label}</label>
+      <div class="select-shell"><div class="select__control"><div class="select__value-container"><input id="${id}"
+      class="select__input" role="combobox" aria-autocomplete="list" aria-expanded="false"
+      aria-required="${id!=='school--0'}"></div><div class="select__indicators"></div></div></div>`;
+    const year=(when:string)=>`<label>${when} date year<input id="${when.toLowerCase()}-year--0" type=number required></label>`;
+    await page.route(url,r=>r.fulfill({contentType:'text/html',body:`<main><h1>Job application</h1><form>
+      <label>First name<input required></label><label>Email<input required type=email></label>
+      <fieldset class="phone-input"><div class="phone-input__country">${picker(fields[0]!)}</div>
+      <div class="phone-input__phone"><label>Phone<input type=tel id=phone class=iti__tel-input data-intl-tel-input-id=0 required></label></div></fieldset>
+      ${picker(fields[1]!)}<div class="education--form">${fields.slice(2,5).map(picker).join('')}${year('Start')}${year('End')}</div>
+      ${picker(fields[5]!)}<button type=submit>Submit application</button></form></main>`}));
+    await page.goto(url);
+    await page.evaluate(() => {
+      const answers:Record<string,string[]>={
+        country:['United States +1','Canada +1'],'candidate-location':['Edmonton, England, United Kingdom','Edmonton, Alberta, Canada'],
+        'school--0':['Example University'],'degree--0':["Bachelor's Degree"],'discipline--0':['Computer Science'],source:['Employee referral','LinkedIn'],
+      };
+      document.forms[0]!.onsubmit=event=>{event.preventDefault();throw Error('Application submission was attempted');};
+      for (const input of document.querySelectorAll<HTMLInputElement>('input[role=combobox]')) {
+        const shell=input.closest('.select-shell')!, container=input.parentElement!, indicators=shell.querySelector('.select__indicators')!;
+        const close=()=>{shell.querySelector('[role=listbox]')?.remove();input.setAttribute('aria-expanded','false');input.value='';};
+        function menu() {
+          shell.querySelector('[role=listbox]')?.remove();
+          const list=document.createElement('div');list.id=input.id+'-menu';list.role='listbox';shell.append(list);
+          input.setAttribute('aria-controls',list.id);input.setAttribute('aria-expanded','true');
+          const matches=answers[input.id]!.filter(value=>value.toLowerCase().includes(input.value.toLowerCase()));
+          // Require a search for the country, so the first phone write is deferred.
+          for (const value of input.id==='country' && !input.value ? [] : matches) {
+            const option=document.createElement('div');option.role='option';option.textContent=value;list.append(option);
+            if(input.id==='country')option.insertAdjacentHTML('afterbegin','<i class="iti__flag iti__'+(value.startsWith('Canada')?'ca':'us')+'"></i>');
+            option.onclick=()=>{
+              close();
+              container.querySelector('.select__single-value')?.remove();
+              const selected=document.createElement('div');selected.className='select__single-value';container.prepend(selected);
+              if(input.id==='country'){selected.innerHTML=option.querySelector('i')!.outerHTML+'+1';return;}
+              selected.textContent=value;
+              setTimeout(()=>{
+                const clear=document.createElement('button');clear.type='button';clear.dataset.testid='clear-selection';clear.textContent='Clear';
+                clear.onkeydown=event=>{if(event.key==='Enter'){selected.remove();clear.remove();close();}};
+                indicators.append(clear);
+              },input.id==='candidate-location'?170:0);
+            };
+          }
+        }
+        input.onkeyup=event=>{if(event.key==='ArrowDown')menu();if(event.key==='Escape')close();};
+        input.oninput=()=>{if(input.value)menu();};
+      }
+    });
+    const report=await fillMatchedPage({profile,resume:Buffer.from('%PDF-fixture'),url,workflow:'C3.2',signal:AbortSignal.timeout(30000),
+      call:async(action,matchingPlans,matchingRunId)=>({...await page.evaluate(fillVisibleFields,{
+        action,matchingPlans,matchingRunId,scope:'page' as const,facts:effectiveProfileFacts(profile),
+      })})});
+    const committed=()=>page.locator('.select__single-value').allTextContents();
+    const expected=['+1','Edmonton, Alberta, Canada','Example University',"Bachelor's Degree",'Computer Science','LinkedIn'];
+    assert.deepEqual(await committed(),expected);
+    assert.equal(await page.locator('.phone-input__country .select__single-value .iti__ca').count(),1);
+    assert.equal(await page.locator('#phone').inputValue(),'7805550148');
+    assert.equal(await page.locator('#start-year--0').inputValue(),'2019');assert.equal(await page.locator('#end-year--0').inputValue(),'2023');
+    assert.equal(report.skipped.some(row=>['phone_country_requires_review','choice_commit_or_reset_unconfirmed'].includes(row.reason)),false);
+    const undo=await page.evaluate(fillVisibleFields,{scope:'page' as const,action:'undo' as const});
+    assert.ok(undo.skipped.some(row=>row.reason==='country_reset_unavailable'));
+    assert.deepEqual(await committed(),['+1']);assert.equal(await page.locator('#phone').inputValue(),'');
+    await page.evaluate(fillVisibleFields,{scope:'page' as const,action:'redo' as const});
+    assert.deepEqual(await committed(),expected);assert.equal(await page.locator('#phone').inputValue(),'7805550148');
+    await page.evaluate(fillVisibleFields,{scope:'page' as const,action:'undo' as const});
+    await page.locator('#country').fill('United States');await page.getByRole('option',{name:'United States +1'}).click();
+    await assert.rejects(page.evaluate(fillVisibleFields,{scope:'page' as const,action:'redo' as const}),/fields changed/i);
+    assert.equal(await page.locator('#phone').inputValue(),'');
+  } finally {await browser.close();}
+});
+
 
 test('generic partial fill preserves choices and edits, supports French fields and reversible saved answers', async () => {
   const browser = await chromium.launch({ headless: true, ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });

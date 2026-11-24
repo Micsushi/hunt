@@ -102,11 +102,12 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry("s1-question-given-name", ["first name","legal first name","prénom"], ["text", "textarea"], {"kind":"profile","factId":"given_name"}),
   aliasEntry("s1-question-family-name", ["last name","legal last name","nom de famille"], ["text", "textarea"], {"kind":"profile","factId":"family_name"}),
   aliasEntry("owner-question-preferred-name", ["preferred name","preferred first name"], ["text", "textarea"], { kind: "profile", factId: "preferred_name" }),
+  aliasEntry("question-pronouns", ["Pronouns", "What are your pronouns?"], ["select","listbox","radio"], { kind:"neutral_disclosure" }),
   aliasEntry("owner-question-email-address", ["email","email address","e-mail","adresse e-mail","adresse courriel / email","confirm your email"], ["text", "textarea"], { kind: "profile", factId: "email_address" }),
   aliasEntry("s1-question-phone-number", ["phone","mobile phone","téléphone","numéro de téléphone / phone number"], ["text", "textarea"], {"kind":"profile","factId":"phone_number"}),
   aliasEntry("owner-question-phone-country-code", ["Phone country code", "Country phone code", "Phone country"], ["select", "listbox", "text"], { kind: "profile", factId: "phone_country_code" }),
   aliasEntry("owner-question-current-location", ["Location", "Current location"], ["text", "textarea"], { kind: "profile", factId: "current_location" }),
-  aliasEntry("owner-question-city", ["city","ville"], ["text", "textarea"], { kind: "profile", factId: "city" }),
+  aliasEntry("owner-question-city", ["city","ville","Location (City)"], ["text", "textarea", "listbox"], { kind: "profile", factId: "city" }),
   aliasEntry("owner-question-postal-code", ["postal code","zip code","postal code / zip code","zip","code postal"], ["text", "textarea", "listbox"], { kind: "profile", factId: "postal_code" }),
   aliasEntry("owner-question-current-company", ["current company"], ["text", "textarea"], { kind: "profile", factId: "current_company" }),
   aliasEntry("owner-question-current-title", ["current title"], ["text", "textarea"], { kind: "profile", factId: "current_title" }),
@@ -117,11 +118,11 @@ const questionAliasCatalog = Object.freeze([
   aliasEntry("workday-question-desired-salary", ["what would be your salary expectations for the position?"], ["text", "textarea"], {"kind":"profile","factId":"salary_expectations","ownerProvidedOnly":true}),
   aliasEntry("owner-question-address-line1", ["Street address", "Address Line 1"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "address_line1", ownerProvidedOnly: true }),
   aliasEntry("owner-question-address-line2", ["Address Line 2", "Apartment or unit"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "address_line2", ownerProvidedOnly: true }),
-  aliasEntry("owner-question-education-institution", ["University", "School name", "School or University", "School/University"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_institution", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-institution", ["School", "University", "School name", "School or University", "School/University"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_institution", ownerProvidedOnly: true }),
   aliasEntry("owner-question-education-degree", ["Degree"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_degree", ownerProvidedOnly: true }),
-  aliasEntry("owner-question-education-field-of-study", ["Field of study", "Major"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_field_of_study", ownerProvidedOnly: true }),
-  aliasEntry("owner-question-education-start-year", ["First year attended"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_start_year", ownerProvidedOnly: true }),
-  aliasEntry("owner-question-education-end-year", ["Graduation year", "Last year attended"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_end_year", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-field-of-study", ["Field of study", "Major", "Discipline"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_field_of_study", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-start-year", ["First year attended", "Education start date year"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_start_year", ownerProvidedOnly: true }),
+  aliasEntry("owner-question-education-end-year", ["Graduation year", "Last year attended", "Education end date year"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_end_year", ownerProvidedOnly: true }),
   aliasEntry("owner-question-education-gpa", ["GPA", "Grade point average", "What is your average GPA?"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_gpa", ownerProvidedOnly: true }),
   aliasEntry("owner-question-education-gpa-scale", ["GPA scale"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "education_gpa_scale", ownerProvidedOnly: true }),
   aliasEntry("owner-question-languages", ["Languages spoken"], ["text", "textarea", "select", "listbox"], { kind: "profile", factId: "languages", ownerProvidedOnly: true }),
@@ -438,6 +439,8 @@ function isOfferStageBackgroundCheck(text: string, employerNames?: readonly stri
 export function resolveQuestion(text: string, employerNames?: readonly string[]) {
   const exact=resolveCatalogText([...questionCatalog,...questionAliasCatalog],text);
   if(exact.kind!=='unknown') return exact;
+  // A date component with no section can belong to school, work or another history.
+  if (/^(?:start|end) date (?:year|month)$/u.test(normalizeCatalogText(text))) return {kind:'unknown' as const};
   if (isOfferStageBackgroundCheck(text, employerNames)) return {kind:'resolved' as const, id:'owner-question-background-check-willing' as const, provenance:'reviewed_catalog' as const};
   const sourceEmployer = /^how did you hear about (.+)$/u.exec(normalizeCatalogText(text))?.[1];
   if (sourceEmployer && employerNames !== undefined &&
@@ -534,6 +537,7 @@ export function questionForField(
 const privacyDefaults = Object.freeze([
   "Prefer not to answer",
   "Prefer not to say",
+  "I prefer not to say",
   "I do not wish to provide this information",
   "I do not want to answer",
   "Decline to self-identify",

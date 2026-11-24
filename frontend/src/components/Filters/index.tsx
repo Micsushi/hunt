@@ -84,8 +84,24 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
     [onChange],
   )
 
+  const hasFilters = Boolean(
+    query.q ||
+    query.tag ||
+    query.category ||
+    query.ats_type ||
+    (query.source && query.source !== 'all') ||
+    (query.status && query.status !== 'all') ||
+    (query.sort && query.sort !== 'date_scraped') ||
+    query.direction === 'asc' ||
+    (query.limit ?? 50) !== 50 ||
+    (query.page ?? 1) !== 1,
+  )
+
   function reset() {
-    if (searchRef.current) searchRef.current.value = ''
+    if (searchRef.current) {
+      searchRef.current.value = ''
+      searchRef.current.focus()
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     onChange({
       source: 'all',
@@ -167,11 +183,13 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
           </select>
         </div>
 
-        <div className={styles.filterGroup}>
-          <button className={styles.resetBtn} onClick={reset} aria-label="Reset job filters">
-            Reset
-          </button>
-        </div>
+        {hasFilters && (
+          <div className={styles.filterGroup}>
+            <button className={styles.resetBtn} onClick={reset} aria-label="Reset job filters">
+              Reset
+            </button>
+          </div>
+        )}
       </div>
 
       <details className={styles.displayOptions}>

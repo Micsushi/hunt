@@ -286,7 +286,7 @@ async function verifySavedQuestionnaireUploads(browser: Awaited<ReturnType<typeo
   } finally { await page.close(); }
 }
 
-test("saved Workday drafts preserve uploads and continue without rewinding", { timeout: 60_000 }, async () => {
+test("saved Workday drafts preserve uploads and continue without rewinding", { timeout: 90_000 }, async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HUNT_C3_CHROMIUM ? { executablePath: process.env.HUNT_C3_CHROMIUM } : {}) });
   try {

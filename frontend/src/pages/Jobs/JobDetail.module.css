@@ -1,7 +1,7 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 .loading {
@@ -23,19 +23,18 @@
 .menuCard {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   display: flex;
   align-items: center;
   gap: 8px;
-  box-shadow: var(--shadow);
   flex-wrap: wrap;
 }
 
 .backBtn {
   background: var(--panel-strong);
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 6px 13px;
   font-size: 0.87rem;
   font-weight: 600;
@@ -63,7 +62,7 @@
 .navBtn {
   background: var(--panel-strong);
   border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 5px 11px;
   font-size: 1rem;
   line-height: 1;
@@ -88,7 +87,7 @@
 .extBtn {
   border: 1px solid var(--accent);
   color: var(--accent);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 5px 12px;
   font-size: 0.84rem;
   font-weight: 600;
@@ -107,7 +106,7 @@
   background: none;
   border: 1px solid var(--danger);
   color: var(--danger);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 5px 12px;
   font-size: 0.84rem;
   font-weight: 600;
@@ -120,14 +119,14 @@
 }
 .deleteBtn:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--ink-inverse);
 }
 
 /* ── Body layout ──────────────────────────────────── */
 .body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
   align-items: start;
 }
 
@@ -140,16 +139,15 @@
 .col {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 /* ── Panel ────────────────────────────────────────── */
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  padding: 16px 18px;
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-md);
+  padding: clamp(16px, 2vw, 24px);
 }
 
 .panelTitleRow {
@@ -161,12 +159,13 @@
 }
 
 .panelTitle {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  margin-bottom: 0;
+  font-size: 1.12rem;
+  font-weight: 650;
+  color: var(--ink);
+  margin: 0;
+}
+.panel > .panelTitle {
+  margin-bottom: 12px;
 }
 
 /* ── Service status chip ───────────────────────────── */
@@ -229,10 +228,13 @@
 
 .applicationActions {
   margin-top: 8px;
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.applicationActions > p {
   flex-basis: 100%;
-  justify-items: start;
 }
 
 .applicationActions [role='alert'] {
@@ -257,15 +259,6 @@
   border-bottom: none;
 }
 
-.inlineFieldEditable .inlineLabel::after {
-  content: '✎';
-  font-size: 0.6rem;
-  margin-left: 4px;
-  color: var(--accent);
-  opacity: 0.5;
-  vertical-align: middle;
-}
-
 .inlineFieldBlock {
   flex-direction: column;
   align-items: stretch;
@@ -273,13 +266,11 @@
 }
 
 .inlineLabel {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 0.85rem;
+  font-weight: 600;
   color: var(--muted);
   flex-shrink: 0;
-  width: 5.125rem;
+  width: 6rem;
 }
 
 .inlineFieldBlock .inlineLabel {
@@ -333,7 +324,7 @@
 .editHint {
   font-size: 0.65rem;
   color: var(--muted);
-  opacity: 0.35;
+  opacity: 0.8;
   transition: opacity var(--ease);
   flex-shrink: 0;
   margin-left: auto;
@@ -384,7 +375,7 @@
   background: var(--accent);
   color: var(--accent-ink);
   border: none;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   padding: 7px 16px;
   font-size: 0.86rem;
   font-weight: 700;
@@ -398,7 +389,8 @@
   transform: translateY(-1px);
 }
 .actionBtn:disabled {
-  opacity: 0.4;
+  background: var(--panel-strong);
+  color: var(--muted);
   cursor: not-allowed;
 }
 .actionBtnSecondary {
@@ -494,4 +486,27 @@
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.menuCard button,
+.menuCard a {
+  min-height: 36px;
+}
+.menuCard a {
+  display: inline-flex;
+  align-items: center;
+}
+@media (max-width: 540px) {
+  .menuCard {
+    gap: 8px;
+  }
+  .menuLinks {
+    margin-left: 0;
+  }
+  .navBtns {
+    margin-right: auto;
+  }
+  .applicationActions button {
+    min-height: 40px;
+  }
 }

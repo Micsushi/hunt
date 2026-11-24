@@ -1,11 +1,15 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
 .hero {
-  margin-bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  flex-wrap: wrap;
 }
 .heroTitle {
   font-size: 1.5rem;
@@ -16,7 +20,7 @@
 .cards {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .serviceStrip {
@@ -29,12 +33,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  padding: 6px 8px;
   border-radius: var(--radius-pill);
   font-size: 0.82rem;
   font-weight: 600;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border: 0;
+  background: transparent;
   color: var(--muted);
   cursor: pointer;
   transition:
@@ -61,28 +65,22 @@
 .dot_unknown {
   background: var(--line-strong);
 }
-.service_ok {
-  border-color: var(--good-soft);
-}
-.service_error {
-  border-color: var(--danger-soft);
-}
 
 .chartsRow {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
 .chartsRow3 {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 0.95fr 1.25fr;
   gap: 16px;
 }
 
 .statGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(85px, 100%), 1fr));
   gap: 10px;
 }
 
@@ -90,10 +88,8 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
-  background: var(--panel-strong);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
+  padding: 6px 0;
+  min-width: 0;
 }
 
 .statVal {
@@ -105,9 +101,7 @@
 }
 
 .statLbl {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 0.82rem;
   color: var(--muted);
 }
 
@@ -116,7 +110,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 18px;
-  box-shadow: var(--shadow);
+  min-width: 0;
 }
 
 .panelHeader {
@@ -129,11 +123,9 @@
 }
 
 .panelTitle {
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: var(--ink);
 }
 
 .segmented {
@@ -143,7 +135,8 @@
   overflow: hidden;
 }
 .seg {
-  padding: 4px 10px;
+  min-height: 32px;
+  padding: 4px 9px;
   font-size: 0.78rem;
   font-weight: 600;
   background: transparent;
@@ -187,41 +180,28 @@
   flex-shrink: 0;
 }
 
-.feedList {
+.legendItem button {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  padding: 4px 1px;
+}
+.legendItem button:hover {
+  text-decoration: underline;
+}
+
+.coverage {
   display: flex;
-  flex-direction: column;
-}
-.feedRow {
-  display: grid;
-  grid-template-columns: 1fr 2fr auto auto;
-  gap: 12px;
-  align-items: center;
-  padding: 9px 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--panel-strong);
   border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--ease);
+  color: var(--muted);
   font-size: 0.875rem;
-}
-.feedRow:hover {
-  background: var(--panel-hover);
-}
-.feedCompany {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.feedTitle {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.feedTime {
-  font-size: 0.78rem;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  white-space: nowrap;
 }
 
 .empty {
@@ -266,59 +246,30 @@
   color: var(--muted);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1000px) {
   .cards {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .chartsRow3 {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 600px) {
-  .cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .chartsRow {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .panel {
-    min-width: 0;
-    padding: 14px;
-  }
-  .statGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .chartsRow3 > :last-child {
+    grid-column: 1 / -1;
   }
 }
-
-@media (max-width: 900px) {
-  .cards {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .chartsRow3 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
+@media (max-width: 700px) {
   .chartsRow,
-  .chartsRow3,
-  .statGrid {
+  .chartsRow3 {
     grid-template-columns: minmax(0, 1fr);
   }
-
   .cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
-
   .panel {
     padding: 14px;
   }
-}
-
-@media (max-width: 420px) {
-  .cards {
-    grid-template-columns: minmax(0, 1fr);
+  .seg {
+    min-height: 36px;
   }
 }

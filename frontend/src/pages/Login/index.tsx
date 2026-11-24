@@ -42,7 +42,7 @@ export function LoginPage({ onLogin, loading }: Props) {
     <main className={styles.shell}>
       <div className={styles.card}>
         <div className={styles.header}>
-          <h1 className={styles.title}>Hunt</h1>
+          <h1 className={styles.title}>Sign in to Hunt</h1>
         </div>
         <form className={styles.form} onSubmit={handleSubmit} noValidate aria-busy={loading}>
           <label className={styles.fieldLabel}>

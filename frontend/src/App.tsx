@@ -120,25 +120,7 @@ export default function App() {
 
   return (
     <>
-      {MOCK && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            zIndex: 9999,
-            background: '#f59e0b',
-            color: '#000',
-            textAlign: 'center',
-            fontSize: '12px',
-            padding: '2px 0',
-            fontWeight: 600,
-          }}
-        >
-          MOCK MODE - changes not persisted
-        </div>
-      )}
+      {MOCK && <p className="demoNotice">Demo data · Changes are temporary</p>}
       <Routes>
         <Route
           path="/login"

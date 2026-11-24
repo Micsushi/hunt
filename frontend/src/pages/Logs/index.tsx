@@ -69,10 +69,12 @@ export function LogsPage() {
   const authOk = li?.available === true
   const authMissing = li?.available !== true && li?.available !== false
   const visibleLogs =
-    data?.logs.filter((row) =>
-      `${row.message} ${JSON.stringify(row.detail ?? '')}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+    data?.logs.filter(
+      (row) =>
+        levels.includes(row.level) &&
+        `${row.message} ${JSON.stringify(row.detail ?? '')}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
     ) ?? []
 
   return (
@@ -122,66 +124,6 @@ export function LogsPage() {
             </div>
           </div>
 
-          <div className={styles.controls}>
-            <div className={styles.tabs} role="group" aria-label="Service">
-              {SERVICE_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  aria-pressed={tab === t.key}
-                  className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`}
-                  onClick={() => setTab(t.key)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-            <input
-              className={styles.search}
-              aria-label="Search logs"
-              placeholder="Search…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-
-          <div className={styles.controls}>
-            <div className={styles.tabs} role="group" aria-label="Log level">
-              {LEVELS.map((level) => (
-                <button
-                  key={level}
-                  aria-pressed={levels.includes(level)}
-                  className={`${styles.tab} ${levels.includes(level) ? styles.tabActive : ''}`}
-                  onClick={() => toggleLevel(level)}
-                >
-                  {level}
-                </button>
-              ))}
-            </div>
-            <div className={styles.tabs} role="group" aria-label="Time window">
-              {TIME_WINDOWS.map((w) => (
-                <button
-                  key={w.key}
-                  aria-pressed={since === w.key}
-                  className={`${styles.tab} ${since === w.key ? styles.tabActive : ''}`}
-                  onClick={() => {
-                    setSince(w.key)
-                    setLimit(100)
-                  }}
-                >
-                  {w.label}
-                </button>
-              ))}
-            </div>
-            <label className={styles.toggle}>
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-              />
-              Auto-refresh
-            </label>
-          </div>
-
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Activity (last {activity.hours}h)</h2>
             <div className={styles.activityRow}>
@@ -199,6 +141,67 @@ export function LogsPage() {
 
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Event stream</h2>
+            <div className={styles.filterBar}>
+              <div className={styles.controls}>
+                <div className={styles.tabs} role="group" aria-label="Service">
+                  {SERVICE_TABS.map((t) => (
+                    <button
+                      key={t.key}
+                      aria-pressed={tab === t.key}
+                      className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`}
+                      onClick={() => setTab(t.key)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  className={styles.search}
+                  aria-label="Search logs"
+                  placeholder="Search events"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+
+              <div className={styles.controls}>
+                <div className={styles.tabs} role="group" aria-label="Log level">
+                  {LEVELS.map((level) => (
+                    <button
+                      key={level}
+                      aria-pressed={levels.includes(level)}
+                      className={`${styles.tab} ${levels.includes(level) ? styles.tabActive : ''}`}
+                      onClick={() => toggleLevel(level)}
+                    >
+                      {level}
+                    </button>
+                  ))}
+                </div>
+                <div className={styles.tabs} role="group" aria-label="Time window">
+                  {TIME_WINDOWS.map((w) => (
+                    <button
+                      key={w.key}
+                      aria-pressed={since === w.key}
+                      className={`${styles.tab} ${since === w.key ? styles.tabActive : ''}`}
+                      onClick={() => {
+                        setSince(w.key)
+                        setLimit(100)
+                      }}
+                    >
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+                <label className={styles.toggle}>
+                  <input
+                    type="checkbox"
+                    checked={autoRefresh}
+                    onChange={(e) => setAutoRefresh(e.target.checked)}
+                  />
+                  Auto-refresh
+                </label>
+              </div>
+            </div>
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead>
@@ -231,16 +234,20 @@ export function LogsPage() {
                   {visibleLogs.length === 0 ? (
                     <tr>
                       <td colSpan={5} className={styles.muted}>
-                        No log rows match this filter.
+                        {levels.length
+                          ? 'No events match these filters.'
+                          : 'Choose a log level to see events.'}
                       </td>
                     </tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
-            <button className={styles.loadMore} onClick={() => setLimit((v) => v + 100)}>
-              Load more
-            </button>
+            {levels.length > 0 && data.logs.length >= limit && (
+              <button className={styles.loadMore} onClick={() => setLimit((v) => v + 100)}>
+                Load more
+              </button>
+            )}
           </div>
         </>
       )}

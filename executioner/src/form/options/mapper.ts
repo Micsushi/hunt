@@ -6,7 +6,7 @@ import type {
 import { normalizeCatalogText } from "../questions/normalize.ts";
 import { isRecruitmentTermsConsent } from "../questions/protected.ts";
 import { resolveOption } from "./catalog.ts";
-import { equivalentAnswer } from '../../deterministic/answer-equivalence.ts';
+import { equivalentAnswer, matchesDegreeLevel } from '../../deterministic/answer-equivalence.ts';
 
 type AnswerValue = Extract<
   ProfileAnswerResult,
@@ -57,6 +57,9 @@ export function mapVisibleOption(
   let matches = options.filter(({ label }) => optionKey(label) === wanted);
   if (matches.length === 0 && context && typeof value === 'string') {
     matches = options.filter(({label})=>equivalentAnswer(label,value,context));
+    if (!matches.length && context === 'owner-question-education-degree') {
+      matches = options.filter(({label}) => matchesDegreeLevel(label.trim().toLowerCase(), value.trim().toLowerCase()));
+    }
   }
   // Employers often qualify a binary answer ("Yes, I am over 18").
   // Only accept one matching polarity; multiple qualified answers need more context.

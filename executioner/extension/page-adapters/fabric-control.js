@@ -2,6 +2,10 @@ export function createFabricControl({
   regionFor, norm, state, deepQuery, visible, editable, checkDeadline
 }) {
   const menuToggleSelector = 'button.fab-SelectToggle[data-menu-id]';
+  // Fabric paints its radio from the employer's component state. Changing
+  // input.checked alone leaves that state (and the visible circle) untouched.
+  const fabricRadioState = input => input.matches?.('[data-fabric-component="RadioGroup"] [data-fabric-component="Radio"] .MuiRadio-root > input[type=radio]')
+    ? input.parentElement.classList.contains('Mui-checked') : undefined;
   const isMenuToggle = e => e.matches(menuToggleSelector);
   const fabricDisplayedLabel = e => e.querySelector('.fab-SelectToggle__content')?.textContent ?? '';
   const fabricWidget = e => {
@@ -85,5 +89,5 @@ export function createFabricControl({
       target.label!=='' && (!widget.backing.validity.valid || !fabricClear(widget)))throw new Error('The dropdown selection, backing value or reset could not be verified.');
     return after;
   };
-  return { fabricWidget, fabricState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel };
+  return { fabricWidget, fabricState, fabricRadioState, pendingFabricChange, sameFabric, fabricClear, fabricMenu, selectFabric, isMenuToggle, menuToggleSelector, fabricDisplayedLabel };
 }

@@ -162,7 +162,7 @@ STATUS_FILTER_LABELS = {
     "all": "All",
     "ready": "Ready",
     "enriched": "Enriched",
-    "partial": "Partial enriched",
+    "partial": "Partially enriched",
     "pending": "Pending enrichment",
     "processing": "Processing",
     "done": "Done",
@@ -873,7 +873,13 @@ def truncate_text(value, *, max_chars=180):
 
 
 def is_app_route_path(path):
-    return path in APP_ROUTE_PATHS or path.startswith("/jobs/")
+    return (
+        path in APP_ROUTE_PATHS
+        or path.startswith("/jobs/")
+        or path
+        in {"/legacy", "/legacy/jobs", "/legacy/ops", "/legacy/health-view", "/legacy/jobs/compare"}
+        or bool(re.fullmatch(r"/legacy/jobs/[0-9]+", path))
+    )
 
 
 def normalize_return_to(value):
@@ -936,7 +942,9 @@ def _nav_link(label, href, *, current_path, exact=False):
         else current_path == href or current_path.startswith(f"{href}/")
     )
     class_name = "nav-link active" if is_active else "nav-link"
-    return f'<a class="{class_name}" href="{href}">{html.escape(label)}</a>'
+    current = ' aria-current="page"' if is_active else ""
+    target = "/legacy" if href == "/" else f"/legacy{href}"
+    return f'<a class="{class_name}" href="{target}"{current}>{html.escape(label)}</a>'
 
 
 def render_nav(current_path):
@@ -955,36 +963,63 @@ def render_nav(current_path):
 def render_layout(title, body, *, current_path="/"):
     styles = """
     :root {
-      --bg: #f3efe7;
-      --panel: #fffdf8;
-      --panel-strong: #fff9ef;
-      --ink: #1f2421;
-      --muted: #65706c;
-      --line: #ddd4c7;
-      --accent: #245b4e;
-      --accent-soft: #e2efe9;
-      --accent-ink: #0f3e34;
-      --warning: #845d00;
-      --warning-soft: #fff3d6;
-      --danger: #a93f31;
-      --danger-soft: #ffe6e1;
-      --good: #256b38;
-      --good-soft: #dff3e5;
-      --shadow: 0 10px 30px rgba(31, 36, 33, 0.06);
+      --bg: #101712;
+      --panel: #19231c;
+      --panel-strong: #202e24;
+      --ink: #eff4ed;
+      --muted: #b5c4b7;
+      --line: #39493e;
+      --accent: #afdaae;
+      --accent-soft: #2d4534;
+      --accent-ink: #d2e6cc;
+      --warning: #f3ce87;
+      --warning-soft: #443722;
+      --danger: #ffc1b3;
+      --danger-soft: #482d29;
+      --good: #b2e2bb;
+      --good-soft: #284333;
+      color-scheme: dark;
+      accent-color: var(--accent);
       font-family: "Segoe UI", system-ui, sans-serif;
     }
+    *, *::before, *::after { box-sizing: border-box; }
     html {
       min-height: 100%;
-      background: linear-gradient(180deg, #f6f1e7 0%, #efe8db 100%);
+      background: var(--bg);
     }
     body {
       margin: 0;
       min-height: 100vh;
-      background: linear-gradient(180deg, #f6f1e7 0%, #efe8db 100%);
+      background: var(--bg);
       color: var(--ink);
+      line-height: 1.5;
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .shell > .panel, .shell > .jobs-advanced-panel, .shell > .table-wrap { margin-block-end: 14px; }
+    .panel > :last-child { margin-block-end: 0; }
+    .panel .table-wrap { border: 0; border-radius: 6px; }
+    input::placeholder { color: var(--muted); opacity: 1; }
+    .filter-form-grid label, .search-row label { display: block; margin-bottom: 5px; color: var(--muted); }
+    .search-row input, .filter-form-grid input, .filter-form-grid select, textarea, input[type="number"] {
+      width: 100%; min-width: 0; color: var(--ink); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; font: inherit;
+    }
+    .search-row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+    .search-row > div { flex: 1 1 220px; min-width: 0; }
+    .search-row > button, .search-row > a { align-self: end; min-height: 42px; }
+    .search-row > a { display: inline-flex; align-items: center; text-decoration: underline; }
+    .jobs-table-wrap table td:nth-child(2) { min-width: 10rem; font-weight: 600; }
+    .jobs-table-wrap a { text-underline-offset: 3px; text-decoration: underline; }
+    summary:focus-visible { outline-offset: 1px; }
+    .actions .pill, .toolbar .pill { display: inline-flex; align-items: center; }
+    .status { white-space: nowrap; }
+    .queue-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+    .queue-links a { text-decoration: underline; text-underline-offset: 3px; }
+    .queue-secondary { margin-top: 16px; color: var(--muted); }
+    .description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 78ch; }
     .loading-bar {
       position: fixed;
       inset: 0 0 auto 0;
@@ -1018,12 +1053,10 @@ def render_layout(title, body, *, current_path="/"):
       gap: 14px;
       align-items: center;
       margin-bottom: 24px;
-      padding: 14px 16px;
-      border: 1px solid rgba(221, 212, 199, 0.9);
-      border-radius: 18px;
-      background: rgba(255, 253, 248, 0.88);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(12px);
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
       position: sticky;
       top: 12px;
       z-index: 10;
@@ -1039,7 +1072,7 @@ def render_layout(title, body, *, current_path="/"):
     .nav-link {
       display: inline-flex;
       align-items: center;
-      border-radius: 999px;
+      border-radius: 7px;
       padding: 9px 13px;
       color: var(--accent-ink);
       font-weight: 700;
@@ -1047,13 +1080,12 @@ def render_layout(title, body, *, current_path="/"):
     }
     .nav-link:hover {
       text-decoration: none;
-      background: rgba(226, 239, 233, 0.75);
+      background: var(--accent-soft);
       transform: translateY(-1px);
     }
     .nav-link.active {
       background: var(--accent);
-      color: white;
-      box-shadow: 0 8px 16px rgba(36, 91, 78, 0.2);
+      color: var(--bg);
     }
     .nav-link-secondary {
       color: var(--muted);
@@ -1083,7 +1115,6 @@ def render_layout(title, body, *, current_path="/"):
       border: 1px solid var(--line);
       border-radius: 16px;
       padding: 16px;
-      box-shadow: var(--shadow);
     }
     .card .label {
       font-size: 0.85rem;
@@ -1105,7 +1136,7 @@ def render_layout(title, body, *, current_path="/"):
     .pill {
       border: 1px solid var(--line);
       background: var(--panel);
-      border-radius: 999px;
+      border-radius: 7px;
       padding: 8px 12px;
       color: var(--ink);
       font-weight: 600;
@@ -1119,14 +1150,13 @@ def render_layout(title, body, *, current_path="/"):
     .pill.active {
       background: var(--accent);
       border-color: var(--accent);
-      color: white;
+      color: var(--bg);
     }
     .table-wrap {
       overflow-x: auto;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: var(--shadow);
+      border-radius: 12px;
     }
     table {
       width: 100%;
@@ -1147,16 +1177,16 @@ def render_layout(title, body, *, current_path="/"):
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--muted);
-      background: #faf5ec;
+      background: var(--panel-strong);
     }
-    tr[data-job-row]:hover td {
-      background: rgba(250, 245, 236, 0.72);
+    tr[data-job-id]:hover td {
+      background: var(--panel-strong);
     }
     .status {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      border-radius: 999px;
+      border-radius: 7px;
       padding: 5px 10px;
       font-size: 0.8rem;
       font-weight: 700;
@@ -1173,7 +1203,7 @@ def render_layout(title, body, *, current_path="/"):
       background: var(--warning-soft);
       color: var(--warning);
     }
-    .status.failed {
+    .status.failed, .status.failed_url, .status.failed_description, .status.failed_enrichment {
       background: var(--danger-soft);
       color: var(--danger);
     }
@@ -1196,9 +1226,9 @@ def render_layout(title, body, *, current_path="/"):
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 18px;
-      box-shadow: var(--shadow);
+      border-radius: 12px;
+      min-width: 0;
+      padding: clamp(16px, 2.4vw, 28px);
     }
     .panel h2 {
       margin: 0 0 12px;
@@ -1210,7 +1240,7 @@ def render_layout(title, body, *, current_path="/"):
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     }
     .field {
-      background: #faf5ec;
+      background: var(--panel-strong);
       border-radius: 12px;
       padding: 12px;
     }
@@ -1234,19 +1264,19 @@ def render_layout(title, body, *, current_path="/"):
     button {
       border: 0;
       background: var(--accent);
-      color: white;
-      border-radius: 999px;
+      color: var(--bg);
+      border-radius: 7px;
       padding: 10px 14px;
       font-weight: 700;
       cursor: pointer;
       transition: transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
-      box-shadow: 0 8px 16px rgba(36, 91, 78, 0.18);
     }
     button:hover {
       transform: translateY(-1px);
     }
     button.secondary {
-      background: #5d6a66;
+      background: var(--panel-strong);
+      color: var(--ink);
     }
     button:disabled {
       opacity: 0.6;
@@ -1315,7 +1345,6 @@ def render_layout(title, body, *, current_path="/"):
       border-radius: 14px;
       border: 1px solid var(--line);
       background: var(--panel-strong);
-      box-shadow: var(--shadow);
       position: sticky;
       bottom: 12px;
       z-index: 8;
@@ -1327,7 +1356,7 @@ def render_layout(title, body, *, current_path="/"):
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 8px 10px;
-      background: #faf5ec;
+      background: var(--panel-strong);
       font: inherit;
     }
     .jobs-selection-bar .selection-count {
@@ -1345,16 +1374,14 @@ def render_layout(title, body, *, current_path="/"):
       border: 1px solid var(--line);
       border-radius: 16px;
       background: var(--panel);
-      box-shadow: var(--shadow);
     }
     .jobs-advanced-panel summary {
       cursor: pointer;
       padding: 14px 16px;
       font-weight: 700;
       color: var(--accent-ink);
-      list-style: none;
+      list-style-position: inside;
     }
-    .jobs-advanced-panel summary::-webkit-details-marker { display: none; }
     .jobs-advanced-panel[open] summary {
       border-bottom: 1px solid var(--line);
     }
@@ -1373,8 +1400,8 @@ def render_layout(title, body, *, current_path="/"):
       text-align: center;
       vertical-align: middle;
     }
-    .jobs-table-wrap table th:nth-child(3),
-    .jobs-table-wrap table td:nth-child(3) {
+    .jobs-table-wrap table th:nth-child(6),
+    .jobs-table-wrap table td:nth-child(6) {
       text-align: center;
       white-space: nowrap;
     }
@@ -1383,7 +1410,19 @@ def render_layout(title, body, *, current_path="/"):
       padding: 2px 6px;
       border-radius: 6px;
       border: 1px solid var(--line);
-      background: #faf5ec;
+      background: var(--panel-strong);
+    }
+    @media (max-width: 540px) {
+      .filter-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .nav-group { width: 100%; justify-content: space-between; gap: 2px; }
+      .nav-link { padding: 8px; font-size: 0.9rem; }
+      .jobs-selection-bar { position: static; }
+      .jobs-selection-bar label, .jobs-selection-bar select { max-width: 100%; min-width: 0; }
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid { grid-template-columns: minmax(0,1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
     @media (max-width: 760px) {
       .shell {
@@ -1391,7 +1430,7 @@ def render_layout(title, body, *, current_path="/"):
       }
       .nav {
         position: static;
-        padding: 12px;
+        padding: 5px;
       }
       .hero h1 {
         font-size: 1.7rem;
@@ -1518,8 +1557,8 @@ def render_layout(title, body, *, current_path="/"):
         const toUrl = new URL(url, window.location.origin);
         const preserveJobsListScroll =
           !restoreScroll &&
-          fromUrl.pathname === '/jobs' &&
-          toUrl.pathname === '/jobs';
+          fromUrl.pathname === '/legacy/jobs' &&
+          toUrl.pathname === '/legacy/jobs';
         const jobsListScrollY = preserveJobsListScroll ? window.scrollY : 0;
         inFlightController = new AbortController();
         document.body.classList.add('is-loading');
@@ -1644,10 +1683,10 @@ def render_layout(title, body, *, current_path="/"):
           return;
         }
         const method = (form.method || 'get').toLowerCase();
-        if (method !== 'get') return;
+        const url = new URL(form.action || window.location.pathname, window.location.origin);
+        if (method !== 'get' || !isAppRoute(url)) return;
         event.preventDefault();
         rememberScroll();
-        const url = new URL(form.action || window.location.pathname, window.location.origin);
         const formData = new FormData(form);
         for (const [key, value] of formData.entries()) {
           if (value === '') {
@@ -1896,7 +1935,7 @@ def render_layout(title, body, *, current_path="/"):
 
       (function jobsListKeyboardNav() {
         const path = window.location.pathname || '';
-        if (path !== '/jobs') return;
+        if (path !== '/legacy/jobs') return;
         const table = document.querySelector('.jobs-table-wrap table tbody');
         if (!table) return;
         let idx = -1;
@@ -1913,7 +1952,7 @@ def render_layout(title, body, *, current_path="/"):
           if (e.key === 'j') { e.preventDefault(); focusRow(idx < 0 ? 0 : idx + 1); }
           if (e.key === 'k') { e.preventDefault(); focusRow(idx < 0 ? 0 : idx - 1); }
           if (e.key === 'Enter' && idx >= 0) {
-            const link = rows()[idx] && rows()[idx].querySelector('a[href^="/jobs/"]');
+            const link = rows()[idx] && rows()[idx].querySelector('a[href^="/legacy/jobs/"]');
             if (link) { e.preventDefault(); link.click(); }
           }
         });
@@ -1922,16 +1961,16 @@ def render_layout(title, body, *, current_path="/"):
       (function persistJobsFilters() {
         const KEY = 'hunt-jobs-query-v1';
         const path = window.location.pathname || '';
-        if (path === '/jobs' && window.location.search) {
+        if (path === '/legacy/jobs' && window.location.search) {
           try {
             window.sessionStorage.setItem(KEY, window.location.search);
           } catch (_e) {}
         }
-        if (path === '/jobs' && !window.location.search) {
+        if (path === '/legacy/jobs' && !window.location.search) {
           try {
             const saved = window.sessionStorage.getItem(KEY);
             if (saved && saved.startsWith('?')) {
-              window.history.replaceState(window.history.state || {}, '', '/jobs' + saved);
+              window.history.replaceState(window.history.state || {}, '', '/legacy/jobs' + saved);
               window.location.reload();
             }
           } catch (_e) {}
@@ -1944,14 +1983,14 @@ def render_layout(title, body, *, current_path="/"):
     if (REVIEW_OPS_TOKEN or "").strip():
         ops_token_el = f'<input type="hidden" id="hunt-review-ops-token-value" value="{html.escape((REVIEW_OPS_TOKEN or "").strip())}" aria-hidden="true" />'
     return f"""<!DOCTYPE html>
-<html lang="en" style="background:#f6f1e7;">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(title)}</title>
   <style>{styles}</style>
 </head>
-<body style="margin:0; min-height:100vh; background:#f6f1e7; color:#1f2421;">
+<body>
     <div class="loading-bar" aria-hidden="true"></div>
     <div id="app-shell" class="shell" data-current-path="{html.escape(current_path)}">
       {render_nav(current_path)}
@@ -2038,10 +2077,10 @@ def render_summary_cards(summary):
         )
     failed = detail_counts.get("failed", summary["counts_by_status"].get("failed", 0))
     cards = [
-        ("Total rows", summary["total"]),
-        ("Pending enrich", summary["pending_count"]),
+        ("Jobs", summary["total"]),
+        ("Pending enrichment", summary["pending_count"]),
         ("Enriched", enriched),
-        ("Partial enriched", detail_counts.get("partial", 0)),
+        ("Partially enriched", detail_counts.get("partial", 0)),
         ("Failed", failed),
         ("Blocked", summary["blocked_count"]),
         ("LinkedIn auth", "ready" if linkedin_auth.get("available", True) else "login needed"),
@@ -2058,7 +2097,7 @@ def render_summary_cards(summary):
 
 
 def _jobs_href(*, source="all", status="ready", limit=50):
-    return f"/jobs?source={quote(source)}&status={quote(status)}&limit={limit}"
+    return f"/legacy/jobs?source={quote(source)}&status={quote(status)}&limit={limit}"
 
 
 def render_queue_jump_strip(summary):
@@ -2072,8 +2111,8 @@ def render_queue_jump_strip(summary):
         ("All jobs", "all", "all"),
         ("Ready", "all", "ready"),
         ("Enriched", "all", "enriched"),
-        ("Partial enriched", "all", "partial"),
-        ("Pending enrich", "all", "pending"),
+        ("Partially enriched", "all", "partial"),
+        ("Pending enrichment", "all", "pending"),
         ("Processing", "all", "processing"),
         ("Failed", "all", "failed"),
         ("Failed URL", "all", "failed_url"),
@@ -2082,29 +2121,33 @@ def render_queue_jump_strip(summary):
         ("Done", "all", "done"),
         ("Done verified", "all", "done_verified"),
     ]
-    parts = []
+    primary = {"all", "ready", "blocked", "failed"}
+    shortcuts = []
+    other_filters = []
     for label, src, st in pills:
-        parts.append(
-            f'<a class="pill" href="{_jobs_href(source=src, status=st)}" data-app-nav="true">{html.escape(label)}</a>'
+        group = shortcuts if st in primary else other_filters
+        group.append(
+            f'<a href="{_jobs_href(source=src, status=st)}" data-app-nav="true">{html.escape(label)}</a>'
         )
-    linkedin_auth = summary.get("auth", {}).get("linkedin", {})
-    auth_ok = linkedin_auth.get("available", True)
-    auth_hint = "LinkedIn auth OK" if auth_ok else "LinkedIn auth needs refresh"
-    auth_class = "pill" if auth_ok else "pill active"
+    auth_ok = summary.get("auth", {}).get("linkedin", {}).get("available", True)
+    auth_alert = (
+        ""
+        if auth_ok
+        else '<p><a href="/legacy/health-view#review-auth-panel">LinkedIn sign-in needs attention</a></p>'
+    )
     return f"""
     <div class="panel">
-      <h2 style="margin-top:0;font-size:1.05rem;">Job queue</h2>
-      <p class="muted" style="margin:0 0 10px 0;">
-        <strong>{summary["total"]}</strong> jobs,
-        <strong>{summary["ready_count"]}</strong> ready,
-        <strong>{summary["pending_count"]}</strong> pending,
-        <strong>{failed_n}</strong> failed,
-        <strong>{done_n}</strong> done.
+      <h2>Job queue</h2>
+      <p class="muted">
+        <strong>{summary["total"]}</strong> jobs · {summary["ready_count"]} ready ·
+        {summary["pending_count"]} pending · {failed_n} failed · {done_n} done
       </p>
-      <div class="actions" style="flex-wrap:wrap;gap:8px;">
-        {"".join(parts)}
-        <a class="{auth_class}" href="/health-view#review-auth-panel" data-app-nav="true">{html.escape(auth_hint)}</a>
-      </div>
+      {auth_alert}
+      <div class="queue-links">{"".join(shortcuts)}</div>
+      <details class="queue-secondary">
+        <summary>More queue filters</summary>
+        <div class="queue-links">{"".join(other_filters)}</div>
+      </details>
     </div>
     """
 
@@ -2314,13 +2357,13 @@ def render_ai_summary_panel(attempts: list) -> str:
 
     if success and summary_text:
         kw_pills = "".join(
-            f'<span style="display:inline-block;background:#d8f5e0;color:#1a4a2e;border-radius:999px;'
+            f'<span style="display:inline-block;background:var(--good-soft);color:var(--good);border-radius:999px;'
             f'padding:2px 10px;font-size:0.78rem;margin:2px 3px 2px 0;">{html.escape(k)}</span>'
             for k in keywords_used
         )
         kw_block = f'<p style="margin:10px 0 0 0;">{kw_pills}</p>' if kw_pills else ""
         status_badge = '<span class="status done" style="font-size:0.75rem;padding:2px 6px;vertical-align:middle;">latest attempt</span>'
-        body = f"""      <blockquote style="margin:0;padding:12px 16px;background:#fffdf8;border-left:3px solid #3cb878;border-radius:0 10px 10px 0;font-family:Georgia,serif;font-size:0.97rem;line-height:1.6;">
+        body = f"""      <blockquote style="margin:0;padding:12px 16px;background:var(--panel-strong);border-left:3px solid var(--accent);border-radius:0 10px 10px 0;font-family:Georgia,serif;font-size:0.97rem;line-height:1.6;">
         {html.escape(summary_text)}
       </blockquote>
       {kw_block}"""
@@ -2377,9 +2420,9 @@ def render_resume_history_cards(attempts: list, job_id: int | None = None) -> st
         summary_text = _load_summary_for_attempt(attempt)
         if summary_text:
             summary_html = (
-                f'<blockquote style="margin:12px 0 0 0;padding:10px 14px;background:#fffdf8;'
-                f"border-left:3px solid #3cb878;border-radius:0 8px 8px 0;"
-                f'font-family:Georgia,serif;font-size:0.9rem;line-height:1.55;color:#2a2a2a;">'
+                f'<blockquote style="margin:12px 0 0 0;padding:10px 14px;background:var(--panel-strong);'
+                f"border-left:3px solid var(--accent);border-radius:0 8px 8px 0;"
+                f'font-family:Georgia,serif;font-size:0.9rem;line-height:1.55;color:var(--ink);">'
                 f"{html.escape(summary_text)}</blockquote>"
             )
         flags = attempt.get("concern_flags")
@@ -2498,7 +2541,7 @@ def render_status_toolbar(
         )
         label = STATUS_FILTER_LABELS.get(status, status)
         pills.append(
-            f'<a class="{class_name}" href="/jobs?{qs}" title="{html.escape(status)}">{html.escape(label)}</a>'
+            f'<a class="{class_name}" href="/legacy/jobs?{qs}" title="{html.escape(status)}">{html.escape(label)}</a>'
         )
     return "".join(pills)
 
@@ -2526,29 +2569,36 @@ def render_source_toolbar(
             direction=direction,
             tag=tag,
         )
-        pills.append(f'<a class="{class_name}" href="/jobs?{qs}">{html.escape(source)}</a>')
+        pills.append(f'<a class="{class_name}" href="/legacy/jobs?{qs}">{html.escape(source)}</a>')
     return "".join(pills)
 
 
 def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
+    filters_active = (
+        tag or source != "all" or status != "all" or sort != "date_scraped" or direction != "desc"
+    )
     return f"""
-    <form class="panel" method="get" action="/jobs" style="margin-bottom: 18px;">
-      <div class="filter-form-grid">
-        <div style="grid-column: span 2; min-width:min(100%, 280px);">
-          <label class="label" for="q">Search</label>
+    <form class="panel" method="get" action="/legacy/jobs" style="margin-bottom: 18px;">
+      <div class="search-row">
+        <div>
+          <label class="label" for="q">Search jobs</label>
           <input id="q" name="q" type="text" value="{
         html.escape(q)
-    }" placeholder="company, title, description, or URL keyword" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+    }" placeholder="Company, title, description or URL">
         </div>
+        <button type="submit">Apply filters</button>
+        <a href="/legacy/jobs?source=all&amp;status=all&amp;limit=50">Reset</a>
+      </div>
+      <details class="queue-secondary"{" open" if filters_active else ""}>
+        <summary>Filters and sorting</summary>
+        <div class="filter-form-grid">
         <div>
           <label class="label" for="tag">Tag</label>
-          <input id="tag" name="tag" type="text" value="{
-        html.escape(tag)
-    }" placeholder="exact match on operator tag" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <input id="tag" name="tag" type="text" value="{html.escape(tag)}" placeholder="Exact tag">
         </div>
         <div>
           <label class="label" for="source">Source</label>
-          <select id="source" name="source" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <select id="source" name="source">
             {
         "".join(
             f'<option value="{value}"{" selected" if source == value else ""}>{label}</option>'
@@ -2563,7 +2613,7 @@ def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
         </div>
         <div>
           <label class="label" for="status">Status</label>
-          <select id="status" name="status" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <select id="status" name="status">
             {
         "".join(
             f'<option value="{value}"{" selected" if status == value else ""}>{label}</option>'
@@ -2571,8 +2621,8 @@ def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
                 ("all", "All statuses"),
                 ("ready", "Ready"),
                 ("enriched", "Enriched"),
-                ("partial", "Partial enriched"),
-                ("pending", "Pending enrich"),
+                ("partial", "Partially enriched"),
+                ("pending", "Pending enrichment"),
                 ("processing", "Processing"),
                 ("done", "Done"),
                 ("done_verified", "Done verified"),
@@ -2589,7 +2639,7 @@ def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
         </div>
         <div>
           <label class="label" for="sort">Sort</label>
-          <select id="sort" name="sort" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <select id="sort" name="sort">
             {
         "".join(
             f'<option value="{value}"{" selected" if sort == value else ""}>{label}</option>'
@@ -2610,17 +2660,14 @@ def render_search_bar(*, source, status, limit, q, sort, direction, tag=""):
         </div>
         <div>
           <label class="label" for="direction">Direction</label>
-          <select id="direction" name="direction" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#faf5ec;">
+          <select id="direction" name="direction">
             <option value="desc"{" selected" if direction == "desc" else ""}>Desc</option>
             <option value="asc"{" selected" if direction == "asc" else ""}>Asc</option>
           </select>
         </div>
       </div>
+      </details>
       <input type="hidden" name="limit" value="{limit}">
-      <div class="actions">
-        <button type="submit">Apply filters</button>
-        <a class="pill" href="/jobs?source=all&status=all&limit=50">Reset</a>
-      </div>
     </form>
     """
 
@@ -2654,7 +2701,7 @@ def _sortable_link(
         direction=next_direction,
         tag=tag,
     )
-    href = f"/jobs?{qs}"
+    href = f"/legacy/jobs?{qs}"
     return f'<a href="{href}">{html.escape(label)}{arrow}</a>'
 
 
@@ -2753,7 +2800,7 @@ def render_jobs_table(
     body = []
     for row in rows:
         status_class = html.escape(row["enrichment_status"] or "unknown")
-        job_link = add_return_to(f"/jobs/{row['id']}", return_to)
+        job_link = add_return_to(f"/legacy/jobs/{row['id']}", return_to)
         linkedin_link = (
             f'<a class="mono" href="{html.escape(row["job_url"])}" target="_blank" rel="noreferrer">listing</a>'
             if row.get("job_url")
@@ -2777,13 +2824,13 @@ def render_jobs_table(
             f"""
             <tr data-job-id="{row["id"]}">
               <td><input type="checkbox" class="jobs-row-check" value="{row["id"]}" aria-label="Select job {row["id"]}" /></td>
+              <td><a href="{job_link}">{format_text(row["title"])}</a></td>
+              <td>{format_text(row["company"])}</td>
+              <td><span class="status {status_class}" title="Stored value: {html.escape(row.get("enrichment_status") or "")}">{format_text(enrich_label)}</span></td>
               <td><a href="{job_link}" data-app-nav="true">#{row["id"]}</a></td>
               <td>{pri_cell}</td>
               <td>{format_text(row["source"])}</td>
-              <td>{format_text(row["company"])}</td>
-              <td>{format_text(row["title"])}</td>
               <td class="link-cell">{linkedin_link}{" | " + apply_link if linkedin_link and apply_link else apply_link}</td>
-              <td><span class="status {status_class}" title="Stored value: {html.escape(row.get("enrichment_status") or "")}">{format_text(enrich_label)}</span></td>
               <td>{format_text(row["apply_type"])}</td>
               <td>{format_text(row["enrichment_attempts"])}</td>
               <td class="mono">{format_text(row["next_enrichment_retry_at"])}</td>
@@ -2800,13 +2847,13 @@ def render_jobs_table(
         <thead>
           <tr>
             <th scope="col"><input type="checkbox" id="jobs-select-all" aria-label="Select all rows on this page" /></th>
+            <th scope="col">{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
+            <th scope="col">{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th scope="col">{_sortable_link("ID", "id", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th scope="col" title="Shows when this row is flagged to run before other enrichment work">Queue</th>
             <th scope="col">{_sortable_link("Source", "source", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th scope="col">{_sortable_link("Company", "company", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
-            <th scope="col">{_sortable_link("Title", "title", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th scope="col">Links</th>
-            <th scope="col">{_sortable_link("Enrichment", "enrichment_status", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th scope="col">{_sortable_link("Apply type", "apply_type", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th scope="col">{_sortable_link("Attempts", "enrichment_attempts", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
             <th scope="col">{_sortable_link("Next retry", "next_enrichment_retry_at", source=source, status=status, limit=limit, page=page, q=q, current_sort=sort, current_direction=direction, tag=tag)}</th>
@@ -2843,7 +2890,7 @@ def render_pagination(*, total_rows, source, status, limit, page, q, sort, direc
             direction=direction,
             tag=tag,
         )
-        links.append(f'<a class="pill" href="/jobs?{qs}">Previous</a>')
+        links.append(f'<a class="pill" href="/legacy/jobs?{qs}">Previous</a>')
 
     start_page = max(1, current_page - 2)
     end_page = min(total_pages, current_page + 2)
@@ -2859,7 +2906,7 @@ def render_pagination(*, total_rows, source, status, limit, page, q, sort, direc
             direction=direction,
             tag=tag,
         )
-        links.append(f'<a class="{class_name}" href="/jobs?{qs}">{page_number}</a>')
+        links.append(f'<a class="{class_name}" href="/legacy/jobs?{qs}">{page_number}</a>')
 
     if current_page < total_pages:
         next_page = current_page + 1
@@ -2873,7 +2920,7 @@ def render_pagination(*, total_rows, source, status, limit, page, q, sort, direc
             direction=direction,
             tag=tag,
         )
-        links.append(f'<a class="pill" href="/jobs?{qs}">Next</a>')
+        links.append(f'<a class="pill" href="/legacy/jobs?{qs}">Next</a>')
 
     return f"""
     <div class="toolbar" style="margin-top: 18px;">
@@ -3005,8 +3052,8 @@ def _parse_bulk_requeue_payload(payload: dict):
 
 def render_summary_table(summary):
     rows = [
-        ("Total rows", summary["total"]),
-        ("Pending enrich", summary["pending_count"]),
+        ("Jobs", summary["total"]),
+        ("Pending enrichment", summary["pending_count"]),
         ("Retry due", summary["retry_ready_count"]),
         ("Processing", summary["processing_count"]),
         ("Blocked", summary["blocked_count"]),
@@ -3060,11 +3107,13 @@ def render_summary_table(summary):
 
 def render_link_list(title, rows, *, return_to=""):
     if not rows:
-        return f'<div class="panel"><h2>{html.escape(title)}</h2><p>No rows.</p></div>'
+        return (
+            f'<div class="panel"><h2>{html.escape(title)}</h2><p>No jobs in this queue.</p></div>'
+        )
     items = "".join(
         f"""
         <tr>
-          <td><a href="{add_return_to(f"/jobs/{row['id']}", return_to)}" data-app-nav="true">#{row["id"]}</a></td>
+          <td><a href="{add_return_to(f"/legacy/jobs/{row['id']}", return_to)}" data-app-nav="true">#{row["id"]}</a></td>
           <td>{format_text(row["company"])}</td>
           <td>{format_text(truncate_text(row["title"], max_chars=80))}</td>
           <td>{format_text(row["enrichment_status"])}</td>
@@ -5278,8 +5327,8 @@ def api_attempt_llm(attempt_id: int, _auth: str = Depends(require_auth)):
         if val is not None:
             meta_rows += f'<div class="field"><div class="label">{html.escape(key)}</div><div class="value mono">{html.escape(str(val))}</div></div>'
 
-    prompt_block = f'<pre style="white-space:pre-wrap;word-break:break-word;max-height:600px;overflow:auto;background:#faf5ec;padding:16px;border-radius:12px;font-size:0.82rem;">{html.escape(prompt_text) if prompt_text else "<em>No prompt saved (enable HUNT_RESUME_LOG_LLM_IO=1)</em>"}</pre>'
-    response_block = f'<pre style="white-space:pre-wrap;word-break:break-word;max-height:400px;overflow:auto;background:#faf5ec;padding:16px;border-radius:12px;font-size:0.82rem;">{html.escape(response_text) if response_text else "<em>No response saved</em>"}</pre>'
+    prompt_block = f'<pre style="white-space:pre-wrap;word-break:break-word;max-height:600px;overflow:auto;background:var(--panel-strong);padding:16px;border-radius:12px;font-size:0.82rem;">{html.escape(prompt_text) if prompt_text else "<em>No prompt saved (enable HUNT_RESUME_LOG_LLM_IO=1)</em>"}</pre>'
+    response_block = f'<pre style="white-space:pre-wrap;word-break:break-word;max-height:400px;overflow:auto;background:var(--panel-strong);padding:16px;border-radius:12px;font-size:0.82rem;">{html.escape(response_text) if response_text else "<em>No response saved</em>"}</pre>'
 
     body = f"""
     <section class="hero">
@@ -5570,23 +5619,27 @@ def jobs_page(
     summary = get_review_queue_summary(source=source_filter)
     return_to = request_path_with_query(request)
 
+    show_connection = source in ("all", "linkedin")
+    linkedin = (summary.get("auth") or {}).get("linkedin") or {}
+    connection_warning = not linkedin.get("available", True) or bool(linkedin.get("last_error"))
     body = f"""
     <section class="hero">
       <h1>Jobs</h1>
     </section>
-    <details class="panel"><summary>Queue totals</summary><section class="cards">{render_summary_cards(summary)}</section></details>
-    {render_auth_status(summary) if source in ("all", "linkedin") else ""}
+    {render_auth_status(summary) if show_connection and connection_warning else ""}
     {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}
+    {render_jobs_selection_bar()}
+    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to, tag=tag_display)}
+    {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
+    {render_jobs_bulk_panel(source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
     <details class="panel"><summary>Filter shortcuts</summary>
     <p class="muted" style="margin:0 0 8px;">Source</p>
     <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
     <p class="muted" style="margin:12px 0 8px;">Enrichment status</p>
     <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
     </details>
-    {render_jobs_bulk_panel(source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
-    {render_jobs_selection_bar()}
-    {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to, tag=tag_display)}
-    {render_pagination(total_rows=total_rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
+    <details class="panel"><summary>Queue totals</summary><section class="cards">{render_summary_cards(summary)}</section></details>
+    {render_auth_status(summary) if show_connection and not connection_warning else ""}
     """
     return HTMLResponse(render_layout("Hunt jobs", body, current_path="/jobs"))
 
@@ -5609,7 +5662,7 @@ def job_detail(
     if not safe_return_to:
         safe_return_to = normalize_return_to(request.headers.get("referer"))
     requeue_action = add_return_to(f"/jobs/{row['id']}/requeue", safe_return_to)
-    back_link = safe_return_to or "/jobs"
+    back_link = safe_return_to or "/legacy/jobs"
     error_panel = (
         f'<div class="panel"><h2>Enrichment error</h2><pre>{format_text(row["last_enrichment_error"])}</pre></div>'
         if row.get("last_enrichment_error")
@@ -5650,7 +5703,7 @@ def job_detail(
       {error_panel}
       <div class="panel">
         <h2>Description</h2>
-        <pre>{format_text(description)}</pre>
+        <p class="description">{format_text(description)}</p>
       </div>
       <div class="panel">
         <h2>Notes and priority</h2>
@@ -5659,11 +5712,11 @@ def job_detail(
           <div class="value">{format_text(row.get("priority"))}</div>
         </div>
         <form method="post" action="/legacy/jobs/{row["id"]}/operator-meta" class="stack" style="gap:12px;">
-          <input type="hidden" name="return_to" value="{html.escape(add_return_to(f"/jobs/{row['id']}", safe_return_to))}" />
+          <input type="hidden" name="return_to" value="{html.escape(add_return_to(f"/legacy/jobs/{row['id']}", safe_return_to))}" />
           <label class="label" for="operator_notes">Notes</label>
-          <textarea id="operator_notes" name="operator_notes" rows="4" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px; background:#faf5ec;">{html.escape(row.get("operator_notes") or "")}</textarea>
+          <textarea id="operator_notes" name="operator_notes" rows="4" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px; background:var(--panel-strong);">{html.escape(row.get("operator_notes") or "")}</textarea>
           <label class="label" for="operator_tag">Tag</label>
-          <input id="operator_tag" name="operator_tag" type="text" value="{html.escape(row.get("operator_tag") or "")}" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px; background:#faf5ec;" />
+          <input id="operator_tag" name="operator_tag" type="text" value="{html.escape(row.get("operator_tag") or "")}" style="width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:12px; padding:10px; background:var(--panel-strong);" />
           <button type="submit" class="pill active">Save notes and tag</button>
         </form>
         <div class="actions" style="margin-top: 14px;">
@@ -5759,7 +5812,7 @@ def jobs_compare(
     body = f"""
     <section class="hero">
       <h1>Compare #{a} and #{b}</h1>
-      <p><a href="/jobs/{a}" data-app-nav="true">Open A</a> · <a href="/jobs/{b}" data-app-nav="true">Open B</a> · <a href="/legacy/jobs/compare" data-app-nav="true">New compare</a></p>
+      <p><a href="/legacy/jobs/{a}" data-app-nav="true">Open A</a> · <a href="/legacy/jobs/{b}" data-app-nav="true">Open B</a> · <a href="/legacy/jobs/compare" data-app-nav="true">Compare other jobs</a></p>
     </section>
     <div class="table-wrap">
       <table>

@@ -64,6 +64,8 @@ const fillReasons={
   optional_consent_skipped:'Optional consent.',address_country_conflict:'The country differs from your profile.',
   postal_code_requires_review:'Check the postal code against the country on the form.',
   choice_not_unique:'More than one option matched.',button_choice_interaction_unsupported:'C3 could not select the option.',
+  radio_reset_unavailable:'The form keeps a radio choice once selected. You can change it on the form.',
+  country_reset_unavailable:'Undo kept the phone country because this form requires a selection. You can change it on the form.',
   employer_submission_disabled:'The employer has disabled submission.',required_attachment_missing:'The required file is missing.',
   required_resume_missing:'The required resume is missing.',existing_attachment_preserved:'Kept the existing attachment.',
   resume_control_not_identified:'C3 could not identify the resume field.',field_changed_before_fill:'The control changed before filling.',

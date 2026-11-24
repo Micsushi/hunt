@@ -45,8 +45,7 @@
   font-size: 0.875rem;
 }
 .authOk {
-  background: var(--good-soft);
-  border-color: var(--good);
+  background: var(--panel);
 }
 .authBad {
   background: var(--danger-soft);
@@ -93,7 +92,8 @@
   flex-shrink: 0;
 }
 .tab {
-  padding: 6px 14px;
+  padding: 6px 12px;
+  min-height: 34px;
   font-size: 0.82rem;
   font-weight: 600;
   background: transparent;
@@ -144,15 +144,22 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 16px;
-  box-shadow: var(--shadow);
+  min-width: 0;
 }
 .panelTitle {
-  font-size: 0.75rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
   margin-bottom: 12px;
+}
+.filterBar {
+  display: grid;
+  gap: 10px;
+  border-block: 1px solid var(--line);
+  padding: 12px 0;
+  margin-bottom: 10px;
+}
+.tab:focus-visible {
+  outline-offset: -3px;
 }
 
 .activityRow {
@@ -223,8 +230,8 @@
   color: var(--warning);
 }
 .levelINFO {
-  background: var(--info-soft);
-  color: var(--info);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .levelDEBUG {
   background: var(--panel-strong);
@@ -232,16 +239,9 @@
 }
 
 .serviceTag {
-  display: inline-flex;
-  min-width: 32px;
-  justify-content: center;
-  padding: 2px 7px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   color: var(--muted);
-  background: var(--panel-strong);
 }
 
 .toggle {
@@ -307,6 +307,17 @@
 }
 
 @media (max-width: 640px) {
+  .tab {
+    padding-inline: 9px;
+    min-height: 40px;
+  }
+  .search {
+    width: 100%;
+    max-width: none;
+  }
+  .ts {
+    white-space: normal;
+  }
   .table,
   .table tbody {
     display: block;

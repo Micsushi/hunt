@@ -4,7 +4,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { sanitizeReportValue } from "../../checker/scripts/report-lib.mjs";
-import { buildPdf, getRepoRoot, runCommand } from "./build-lib.mjs";
+import { getRepoRoot, runCommand } from "./build-lib.mjs";
 
 const packageRoot = getRepoRoot();
 
@@ -196,10 +196,10 @@ async function runCliCheck(repoRoot, options, { signal }) {
   }
 }
 
-export function createOutputService({ repoRoot, buildPdfImpl = buildPdf }) {
+export function createOutputService({ repoRoot, readPreview }) {
   const outputRoot = resolve(repoRoot, "resume", "output");
   return {
-    async save({ source, name, overwrite = false, engine = "auto" }) {
+    async save({ name, overwrite = false }) {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.pdf$/u.test(name || "")) {
         throw typed("INVALID_OUTPUT", "Output name must be a safe .pdf filename.");
       }
@@ -208,40 +208,26 @@ export function createOutputService({ repoRoot, buildPdfImpl = buildPdf }) {
       if (existsSync(target) && !overwrite) {
         throw typed("OUTPUT_EXISTS", "Output exists; confirm overwrite.");
       }
-      const staging = resolve(repoRoot, ".runtime", "output-save", randomUUID());
+      const generated = await readPreview();
+      if (generated.length === 0) throw typed("ARTIFACT_MISSING", "Saved PDF is empty.");
+      const temporary = join(outputRoot, `.${name}.${randomUUID()}.tmp`);
       try {
-        const result = await buildPdfImpl({
-          source,
-          outDir: staging,
-          workspaceRoot: repoRoot,
-          engine,
-          clean: false,
-          quiet: true
-        });
-        const built = resolve(result.pdfPath);
-        const generated = await readFile(built);
-        if (generated.length === 0) throw typed("ARTIFACT_MISSING", "Saved PDF is empty.");
-        const temporary = join(outputRoot, `.${name}.${randomUUID()}.tmp`);
-        try {
-          await mkdir(outputRoot, { recursive: true });
-          await writeFile(temporary, generated, { flag: "wx" });
-          if (overwrite) {
-            await rename(temporary, target);
-          } else {
-            try {
-              await link(temporary, target);
-            } catch (error) {
-              if (error.code === "EEXIST") {
-                throw typed("OUTPUT_EXISTS", "Output exists; confirm overwrite.");
-              }
-              throw error;
+        await mkdir(outputRoot, { recursive: true });
+        await writeFile(temporary, generated, { flag: "wx" });
+        if (overwrite) {
+          await rename(temporary, target);
+        } else {
+          try {
+            await link(temporary, target);
+          } catch (error) {
+            if (error.code === "EEXIST") {
+              throw typed("OUTPUT_EXISTS", "Output exists; confirm overwrite.");
             }
+            throw error;
           }
-        } finally {
-          await rm(temporary, { force: true });
         }
       } finally {
-        await rm(staging, { recursive: true, force: true });
+        await rm(temporary, { force: true });
       }
       const info = await stat(target);
       if (!info.isFile() || info.size === 0) throw typed("ARTIFACT_MISSING", "Saved PDF is empty.");

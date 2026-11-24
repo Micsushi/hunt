@@ -174,25 +174,27 @@ function DiscoveryFilters({
       <div className={styles.panelHeader}>
         <h2 className={styles.panelTitle}>Discovery filters</h2>
       </div>
-      <label className={styles.field}>
-        Priority companies (one per line)
-        <span className={styles.fieldHint}>Matches trigger a Discord alert.</span>
-        <textarea
-          className={styles.textarea}
-          value={watchlist}
-          onChange={(e) => setWatchlist(e.target.value)}
-          rows={4}
-        />
-      </label>
-      <label className={styles.field}>
-        Excluded title phrases (one per line)
-        <textarea
-          className={styles.textarea}
-          value={blacklist}
-          onChange={(e) => setBlacklist(e.target.value)}
-          rows={4}
-        />
-      </label>
+      <div className={styles.gridTwo}>
+        <label className={styles.field}>
+          Priority companies (one per line)
+          <textarea
+            className={styles.textarea}
+            value={watchlist}
+            onChange={(e) => setWatchlist(e.target.value)}
+            rows={4}
+          />
+          <span className={styles.fieldHint}>Matches trigger a Discord alert.</span>
+        </label>
+        <label className={styles.field}>
+          Excluded title phrases (one per line)
+          <textarea
+            className={styles.textarea}
+            value={blacklist}
+            onChange={(e) => setBlacklist(e.target.value)}
+            rows={4}
+          />
+        </label>
+      </div>
       {error && (
         <p className={styles.errorMsg} role="alert">
           {error} Your draft is preserved.
@@ -2102,10 +2104,12 @@ export function SettingsPage() {
             Could not refresh C1 settings. Your draft is preserved.
           </p>
         )}
-        <div key={configReset}>{c1Content}</div>
+        <div key={configReset} className={styles.sectionStack}>
+          {c1Content}
+        </div>
       </div>
 
-      <div hidden={activeTab !== 'c2'}>
+      <div hidden={activeTab !== 'c2'} className={styles.sectionStack}>
         <C2ProviderRuntimeSettings />
         <AppNotificationSettings />
         <details className={styles.panel}>

@@ -8,7 +8,7 @@ import {WebSocket} from 'ws';
 import {startProductServer} from '../../src/product/server.ts';
 
 test('authenticated diagnostics return only sanitized extension metadata without attaching',async()=>{
-  const source=readFileSync('extension/background.js','utf8').replace("const instanceId = crypto.randomUUID();", "const instanceId = 'fixture-instance';").replace(/^import .*workday-account.*\r?\n/m, "").replace(/^import .*page-actions.*\r?\n/m,'const pageActionTabs=new Set();\n').replace(/^import .*website-handoff.*\r?\n/m,'const registerWebsiteHandoff=()=>{};\n').replace(/^import .*page-viewport.*\r?\n/m,'const preparePageViewport=async()=>async()=>{};\n');
+  const source=readFileSync('extension/background.js','utf8').replace("const instanceId = crypto.randomUUID();", "const instanceId = 'fixture-instance';").replace(/^import .*current-page-fill.*\r?\n/m,"const createCurrentPageFill=()=>({busy:()=>false});\n").replace(/^import .*(?:workday-account|fill-review-result).*\r?\n/gm, "").replace(/^import .*page-actions.*\r?\n/m,'const pageActionTabs=new Set();\n').replace(/^import .*website-handoff.*\r?\n/m,'const registerWebsiteHandoff=()=>{};\n').replace(/^import .*page-viewport.*\r?\n/m,'const preparePageViewport=async()=>async()=>{};\n');
   const event={addListener(){}};let reads=0;
   const chrome={storage:{local:{get:async()=>({})}},runtime:{onMessage:event,onStartup:event},tabs:{},debugger:{onEvent:event,onDetach:event,getTargets:async()=>{reads++;return [
     {id:'one',tabId:7,type:'page',attached:false,title:'Private title',url:'https://example.invalid/private?token=private'},

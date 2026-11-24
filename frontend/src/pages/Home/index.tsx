@@ -41,14 +41,16 @@ const TIMELINE_WINDOWS = [
 ]
 
 const PIE_COLORS = [
-  '#60a5fa',
-  '#34d399',
-  '#fbbf24',
-  '#f87171',
-  '#a78bfa',
-  '#fb923c',
-  '#38bdf8',
-  '#e879f9',
+  '#6cbce8',
+  '#f2bd62',
+  '#ab91dc',
+  '#68c3a9',
+  '#ed937c',
+  '#d797c1',
+  '#b9c96d',
+  '#879fe3',
+  '#dea379',
+  '#82ced2',
 ]
 
 const SOURCE_NAMES: Record<string, string> = {
@@ -62,7 +64,7 @@ function sourceName(source: string) {
   return SOURCE_NAMES[source] ?? source.replace(/^employer_/, '').replace(/_/g, ' ')
 }
 
-function ServiceStrip() {
+function ServiceStrip({ linkedIn }: { linkedIn?: boolean | null }) {
   const navigate = useNavigate()
   const { data, isError } = useQuery({
     queryKey: ['system-status'],
@@ -83,6 +85,7 @@ function ServiceStrip() {
     },
   ]
 
+  const linkedInState = linkedIn == null ? 'unknown' : linkedIn ? 'ok' : 'error'
   return (
     <div className={styles.serviceStrip}>
       {items.map((item) => {
@@ -90,7 +93,7 @@ function ServiceStrip() {
         return (
           <button
             key={item.key}
-            className={`${styles.servicePill} ${styles[`service_${state}`]}`}
+            className={styles.servicePill}
             onClick={() => navigate(item.path)}
             title={`${item.label}: ${state}`}
           >
@@ -100,6 +103,10 @@ function ServiceStrip() {
           </button>
         )
       })}
+      <Link className={styles.servicePill} to="/logs">
+        <span className={`${styles.serviceDot} ${styles[`dot_${linkedInState}`]}`} />
+        LinkedIn {linkedIn == null ? 'unknown' : linkedIn ? 'ready' : 'login needed'}
+      </Link>
     </div>
   )
 }
@@ -176,7 +183,7 @@ function SearchCoverage({ event }: { event?: { value: string } | null }) {
     /* Older or malformed records do not establish coverage. */
   }
   return (
-    <div className={styles.panelFeedback}>
+    <div className={styles.coverage}>
       <p role="status">{message}</p>
       <Link to="/ops">View source checks</Link>
     </div>
@@ -195,8 +202,9 @@ function BreakdownChart() {
   const { data } = query
   const rows = (data?.data ?? []).filter(({ count }) => count > 0)
   const limit = field === 'source' ? 6 : 10
-  const chartData = rows.slice(0, limit).map((row) => ({
+  const chartData = rows.slice(0, limit).map((row, i) => ({
     ...row,
+    color: PIE_COLORS[i],
     displayLabel:
       field === 'enrichment_status'
         ? (detailQualityLabels[row.label] ?? row.label)
@@ -207,6 +215,7 @@ function BreakdownChart() {
   if (rows.length > limit) {
     chartData.push({
       label: '',
+      color: 'var(--muted)',
       displayLabel: 'Other',
       count: rows.slice(limit).reduce((total, row) => total + row.count, 0),
     })
@@ -227,6 +236,7 @@ function BreakdownChart() {
             <button
               key={f.key}
               className={`${styles.seg} ${field === f.key ? styles.segActive : ''}`}
+              aria-pressed={field === f.key}
               onClick={() => setField(f.key)}
             >
               {f.label}
@@ -242,6 +252,7 @@ function BreakdownChart() {
           <PieChart>
             <Pie
               data={chartData}
+              isAnimationActive={false}
               dataKey="count"
               nameKey="displayLabel"
               cx="50%"
@@ -251,12 +262,8 @@ function BreakdownChart() {
               paddingAngle={2}
               onClick={(data) => handleSliceClick(data as unknown as { label: string })}
             >
-              {chartData.map((_, i) => (
-                <Cell
-                  key={i}
-                  fill={PIE_COLORS[i % PIE_COLORS.length]}
-                  cursor={chartData[i].label ? 'pointer' : undefined}
-                />
+              {chartData.map((row) => (
+                <Cell key={row.label} fill={row.color} cursor={row.label ? 'pointer' : undefined} />
               ))}
             </Pie>
             <Tooltip
@@ -273,13 +280,18 @@ function BreakdownChart() {
         </ResponsiveContainer>
       )}
       <div className={styles.legend}>
-        {chartData.map((d, i) => (
+        {chartData.map((d) => (
           <span key={d.label} className={styles.legendItem}>
-            <span
-              className={styles.legendDot}
-              style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
-            />
-            {d.displayLabel} ({d.count})
+            <span className={styles.legendDot} style={{ background: d.color }} />
+            {d.label ? (
+              <button type="button" onClick={() => handleSliceClick(d)}>
+                {d.displayLabel} ({d.count})
+              </button>
+            ) : (
+              <span>
+                {d.displayLabel} ({d.count})
+              </span>
+            )}
           </span>
         ))}
       </div>
@@ -311,6 +323,7 @@ function TimelineChart() {
             <button
               key={w.days}
               className={`${styles.seg} ${days === w.days ? styles.segActive : ''}`}
+              aria-pressed={days === w.days}
               onClick={() => setDays(w.days)}
             >
               {w.label}
@@ -348,7 +361,13 @@ function TimelineChart() {
               }}
               cursor={{ fill: 'var(--panel-hover)' }}
             />
-            <Bar dataKey="count" name="Jobs" fill="var(--accent)" radius={[3, 3, 0, 0]} />
+            <Bar
+              isAnimationActive={false}
+              dataKey="count"
+              name="Jobs"
+              fill="#ad9de8"
+              radius={[3, 3, 0, 0]}
+            />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -498,18 +517,17 @@ export function HomePage() {
   const partial = summary?.detail_quality_counts?.partial ?? 0
   const failed = summary?.detail_quality_counts?.failed ?? counts?.failed ?? 0
   const authAvailable = summary?.auth?.linkedin?.available
-  const authOk = authAvailable === true
 
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
         <h1 className={styles.heroTitle}>Overview</h1>
+        {summary && <ServiceStrip linkedIn={authAvailable} />}
       </section>
 
       <PanelFeedback name="overview" query={query} />
       {summary && (
         <>
-          <ServiceStrip />
           <SearchCoverage event={summary.events?.hunt_last_scrape_end} />
 
           <section className={styles.cards}>
@@ -546,12 +564,6 @@ export function HomePage() {
               value={summary.blocked_count}
               onClick={() => navigate('/jobs?status=blocked')}
               warning={summary.blocked_count > 0}
-            />
-            <Card
-              label="LinkedIn access"
-              value={authOk ? 'Ready' : authAvailable === false ? 'Login needed' : 'Unknown'}
-              onClick={() => navigate('/logs')}
-              danger={authAvailable === false}
             />
           </section>
 

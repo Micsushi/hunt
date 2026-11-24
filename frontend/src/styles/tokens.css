@@ -1,32 +1,33 @@
 :root {
   /* Palette: coolors.co/474a2c-636940-59a96a-9bdeac-b4e7ce */
-  --bg: #0f1a14;
-  --bg-grad-top: #0f1a14;
-  --bg-grad-bottom: #0b120e;
-  --panel: #172212;
-  --panel-strong: #1d2b18;
-  --panel-hover: #223320;
+  --bg: #141a15;
+  --bg-grad-top: #141a15;
+  --bg-grad-bottom: #111612;
+  --nav-surface: #243d2b;
+  --panel: #202820;
+  --panel-strong: #2a352b;
+  --panel-hover: #324133;
 
-  --ink: #d4f0dc;
-  --muted: #9bb69f;
+  --ink: #edf2e9;
+  --muted: #b4c3b2;
   --ink-inverse: #07100a;
 
-  --line: #2a3f2a;
-  --line-strong: #3a5a3a;
+  --line: #394739;
+  --line-strong: #5a715c;
 
-  --accent: #59a96a;
-  --accent-soft: #1e3a26;
+  --accent: #90d59b;
+  --accent-soft: #304b34;
   --accent-ink: #07100a;
-  --accent-dim: #4f965f;
+  --accent-dim: #78be85;
 
   --good: #9bdeac;
   --good-soft: #1a2e1e;
   --warning: #f0b429;
   --warning-soft: #2d2410;
-  --danger: #f05252;
+  --danger: #ff8c81;
   --danger-soft: #2d1414;
-  --info: #7bc4d8;
-  --info-soft: #102030;
+  --info: #b2d8b6;
+  --info-soft: #273c2b;
 
   --resume-paper: #fffdf8;
   --resume-ink: #141813;

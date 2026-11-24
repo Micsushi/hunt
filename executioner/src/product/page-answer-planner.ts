@@ -15,6 +15,15 @@ import type { productSources, effectiveProfileFacts } from './sources.ts';
 const handsOnCloudQuestion = normalizeCatalogText('Do you have any hands-on experience with Kubernetes, Docker, or cloud platforms (e.g., AWS, Azure, GCP)?');
 const northAmericanLocationQuestion = normalizeCatalogText('This role requires employees to be based in the United States or Canada. Are you currently located in the U.S. or Canada?');
 const averageGpaQuestion = normalizeCatalogText('What is your average GPA?');
+const canadaWorkQuestion = normalizeCatalogText('Are you legally entitled to work in Canada?');
+
+function languageLevelAnswer(label: string, saved: unknown): string | undefined {
+  const language = /^(?:please tell us a bit about your level of fluency in|what is your level of fluency in) written and spoken ([\p{L} ]+)$/u.exec(label)?.[1];
+  if (!language || typeof saved !== 'string') return;
+  const entries = saved.split(/[;\n]/u).map(part => /^\s*([^:]+):\s*([^:]+?)\s*$/u.exec(part));
+  const matches = entries.filter(entry => entry && normalizeCatalogText(entry[1]!) === language);
+  if (matches.length === 1) return matches[0]![0].trim();
+}
 
 function provinceResidenceAnswer(question: string, canadianRegion: string | undefined): 'yes' | 'no' | undefined {
   if (!canadianRegion) return;
@@ -93,6 +102,17 @@ export function createPageAnswerPlanner(
       const readback = constraints?.readOnly && state === 'populated';
       return {...binding, answer: null, provisional: !readback, reason: readback ? 'readback_only' : 'unsupported'};
     }
+    const questionFact = inspectQuestionMatch(row.question, employerNames).factId;
+    if (row.control === 'text' && /^(?:start|end) date year$/u.test(normalizeCatalogText(row.question))) {
+      return {...binding, answer:null, provisional:row.required, reason:row.required ? 'needs_owner_answer' : 'optional_field'};
+    }
+    if (!row.profileOnly && row.control === 'text' && (questionFact === 'education_start_year' || questionFact === 'education_end_year')) {
+      const year = String(ownerFact(questionFact) ?? '');
+      const valid = /^[1-9]\d{3}$/u.test(year) && Number(year) >= (constraints?.min ?? -Infinity) &&
+        Number(year) <= (constraints?.max ?? Infinity);
+      return {...binding, answer:valid ? year : null, provisional:!valid && row.required,
+        reason:valid ? 'saved_profile_field' : row.required ? 'needs_owner_answer' : 'optional_field'};
+    }
     if (!row.required || row.profileOnly) {
       // On ordinary forms only write a known, exact profile answer. Optional
       // application fields follow the same rule and never use a guessed answer.
@@ -102,9 +122,8 @@ export function createPageAnswerPlanner(
           (f.provenance === 'owner_provided' || f.provenance === 'resume_verified'));
         let answer = profileFieldValue(row.profileOnly && row.registrationEmail && row.control==='text' ? 'Email' : row.question, saved);
         if (!row.profileOnly && !answer) {
-          const id = inspectQuestionMatch(row.question, employerNames).factId;
-          if (id === 'salary_expectations' || id === 'earliest_start_date') {
-            const value = saved.find(f => f.factId === id && f.provenance === 'owner_provided')?.value;
+          if (questionFact === 'salary_expectations' || questionFact === 'earliest_start_date') {
+            const value = saved.find(f => f.factId === questionFact && f.provenance === 'owner_provided')?.value;
             if (typeof value === 'string') answer = value;
           }
         }
@@ -113,6 +132,12 @@ export function createPageAnswerPlanner(
           answer = options.length === 1 ? options[0] : undefined;
         }
         if (answer?.trim()) return {...binding, answer, provisional:false, reason:'saved_profile_field', lane:'profile_fact'};
+      }
+      if (currentPage && !row.required && !row.profileOnly && row.control === 'listbox' &&
+          questionFact && ['city','education_institution','education_degree','education_field_of_study'].includes(questionFact) &&
+          typeof ownerFact(questionFact) === 'string') {
+        const plan = await planAnswer({...row, required:true}, observations, signal);
+        if (!plan.provisional && (plan.answer !== null || plan.query)) return {...plan, reason:'saved_profile_field'};
       }
       return {...binding, answer:null, provisional: row.required && !populated,
         reason: row.required ? populated ? 'existing_value_preserved' : 'needs_owner_answer' : 'optional_field'};
@@ -150,7 +175,6 @@ export function createPageAnswerPlanner(
       return {...binding, answer: number, phoneCountry: country, ...(numericDial && {phoneDial: numericDial}), provisional: inferred,
         reason: inferred ? 'phone_country_inferred_from_residence' : 'answer_resolved'};
     }
-    const questionFact=inspectQuestionMatch(row.question, employerNames).factId;
     // A committed screening radio needs the expected answer for comparison. The browser preserves the selection.
     const compareBackgroundCheck = state === 'populated' && row.valid && row.control === 'radio' &&
       consent && questionFact === 'background_check_willing';
@@ -222,11 +246,19 @@ export function createPageAnswerPlanner(
     const label = normalizeCatalogText(row.question);
     const fitsGpa = label === averageGpaQuestion && constraints?.inputType === 'text' && !constraints.pattern &&
       scaledGpa && (constraints.maxLength == null || scaledGpa.length <= constraints.maxLength);
+    const language = languageLevelAnswer(label, ownerFact('languages'));
+    const fitsLanguage = language && (!constraints?.inputType || constraints.inputType==='text') && !constraints?.pattern &&
+      language.length >= (constraints?.minLength ?? 0) && language.length <= (constraints?.maxLength ?? Infinity);
     const text = ['text', 'textarea'].includes(row.control)
-      ? fitsGpa ? scaledGpa : profileFieldValue(row.question, facts)
+      ? fitsGpa ? scaledGpa : fitsLanguage ? language : profileFieldValue(row.question, facts)
       : undefined;
+    const destination = /^if you are not currently based in ([\p{L} ]+) are you willing to relocate$/u.exec(label)?.[1];
+    const relocation = normalizeCatalogText(String(ownerFact('relocation_preference') ?? ''));
+    const canadianOttawa = destination === 'ottawa' && row.formId && observations.some(peer =>
+      peer.formId === row.formId && peer.frameId === row.frameId && normalizeCatalogText(peer.question) === canadaWorkQuestion);
+    const willingToRelocate = destination && (relocation === destination || relocation === 'anywhere in canada' && canadianOttawa);
     const positive = (hasCloudExperience && label === handsOnCloudQuestion) ||
-      (hasNorthAmericanLocation && label === northAmericanLocationQuestion);
+      (hasNorthAmericanLocation && label === northAmericanLocationQuestion) || willingToRelocate;
     const binary = positive ? 'yes' : provinceResidenceAnswer(row.question, canadianRegion);
     const binaryChoices = binary && row.widget !== 'multi-checkbox' && ['radio', 'select', 'listbox'].includes(row.control)
       ? row.options.filter(option => option.toLowerCase() === binary) : [];

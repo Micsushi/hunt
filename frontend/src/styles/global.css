@@ -10,6 +10,8 @@
 
 html {
   min-height: 100%;
+  scrollbar-gutter: stable;
+  color-scheme: dark;
   background: linear-gradient(180deg, var(--bg-grad-top) 0%, var(--bg-grad-bottom) 100%);
   font-family: var(--font-sans);
   font-size: 16px;
@@ -49,6 +51,14 @@ select,
 textarea {
   font-family: inherit;
   font-size: 1rem;
+}
+
+.demoNotice {
+  padding: 4px 16px;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 0.75rem;
+  text-align: center;
 }
 
 /* Utility classes */

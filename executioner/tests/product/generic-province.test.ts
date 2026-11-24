@@ -31,6 +31,32 @@ async function fixture(page:Page,extra=''){
 test('Bamboo data-menu-id portal selects saved province and Clear Selection restores blank on Undo',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
+    const radios=await browser.newPage();
+    await radios.route(url,route=>route.fulfill({contentType:'text/html',body:`<form id="job-application-form">
+      <label>First name<input name="first"></label><label>Email<input type=email></label>
+      <fieldset role="radiogroup" aria-required="true" data-fabric-component="RadioGroup"><legend>Application question</legend>
+      ${['Yes','No'].map(name=>`<label data-fabric-component="Radio"><span class="MuiRadio-root"><input type=radio name=question value="${name}"></span>${name}</label>`).join('')}
+      </fieldset><button>Submit application</button></form>`}));
+    await radios.goto(url);
+    const yes=radios.getByLabel('Yes',{exact:true});
+    await yes.evaluate((input:HTMLInputElement)=>{
+      input.checked=true; // Previous C3 versions changed only the hidden input.
+      input.addEventListener('click',()=>input.parentElement!.classList.add('Mui-checked'));
+    });
+    const readRadios=()=>radios.evaluate(fillVisibleFields,{scope:'page' as const,action:'status' as const});
+    const prior=await readRadios();
+    const question=prior.matching?.find(row=>row.control==='radio');
+    assert.ok(question);
+    assert.equal(question.selected,'');
+    assert.ok(prior.requiredIssues?.some(issue=>issue.label==='Application question'));
+    const plans=[{fieldId:question.fieldId,signature:question.signature,provisional:false,reason:'test_fact',answer:'Yes'}];
+    await radios.evaluate(fillVisibleFields,{scope:'page' as const,matchingPlans:plans});
+    assert.equal((await readRadios()).matching?.find(row=>row.control==='radio')?.selected,'Yes');
+    assert.equal(await radios.locator('.Mui-checked input:checked').count(),1);
+    const radioUndo=await radios.evaluate(fillVisibleFields,{scope:'page' as const,action:'undo' as const});
+    assert.ok(radioUndo.skipped.some(row=>row.label==='Application question' && row.reason==='radio_reset_unavailable'));
+    assert.equal(await radios.locator('.Mui-checked input:checked').count(),1);
+    await radios.close();
     const page=await browser.newPage();await fixture(page);
     await page.locator('#province').evaluate((e:HTMLButtonElement)=>e.click());
     assert.equal(await page.locator('#province').getAttribute('aria-expanded'),'false','Fabric ignores a zero-detail programmatic click');

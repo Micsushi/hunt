@@ -156,6 +156,14 @@ function moduleReferences(file: SourceFile): ModuleReference[] {
       node.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
       const firstArgument = node.arguments[0];
+      if(file.path.startsWith('extension/') && firstArgument && ts.isCallExpression(firstArgument) &&
+          firstArgument.expression.getText(source)==='chrome.runtime.getURL' && firstArgument.arguments.length===1){
+        const asset=firstArgument.arguments[0];
+        if(asset && ts.isStringLiteralLike(asset) && /^(?:[\w-]+\/)*[\w-]+\.js$/.test(asset.text)){
+          references.push({kind:'module',path:'./'+posix.relative(posix.dirname(file.path),'extension/'+asset.text)});
+          return;
+        }
+      }
       references.push(
         firstArgument !== undefined && ts.isStringLiteralLike(firstArgument)
           ? { kind: "module", path: firstArgument.text }

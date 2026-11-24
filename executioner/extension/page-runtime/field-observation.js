@@ -1,5 +1,5 @@
 export function createFieldObserver({
-  deepQuery, visible, norm, fabricWidget, fabricState, state, choiceDraft, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, provinceContext, provinceValue
+  deepQuery, visible, norm, fabricWidget, fabricState, radioSelected, state, choiceDraft, sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, pairedPhone, provinceContext, provinceValue
 }) {
   const buttonChoiceObservation = e => {
     const id=e.getAttribute('aria-controls'),root=e.getRootNode();
@@ -19,7 +19,8 @@ export function createFieldObserver({
     const fabric=fabricWidget(e),fabricRead=fabric && fabricState(fabric),committed=state.committedChoices?.get(e),searchChoice=sharedChoice(e),buttonChoice=semanticChoiceButton(e)?buttonChoiceObservation(e):null;
     const province = !fabric && provinceContext(e);
     const queryDraft=searchChoice?.widget && choiceDraft(searchChoice.widget);
-    const cachedOptions=queryDraft && boundChoice(queryDraft.change) && choiceState(searchChoice)===queryDraft.change.after?queryDraft.options:[];
+    const draftOptions=queryDraft && boundChoice(queryDraft.change) && choiceState(searchChoice)===queryDraft.change.after ? queryDraft.options : [];
+    const cachedOptions=[...(searchChoice?.cachedOptions??[]),...draftOptions];
     const choice=committed?.value===e.value?committed:null;
     const group=e.type==='radio' ? composedClosest(e,'fieldset,[role=radiogroup]') : null;
     const node=group??e;
@@ -39,11 +40,11 @@ export function createFieldObserver({
     const options=buttonChoice?buttonChoice.options:searchChoice?[...new Set([...searchChoice.labels,...(searchChoice.popupStatus==='ready'?searchChoice.options.filter(option=>!option.disabled).map(option=>option.label):cachedOptions)])]:fabric ? state.fabricOptions?.get(e)??[] : choice?choice.options:control==='select'?[...e.options].filter(availableOption).map(optionLabel):
       group?radios.map(labelFor):control==='listbox' && menus.length===1?[...menus[0].querySelectorAll('[role=option]')].filter(o=>o.getAttribute('aria-disabled')!=='true').map(o=>o.textContent.trim()):[];
     const selected=province ? (provinceValue(e) === 'Province –Select–' ? '' : provinceValue(e).slice(9)) : buttonChoice?buttonChoice.selected:searchChoice?searchChoice.labels.join('; '):fabric ? fabricRead?JSON.parse(fabricRead).label:'' : control==='select'?[...e.selectedOptions].filter(availableOption).map(optionLabel).join('; '):
-      group?radios.filter(o=>o.checked).map(labelFor).join('; '):control==='checkbox'?e.checked:
+      group?radios.filter(radioSelected).map(labelFor).join('; '):control==='checkbox'?e.checked:
       control==='listbox'?choice?.selected??e.closest('.select__control')?.querySelector('[class*=single-value]')?.textContent?.trim()??'':e.value;
     const number = name => e.getAttribute(name) && Number.isFinite(Number(e.getAttribute(name))) ? Number(e.getAttribute(name)) : null;
-    const phone = phoneWidget(e);
-    const widgetType = searchChoice?.observation ?? (e.type === 'select-multiple' ? {widget:'native-multiple'} : province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
+    const phone = phoneWidget(e), paired = pairedPhone?.(e);
+    const widgetType = searchChoice?.observation ?? (paired ? {widget:'international-phone', backing:JSON.stringify(paired)} : e.type === 'select-multiple' ? {widget:'native-multiple'} : province ? {widget:'province-menu', backing:provinceValue(e)} : e.matches('input.iti__tel-input[data-intl-tel-input-id]')
       ? {widget:'international-phone', backing:phone ? phoneState(phone) : null} : {});
     const form = e.hasAttribute('form') ? e.form : e.form ?? composedClosest(e,'form,[role=form]');
     if (form && !state.matchingIds.has(form)) state.matchingIds.set(form,crypto.randomUUID());
@@ -60,7 +61,18 @@ export function createFieldObserver({
       ...(orphanedControlChange(e)?{provisional:true,reason:'orphaned_control_write_requires_review'}:{}),
       selected,valid:buttonChoice?buttonChoice.diagnostics.selectionConfirmed && e.validity?.valid!==false && e.getAttribute('aria-invalid')!=='true':searchChoice?searchChoice.valid && !pendingChoice(searchChoice) && e.validity?.valid!==false && e.getAttribute('aria-invalid')!=='true':fabric?fabricRead!==null && fabric.backing.validity.valid:e.validity?.valid!==false && e.getAttribute('aria-invalid')!=='true'};
     const {choiceInspection,...stableObservation}=observation;
-    return {...observation,signature:JSON.stringify(stableObservation)};
+    const fieldId=observation.fieldId, formAtRead=regionForTarget(), questionAtRead=targetLabel();
+    const idAtRead=node.id, typeAtRead=e.type, nameAtRead=e.name;
+    function regionForTarget(){return e.form ?? composedClosest(e,'form,[role=form]') ?? e.getRootNode();}
+    function targetLabel(){return group ? group.getAttribute('data-hunt-question-context') || group.getAttribute('aria-label') ||
+      group.querySelector('legend')?.textContent || labelFor(e) : labelFor(e);}
+    state.matchingReviewTargets??=new Map();
+    state.matchingReviewTargets.set(fieldId,()=>node.isConnected && e.isConnected && visible(node) &&
+      (!group || composedClosest(e,'fieldset,[role=radiogroup]')===group) && regionForTarget()===formAtRead &&
+      node.id===idAtRead && e.type===typeAtRead && e.name===nameAtRead && targetLabel()===questionAtRead ? node : null);
+    const previous=state.reviewByField?.get(fieldId);
+    return {...observation,canReveal:visible(node),...(previous && previous.question===observation.question &&
+      previous.selected===selected && {previousReview:previous.kind}),signature:JSON.stringify(stableObservation)};
   };
   return { observe };
 }

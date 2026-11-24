@@ -1,8 +1,8 @@
-﻿# DESIGN: Overview
+# DESIGN: Overview
 
 ## Overview
 
-Deep forest green dark theme. Feels like a terminal or ops console - focused, low-glare, built for extended operator use. The single muted green accent (`#59a96a`) signals human intent: run, approve, submit. All other UI chrome stays muted.
+The console uses dark forest-green surfaces and a sage accent (`#90d59b`) for primary actions and keyboard focus. Warnings and errors use amber and red.
 
 This is a React SPA (TypeScript, CSS Modules). Token source of truth: `frontend/src/styles/tokens.css`. Component styles: `frontend/src/components/*/`. Page styles: `frontend/src/pages/*/`.
 

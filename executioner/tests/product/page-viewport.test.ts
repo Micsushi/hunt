@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
-import {preparePageViewport,viewportOwnership,viewportUnavailable,viewportCleanupPending} from '../../extension/page-viewport.js';
+import {preparePageViewport,viewportOwnership,viewportUnavailable,pagePreparationUnavailable,viewportCleanupPending} from '../../extension/page-viewport.js';
 
 test('temporary desktop override applies and restores once only for zero-sized viewports', async () => {
   for (const [width, height] of [[1707, 735], [0, 0], [0, 800], [1280, 0]] as const) {
@@ -32,10 +32,21 @@ test('unusable metrics pause without field operations and failed overrides clean
       if(mode==='read-failed' || mode==='set-failed'&&method==='Emulation.setDeviceMetricsOverride' || mode==='recheck-failed'&&method==='Page.getLayoutMetrics'&&reads>0)throw new Error('private browser detail');
       if(method==='Page.getLayoutMetrics'){reads++;return mode==='invalid'?{}:{cssLayoutViewport:{clientWidth:0,clientHeight:0}};}
       return{};
-    }),error=>error instanceof Error&&error.message===viewportUnavailable);
+    }),error=>error instanceof Error&&error.message===(mode==='still-zero'?viewportUnavailable:pagePreparationUnavailable));
     assert.equal(calls.includes('Emulation.clearDeviceMetricsOverride'),!['invalid','read-failed'].includes(mode));
     assert.ok(calls.every(method=>['Page.getLayoutMetrics','Emulation.setDeviceMetricsOverride','Emulation.clearDeviceMetricsOverride'].includes(method)));
   }
+  const owner=viewportOwnership('readable',{get:async()=>({}),set:async()=>{},remove:async()=>{}});
+  const calls:string[]=[];
+  const send=async(method:string)=>{
+    calls.push(method);
+    if(method==='Page.getLayoutMetrics')return {cssLayoutViewport:{clientWidth:1000,clientHeight:800}};
+    throw new Error('renderer unavailable');
+  };
+  await assert.rejects(preparePageViewport(send,owner),{message:pagePreparationUnavailable});
+  calls.length=0;
+  await (await preparePageViewport(send,owner,{renderHidden:false}))();
+  assert.deepEqual(calls,['Page.getLayoutMetrics']);
 });
 
 test('temporary viewport uses real CDP and restores the isolated browser original dimensions',async()=>{

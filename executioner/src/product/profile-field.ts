@@ -19,10 +19,10 @@ export function profileFieldValue(label: string, facts: readonly {factId:string;
   for (const key of ['github','github url','github profile','github profile url']) ids[key]='github_url';
   for (const key of ['portfolio','portfolio url','portfolio website','personal website']) ids[key]='portfolio_url';
   ids['adresse courriel / email']='email_address';
-  ids['zip']='postal_code';
+  for (const label of ['zip','zip / postal code','zip/postal code']) ids[label]='postal_code';
   ids['numéro de téléphone / phone number']='phone_number';
   Object.assign(ids,{'preferred first name':'preferred_name','ville':'city','code postal':'postal_code','linkedin link':'linkedin_url','website, blog or portfolio':'portfolio_url','website':'portfolio_url','confirm your email':'email_address','address':'address_line1'});
-  Object.assign(ids,{'street address':'address_line1','address line 1':'address_line1','address line 2':'address_line2',
+  Object.assign(ids,{'street address':'address_line1','address line 1':'address_line1','address 1':'address_line1','address line 2':'address_line2',
     country:'country',pays:'country',state:'region',province:'region','state/province':'region',region:'region'});
   const value=fact(ids[key]??'');
   return typeof value==='string'?value:undefined;

@@ -4,8 +4,30 @@
   "version": "0.1.21",
   "minimum_chrome_version": "125",
   "description": "Fill supported job applications in selected tabs and review them before submission.",
-  "permissions": ["debugger", "tabs", "storage", "activeTab", "scripting"],
-  "host_permissions": ["http://127.0.0.1:47831/*", "https://*.myworkdayjobs.com/*", "https://*.myworkdaysite.com/*"],
+  "permissions": ["debugger", "tabs", "storage", "activeTab", "scripting", "webNavigation"],
+  "host_permissions": [
+    "http://127.0.0.1:47831/*",
+    "https://*.myworkdayjobs.com/*", "https://*.myworkdaysite.com/*",
+    "https://boards.greenhouse.io/*", "https://job-boards.greenhouse.io/*", "https://job-boards.eu.greenhouse.io/*", "https://job-boards.anz.greenhouse.io/*",
+    "https://jobs.lever.co/*", "https://jobs.eu.lever.co/*", "https://jobs.ashbyhq.com/*", "https://apply.workable.com/*",
+    "https://*.bamboohr.com/*", "https://*.icims.com/*", "https://jobs.smartrecruiters.com/*", "https://jobs.jobvite.com/*",
+    "https://*.recruitee.com/*", "https://*.applytojob.com/*", "https://ats.rippling.com/*", "https://ats.us1.rippling.com/*"
+  ],
+  "content_scripts": [{
+    "matches": [
+      "https://*.myworkdayjobs.com/*", "https://*.myworkdaysite.com/*",
+      "https://boards.greenhouse.io/*", "https://job-boards.greenhouse.io/*", "https://job-boards.eu.greenhouse.io/*", "https://job-boards.anz.greenhouse.io/*",
+      "https://jobs.lever.co/*", "https://jobs.eu.lever.co/*", "https://jobs.ashbyhq.com/*", "https://apply.workable.com/*",
+      "https://*.bamboohr.com/*", "https://*.icims.com/*", "https://jobs.smartrecruiters.com/*", "https://jobs.jobvite.com/*",
+      "https://*.recruitee.com/*", "https://*.applytojob.com/*", "https://ats.rippling.com/*", "https://ats.us1.rippling.com/*"
+    ],
+    "all_frames": true,
+    "js": ["employer-document.js", "field-review.js", "ats-invitation.js"]
+  }],
+  "web_accessible_resources": [{
+    "resources": ["page-runtime/*.js","page-adapters/*.js","form-page.js","workday-page.js","shared-choice-widget.js","question-context.js","jobvite-resume.js"],
+    "matches": ["https://*/*","http://localhost/*","http://127.0.0.1/*"]
+  }],
   "externally_connectable": { "matches": ["https://agent-hunt-review.mshi.ca/*"] },
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Fill with C3" }

@@ -339,22 +339,28 @@ def patch_fletcher_job_input(
 def move_fletcher_job(
     queue_item_id: str, direction: str, db_path: str | Path | None = None
 ) -> dict:
-    job = get_fletcher_job(queue_item_id, db_path=db_path)
-    active_statuses = {"queued", "running", "cancel_requested"}
-    if job["status"] not in active_statuses:
-        raise ValueError("Only active Fletcher jobs can be reordered.")
     op = "<" if direction == "up" else ">"
     order = "DESC" if direction == "up" else "ASC"
     conn = get_connection(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if os.getenv("HUNT_DB_URL", "").strip():
+            conn.execute("LOCK TABLE fletcher_jobs IN SHARE ROW EXCLUSIVE MODE")
+        job = conn.execute(
+            "SELECT status, position FROM fletcher_jobs WHERE queue_item_id = ?", (queue_item_id,)
+        ).fetchone()
+        if job is None:
+            raise KeyError(queue_item_id)
+        if job["status"] != "queued":
+            raise ValueError("Only queued Fletcher jobs can be reordered.")
         other = conn.execute(
             f"""
             SELECT queue_item_id, position FROM fletcher_jobs
-            WHERE status IN (?, ?, ?) AND position {op} ?
+            WHERE status = 'queued' AND position {op} ?
             ORDER BY position {order}
             LIMIT 1
             """,
-            ("queued", "running", "cancel_requested", job["position"]),
+            (job["position"],),
         ).fetchone()
         if other:
             conn.execute(
@@ -365,7 +371,7 @@ def move_fletcher_job(
                 "UPDATE fletcher_jobs SET position = ? WHERE queue_item_id = ?",
                 (job["position"], other["queue_item_id"]),
             )
-            conn.commit()
+        conn.commit()
         return get_fletcher_job(queue_item_id, db_path=db_path)
     finally:
         conn.close()

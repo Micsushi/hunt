@@ -1,18 +1,30 @@
 import {pageFillSource, observePageSource, checkPageSource, pageFillWorld} from './page-runtime/serialize.js';
+import { runEmployerAction, revealPageField } from './page-runtime/employer-action.js';
+import { employerPageAction, pageActionInput } from './employer-page.js';
 import { inspectChoiceWidget } from './shared-choice-widget.js';
 import { bambooResumeControl } from './page-adapters/bamboo-resume.js';
 import { annotateQuestionContext } from './question-context.js';
 import { proveJobviteResumeInput } from './jobvite-resume.js';
-import { preparePageViewport, viewportOwnership, viewportUnavailable, viewportCleanupPending } from './page-viewport.js';
+import { preparePageViewport, viewportOwnership, viewportUnavailable, pagePreparationUnavailable, viewportCleanupPending } from './page-viewport.js';
 import { supportsCurrentPage } from './website-handoff.js';
 
 // These declarations are injected into the exact isolated execution context bound below.
 const observeCurrentDocument = `(${observePageSource})()`;
 const interruption = checkPageSource;
 
+const standaloneEmployerAction = `async function(input) {
+  const observeCurrentDocument=${observePageSource}, currentPageInterruption=${interruption};
+  const fillPageDocument=${pageFillSource}, inspectChoiceWidget=${inspectChoiceWidget};
+  const annotateQuestionContext=${annotateQuestionContext}, proveJobviteResumeInput=${proveJobviteResumeInput};
+  const revealPageField=${revealPageField};
+  return (${runEmployerAction})(input);
+}`;
+
 export const pageActionTabs = new Set();
 const pageErrors = new Set([
   viewportUnavailable,
+  'Open Hunt from the Chrome toolbar on this page to grant access to the employer form.',
+  pagePreparationUnavailable,
   viewportCleanupPending,
   'The tab changed or is unloaded. Inspect the loaded application again.',
   'The page changed. Inspect it again before filling.',
@@ -116,6 +128,33 @@ export async function listPageTabs(workspaceOrigin) {
   return (await chrome.tabs.query({})).filter(tab => supportsCurrentPage(tab.url, workspaceOrigin)).map(tab => ({tabId:tab.id,url:tab.url,title:tab.title || '',discarded:!!tab.discarded}));
 }
 
+function pageReport({tabId,expectedUrl,operation},root,binding,results) {
+  const completed = results.filter(result => !['unavailable','ignored_security_widget','ignored_empty_frame'].includes(result.status));
+  if (!completed.length) throw new Error(results[0]?.error || 'This page could not be read. Inspect the application before retrying.');
+  const observation = completed.find(result=>result.frameId===root.id)?.observation;
+  const componentFailure = completed.find(result => result.componentFailure)?.componentFailure;
+  const attachment = completed.find(result=>result.frameId === root.id);
+  const resume = attachment?.resume;
+  const resumeEvidence = attachment?.resumeEvidence;
+  const rootResult = operation === 'inspect' && completed.find(result=>result.frameId===root.id);
+  const jobviteFirstStep = Boolean(rootResult && rootResult.jobviteFirstStep);
+  const smartRecruitersFirstStep = Boolean(rootResult && rootResult.smartRecruitersFirstStep);
+  const smartRecruitersScreening = Boolean(rootResult && rootResult.smartRecruitersScreening);
+  return {tabId,url:expectedUrl,documentId:binding,operation,...(observation?{observation}:{}),
+    ...((jobviteFirstStep || smartRecruitersFirstStep || smartRecruitersScreening) && root.loaderId ? {jobviteFirstStep,smartRecruitersFirstStep,smartRecruitersScreening,mainDocumentId:root.loaderId} : {}),
+    ...(componentFailure ? {componentFailure} : {}),
+    profileCountryConflict:attachment?.profileCountryConflict === true,
+    ...(['verified','missing','unverified','optional'].includes(resume) ? {resume} : {}),
+    ...(resume === 'verified' && ['picker','filename','earlier_filename'].includes(resumeEvidence) ? {resumeEvidence} : {}),
+    incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true),
+    matching:completed.flatMap(result=>(result.matching??[]).map(row=>({...row,frameId:result.frameId}))),
+    ...(operation==='inspect'?{navigationDiagnostics:completed.filter(result=>result.navigationDiagnostics).map(result=>({frameId:result.frameId,...result.navigationDiagnostics}))}:{}),
+    filled:completed.flatMap(result=>result.filled || []),skipped:completed.flatMap(result=>(result.skipped || []).map(row=>row.fieldId?{...row,frameId:result.frameId}:row)),
+    requiredIssues:completed.flatMap(result=>(result.requiredIssues || []).map(issue=>({...issue,frameId:result.frameId}))),
+    canUndo:completed.some(result=>result.canUndo),canRedo:completed.some(result=>result.canRedo),
+    frames:results.map(({frameId,status,error})=>({frameId,status,...(error?{error}: {})}))};
+}
+
 /** Popup and agent actions share one document-local undo history without new host permissions. */
 export async function pageAction(params, attached, workspaceOrigin) {
   const expiresAt = Math.min(Date.now()+15000,Number.isFinite(params.expiresAt) ? params.expiresAt : Infinity);
@@ -133,7 +172,26 @@ export async function pageAction(params, attached, workspaceOrigin) {
     const tab = await chrome.tabs.get(tabId);
     checkDeadline();
     if (tab.url !== expectedUrl || tab.pendingUrl || tab.discarded) throw new Error('The tab changed or is unloaded. Inspect the loaded application again.');
-    await chrome.debugger.attach({tabId}, '1.3'); owned = true;
+    const employer=prefer=>employerPageAction(params,expiresAt,documentKey,pageReport,prefer);
+    const modeKey='employerDocument:'+tabId;
+    const nativeBinding=documentId?.startsWith('employer-');
+    if(nativeBinding)return await employer();
+    if(operation==='inspect' && chrome.webNavigation && !documentId){
+      const pinned=(await chrome.storage.session.get(modeKey))[modeKey];
+      if(pinned && pinned===(await chrome.webNavigation.getFrame({tabId,frameId:0}))?.documentId)return await employer();
+      // Pin ordinary permitted forms before typing can summon the password
+      // manager. Preserve the queued handoff's loader-ID evidence.
+      if(!params.pageHandoff){
+        const result=await employer(true);
+        if(result)return result;
+      }
+    }
+    try { await chrome.debugger.attach({tabId}, '1.3'); owned = true; }
+    catch(error){
+      if(error.message!=='Cannot access a chrome-extension:// URL of different extension' || !chrome.webNavigation)throw error;
+      if(operation!=='inspect' || documentId)throw new Error('The page changed. Inspect it again before filling.');
+      return await employer();
+    }
     checkDeadline();
     const send = (method, values = {}) => chrome.debugger.sendCommand({tabId}, method, values);
     const tree = await send('Page.getFrameTree');
@@ -149,21 +207,13 @@ export async function pageAction(params, attached, workspaceOrigin) {
       if(await documentKey(framesIn((await send('Page.getFrameTree')).frameTree))!==binding)throw new Error('The page changed during this action.');
       checkDeadline();
       const revealed=await send('Runtime.callFunctionOn',{executionContextId,returnByValue:true,
-        functionDeclaration:`function(url,id) {
-          if(location.href!==url)return false;
-          const field=globalThis.__huntC3PartialFill?.requiredIssueTargets?.get(id)?.();
-          if(!field?.isConnected)return false;
-          // Explicit reveal leaves focus and open editors untouched.
-          field.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
-          field.animate([{outline:'3px solid #185dd0',outlineOffset:'2px'},{outline:'3px solid #185dd0',outlineOffset:'2px'}],1800);
-          return true;
-        }`,arguments:[{value:frame.url},{value:params.fieldId}]});
+        functionDeclaration:`function(url,id) {return location.href===url && (${revealPageField})(id);}`,arguments:[{value:frame.url},{value:params.fieldId}]});
       if(revealed.result?.value!==true)throw new Error('This field changed. Reopen Hunt to review the current page.');
       return {ok:true};
     }
     const target=(await chrome.debugger.getTargets()).find(target=>target.tabId===tabId);
     if(!target)throw new Error('This page could not be read. Inspect the application before retrying.');
-    restoreViewport = await preparePageViewport(send,viewportOwnership(target.id));
+    restoreViewport = await preparePageViewport(send,viewportOwnership(target.id),{renderHidden:operation!=='inspect'});
     checkDeadline();
     const results = [];
     for (const frame of useProfileCountry ? [root] : frames) {
@@ -194,20 +244,8 @@ export async function pageAction(params, attached, workspaceOrigin) {
         }
         const response = await send('Runtime.callFunctionOn', {
           executionContextId,
-          functionDeclaration: `async function(input) { const observe=(${observePageSource}); const observation=observe(input.expectedUrl); const blocked=${interruption}(observation,input.action,true); if (blocked) return blocked; globalThis.__huntC3ChoiceWidget=(${inspectChoiceWidget.toString()}); (${annotateQuestionContext.toString()})(); if (input.action==='fill' && input.resume) await (${proveJobviteResumeInput.toString()})(input);
-            const result=await (${pageFillSource})(input);
-            if ((input.action==='status' || observation.screeningSubmissionControl) && location.href!==input.expectedUrl) throw new Error('The inspected frame changed.');
-            if (result.componentFailure?.component==='page_state') return {observation,...result};
-            const current=observation.screeningSubmissionControl?observe(input.expectedUrl):observation;
-            if (current.screeningSubmissionControl==='disabled') {
-              if (input.action==='status' || input.action==='fill' && !input.matchingRunId) result.incomplete=true;
-              (result.skipped??=[]).push({label:'Application',reason:'employer_submission_disabled'});
-            }
-            return {observation:current,...result}; }`,
-          arguments: [{value:{action:operation === 'inspect' ? 'status' : useProfileCountry ? 'fill' : operation,
-            useProfileCountry,aiConsentDecision:params.aiConsentDecision,facts:params.facts ?? (frame.id===root.id ? params.profileCountryFacts : undefined) ?? [],
-            currentProfileCountry:frame.id===root.id && params.profileCountryFacts ? params.profileCountryFacts.find(fact=>fact.factId==='country')?.value ?? null : undefined,
-            matchingPlans:operation==='fill'?params.matchingPlans?.filter(plan=>plan.frameId===frame.id):undefined,matchingRunId:params.matchingRunId,pageHandoff:params.pageHandoff,resume:operation === 'fill' && frame.id === root.id ? params.resume : undefined,scope:'page',allowProfileForms:new URL(frame.url).origin===new URL(root.url).origin,expectedUrl:frame.url,expiresAt}}],
+          functionDeclaration: standaloneEmployerAction,
+          arguments:[{value:pageActionInput(params,frame,root,expiresAt)}],
           awaitPromise:true,returnByValue:true,
         });
         if (response.exceptionDetails || !response.result?.value) throw new Error('The page action failed. Inspect the draft before retrying.');
@@ -218,33 +256,14 @@ export async function pageAction(params, attached, workspaceOrigin) {
         if (frame.id === root.id) break;
       }
     }
-    const completed = results.filter(result => !['unavailable','ignored_security_widget','ignored_empty_frame'].includes(result.status));
-    if (!completed.length) throw new Error(results[0]?.error || 'This page could not be read. Inspect the application before retrying.');
-    const observation = completed.find(result=>result.frameId===root.id)?.observation;
-    const componentFailure = completed.find(result => result.componentFailure)?.componentFailure;
-    const attachment = completed.find(result=>result.frameId === root.id);
-    const resume = attachment?.resume;
-    const resumeEvidence = attachment?.resumeEvidence;
-    const rootResult = operation === 'inspect' && completed.find(result=>result.frameId===root.id);
-    const jobviteFirstStep = Boolean(rootResult && rootResult.jobviteFirstStep);
-    const smartRecruitersFirstStep = Boolean(rootResult && rootResult.smartRecruitersFirstStep);
-    const smartRecruitersScreening = Boolean(rootResult && rootResult.smartRecruitersScreening);
-    return {tabId,url:expectedUrl,documentId:binding,operation,...(observation?{observation}:{}),
-      ...((jobviteFirstStep || smartRecruitersFirstStep || smartRecruitersScreening) && root.loaderId ? {jobviteFirstStep,smartRecruitersFirstStep,smartRecruitersScreening,mainDocumentId:root.loaderId} : {}),
-      ...(componentFailure ? {componentFailure} : {}),
-      profileCountryConflict:attachment?.profileCountryConflict === true,
-      ...(['verified','missing','unverified','optional'].includes(resume) ? {resume} : {}),
-      ...(resume === 'verified' && ['picker','filename','earlier_filename'].includes(resumeEvidence) ? {resumeEvidence} : {}),
-      incomplete:results.some(result=>result.status==='unavailable' || result.incomplete===true),
-      matching:completed.flatMap(result=>(result.matching??[]).map(row=>({...row,frameId:result.frameId}))),
-      ...(operation==='inspect'?{navigationDiagnostics:completed.filter(result=>result.navigationDiagnostics).map(result=>({frameId:result.frameId,...result.navigationDiagnostics}))}:{}),
-      filled:completed.flatMap(result=>result.filled || []),skipped:completed.flatMap(result=>(result.skipped || []).map(row=>row.fieldId?{...row,frameId:result.frameId}:row)),
-      requiredIssues:completed.flatMap(result=>(result.requiredIssues || []).map(issue=>({...issue,frameId:result.frameId}))),
-      canUndo:completed.some(result=>result.canUndo),canRedo:completed.some(result=>result.canRedo),
-      frames:results.map(({frameId,status,error})=>({frameId,status,...(error?{error}: {})}))};
+    return pageReport(params,root,binding,results);
   } catch (error) {
     if (!owned && operation === 'inspect' && params.reportProtectedAttachment === true &&
         error.message === 'Cannot access a chrome-extension:// URL of different extension') throw new Error('debugger_protected_extension');
+    if (!owned && error.message === 'Cannot access a chrome-extension:// URL of different extension')
+      throw new Error('Chrome blocked C3 from inspecting this tab because it contains protected extension content. Review the fields on the form.');
+    if (!owned && /^Another debugger is already attached to (?:the )?tab with id: \d+\.?$/.test(error.message))
+      throw new Error('Another debugger is attached to this tab. C3 could not inspect the fields.');
     if (pageErrors.has(error.message)) throw error;
     throw new Error('C3 could not access the selected tab. Inspect the draft before retrying.');
   } finally {

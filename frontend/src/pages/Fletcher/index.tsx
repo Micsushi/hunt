@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   batchDownloadFletcherJobs,
@@ -416,7 +416,9 @@ export function FletcherPage() {
   const moveJob = useMutation({
     mutationFn: ({ id, direction }: { id: string; direction: 'up' | 'down' }) =>
       moveFletcherJob(id, direction),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fletcher-jobs'] }),
+    onError: (error) =>
+      showToast(error instanceof Error ? error.message : 'Could not move the queued run.', 'error'),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['fletcher-jobs'] }),
   })
 
   const cancelJob = useMutation({
@@ -489,7 +491,7 @@ export function FletcherPage() {
     ACTIVE_FLETCHER_STATUSES.has(job.status),
   )
   const matchingActiveJob = activeFletcherJobs.find(
-    (job) => (job.input.description || '').trim() === jobDetails.trim(),
+    (job) => !!jobDetails.trim() && job.input.description?.trim() === jobDetails.trim(),
   )
   const optionBSubmitDisabled = enqueue.isPending || !resumeFile || !jobDetails.trim()
   const optionBSubmitText = enqueue.isPending
@@ -501,9 +503,17 @@ export function FletcherPage() {
   return (
     <div className={styles.page}>
       <div className={styles.pageHeader}>
-        <div>
-          <h1 className={styles.heroTitle}>Fletcher</h1>
-        </div>
+        <h1 className={styles.heroTitle}>Fletcher</h1>
+        <button
+          className={styles.btn}
+          ref={refreshRunsButton}
+          aria-disabled={queue.isFetching}
+          onClick={() => {
+            if (!queue.isFetching) void queue.refetch({ cancelRefetch: false })
+          }}
+        >
+          {queue.isError ? 'Retry resume runs' : 'Refresh resume runs'}
+        </button>
         {(statusLoading || !serviceOnline) && (
           <div
             className={`${styles.statusPill} ${statusLoading ? '' : styles.statusPillOffline}`}
@@ -515,6 +525,17 @@ export function FletcherPage() {
         )}
       </div>
 
+      {(queue.isError || queue.isFetching) && (
+        <p role={queue.isError ? 'alert' : 'status'}>
+          {queue.isError
+            ? queueData
+              ? 'Could not refresh resume runs. Showing last loaded runs.'
+              : 'Could not load resume runs.'
+            : queue.isFetching
+              ? 'Loading resume runs…'
+              : ''}
+        </p>
+      )}
       <section className={styles.panel} aria-label="Resume input">
         <div className={styles.inputModes} role="group" aria-label="Resume source">
           <button
@@ -557,7 +578,7 @@ export function FletcherPage() {
 
         {/* Path B */}
         <div hidden={inputMode !== 'upload'}>
-          <div className={styles.formGrid}>
+          <div className={styles.uploadGrid}>
             <div className={styles.field}>
               <label htmlFor="resume-file">Resume (.pdf or .tex)</label>
               <div
@@ -608,19 +629,14 @@ export function FletcherPage() {
                 className={`${styles.btn} ${styles.btnPrimary}`}
                 disabled={optionBSubmitDisabled}
                 onClick={submitTailor}
-                style={{ alignSelf: 'flex-start' }}
               >
                 {optionBSubmitText}
               </button>
             </ResumeCheck>
             {matchingActiveJob ? (
               <div className={styles.activeRunNotice}>
-                This description already has a background run. Queueing again creates a separate run
-                with the currently selected resume. Open the existing run from the queue below.
-              </div>
-            ) : activeFletcherJobs.length ? (
-              <div className={styles.activeRunNotice}>
-                {activeFletcherJobs.length} active run{activeFletcherJobs.length === 1 ? '' : 's'}.
+                A run for this description is already in the queue. Queue again to start a separate
+                run.
               </div>
             ) : null}
           </div>
@@ -648,27 +664,6 @@ export function FletcherPage() {
           </ul>
         </section>
       )}
-      <div className={styles.queueHeader}>
-        <p role={queue.isError ? 'alert' : 'status'}>
-          {queue.isError
-            ? queueData
-              ? 'Could not refresh resume runs. Showing last loaded runs.'
-              : 'Could not load resume runs.'
-            : queue.isFetching
-              ? 'Loading resume runs…'
-              : ''}
-        </p>
-        <button
-          className={styles.btn}
-          ref={refreshRunsButton}
-          aria-disabled={queue.isFetching}
-          onClick={() => {
-            if (!queue.isFetching) void queue.refetch({ cancelRefetch: false })
-          }}
-        >
-          {queue.isError ? 'Retry resume runs' : 'Refresh resume runs'}
-        </button>
-      </div>
       {queueData && (
         <FletcherQueuePanel
           jobs={queueData.jobs}
@@ -1120,6 +1115,29 @@ function FletcherQueuePanel({
     clearResumes.mutate(false)
   }
 
+  const queuedJobs = activeJobs.filter((job) => job.status === 'queued')
+  function moveButtons(job: FletcherQueueItem) {
+    if (job.status !== 'queued' || queuedJobs.length < 2) return null
+    return (
+      <>
+        <button
+          className={styles.btn}
+          disabled={queuedJobs[0].queue_item_id === job.queue_item_id}
+          onClick={() => onMove(job.queue_item_id, 'up')}
+        >
+          Up
+        </button>
+        <button
+          className={styles.btn}
+          disabled={queuedJobs[queuedJobs.length - 1].queue_item_id === job.queue_item_id}
+          onClick={() => onMove(job.queue_item_id, 'down')}
+        >
+          Down
+        </button>
+      </>
+    )
+  }
+
   return (
     <>
       <section className={styles.queuePanel}>
@@ -1143,19 +1161,23 @@ function FletcherQueuePanel({
               />
               Select all
             </label>
-            <button
-              className={`${styles.btn} ${styles.btnDanger}`}
-              disabled={!selectedActiveIdsInView.length || cancelActive.isPending}
-              onClick={cancelSelectedActive}
-            >
-              {cancelActive.isPending ? 'Cancelling...' : 'Cancel selected'}
-            </button>
-            {selectedActiveIdsInView.length ? (
-              <button className={styles.btn} onClick={() => setSelectedActiveIds([])}>
-                Clear
-              </button>
-            ) : null}
-            <span className={styles.meta}>{selectedActiveIdsInView.length} selected</span>
+            {selectedActiveIdsInView.length > 0 && (
+              <>
+                <button
+                  className={`${styles.btn} ${styles.btnDanger}`}
+                  disabled={cancelActive.isPending}
+                  onClick={cancelSelectedActive}
+                >
+                  {cancelActive.isPending ? 'Cancelling...' : 'Cancel selected'}
+                </button>
+
+                <button className={styles.btn} onClick={() => setSelectedActiveIds([])}>
+                  Clear
+                </button>
+
+                <span className={styles.meta}>{selectedActiveIdsInView.length} selected</span>
+              </>
+            )}
           </div>
         ) : null}
         <div className={`${styles.queueList} ${styles.queueListScrollable}`}>
@@ -1224,15 +1246,7 @@ function FletcherQueuePanel({
                     ) : null}
                   </div>
                   <div className={styles.queueActions}>
-                    <button className={styles.btn} onClick={() => onMove(job.queue_item_id, 'up')}>
-                      Up
-                    </button>
-                    <button
-                      className={styles.btn}
-                      onClick={() => onMove(job.queue_item_id, 'down')}
-                    >
-                      Down
-                    </button>
+                    {moveButtons(job)}
                     <button
                       className={`${styles.btn} ${styles.btnDanger}`}
                       disabled={cancelActive.isPending}
@@ -1326,7 +1340,7 @@ function FletcherQueuePanel({
                   className={styles.input}
                   value={historySearch}
                   onChange={(e) => setHistorySearch(e.target.value)}
-                  placeholder="Search title, status, file, error, or time..."
+                  placeholder="Title, status, file, error or time"
                 />
               </label>
               {normalizedHistorySearch && (
@@ -1344,34 +1358,33 @@ function FletcherQueuePanel({
                 />
                 Select all
               </label>
-              <button
-                className={styles.btn}
-                disabled={!selectedHistoryIdsInView.length}
-                onClick={() => setBatchOptionsOpen((open) => !open)}
-              >
-                Download selected
-              </button>
-              <button
-                className={`${styles.btn} ${styles.btnDanger}`}
-                disabled={
-                  !selectedHistoryIdsInView.length ||
-                  deleteHistory.isPending ||
-                  clearResumes.isPending
-                }
-                onClick={deleteSelectedHistory}
-              >
-                {deleteHistory.isPending ? 'Deleting...' : 'Delete selected'}
-              </button>
-              {selectedHistoryIdsInView.length ? (
-                <button className={styles.btn} onClick={() => setSelectedHistoryIds([])}>
-                  Clear
-                </button>
-              ) : null}
-              <span className={styles.meta}>{selectedHistoryIdsInView.length} selected</span>
+              {selectedHistoryIdsInView.length > 0 && (
+                <>
+                  <button
+                    className={styles.btn}
+                    onClick={() => setBatchOptionsOpen((open) => !open)}
+                  >
+                    Download selected
+                  </button>
+                  <button
+                    className={`${styles.btn} ${styles.btnDanger}`}
+                    disabled={deleteHistory.isPending || clearResumes.isPending}
+                    onClick={deleteSelectedHistory}
+                  >
+                    {deleteHistory.isPending ? 'Deleting...' : 'Delete selected'}
+                  </button>
+
+                  <button className={styles.btn} onClick={() => setSelectedHistoryIds([])}>
+                    Clear
+                  </button>
+
+                  <span className={styles.meta}>{selectedHistoryIdsInView.length} selected</span>
+                </>
+              )}
             </div>
           </>
         ) : null}
-        {batchOptionsOpen ? (
+        {batchOptionsOpen && selectedHistoryIdsInView.length > 0 ? (
           <div className={styles.batchOptions}>
             <div className={styles.batchOptionGrid}>
               {BATCH_ARTIFACT_OPTIONS.map((option) => (
@@ -1469,20 +1482,6 @@ function FletcherQueuePanel({
                         Open workspace
                       </Link>
                     ) : null}
-                    <a
-                      className={styles.btn}
-                      href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
-                      download={fletcherLogFilename(job)}
-                    >
-                      Download log
-                    </a>
-                    <button
-                      className={`${styles.btn} ${styles.btnDanger}`}
-                      disabled={deleteHistory.isPending || clearResumes.isPending}
-                      onClick={() => deleteOneHistory(job.queue_item_id, title)}
-                    >
-                      Delete
-                    </button>
                     <details className={styles.moreMenu}>
                       <summary aria-label={`More actions for ${title}`}>⋮</summary>
                       <div className={styles.moreMenuPanel}>
@@ -1497,6 +1496,19 @@ function FletcherQueuePanel({
                         >
                           View log
                         </a>
+                        <a
+                          href={`/api/fletcher/tailor/jobs/${job.queue_item_id}/log?download=1`}
+                          download={fletcherLogFilename(job)}
+                        >
+                          Download log
+                        </a>
+                        <button
+                          className={styles.menuDanger}
+                          disabled={deleteHistory.isPending || clearResumes.isPending}
+                          onClick={() => deleteOneHistory(job.queue_item_id, title)}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </details>
                   </div>
@@ -1516,7 +1528,7 @@ function FletcherQueuePanel({
         <FletcherJobDetailModal
           job={currentDetailJob}
           onClose={() => setDetailJob(null)}
-          onMove={onMove}
+          moveButtons={moveButtons(currentDetailJob)}
           onCancel={onCancel}
           onDelete={(jobToDelete) =>
             deleteOneHistory(jobToDelete.queue_item_id, fletcherTitle(jobToDelete))
@@ -1531,14 +1543,14 @@ function FletcherQueuePanel({
 function FletcherJobDetailModal({
   job,
   onClose,
-  onMove,
+  moveButtons,
   onCancel,
   onDelete,
   deletePending,
 }: {
   job: FletcherQueueItem
   onClose: () => void
-  onMove: (id: string, direction: 'up' | 'down') => void
+  moveButtons: ReactNode
   onCancel: (id: string) => void
   onDelete: (job: FletcherQueueItem) => void
   deletePending: boolean
@@ -1597,12 +1609,7 @@ function FletcherJobDetailModal({
         <div className={styles.detailActionBar}>
           {job.status === 'queued' ? (
             <>
-              <button className={styles.btn} onClick={() => onMove(job.queue_item_id, 'up')}>
-                Up
-              </button>
-              <button className={styles.btn} onClick={() => onMove(job.queue_item_id, 'down')}>
-                Down
-              </button>
+              {moveButtons}
               <button className={styles.btn} onClick={() => onCancel(job.queue_item_id)}>
                 Cancel
               </button>

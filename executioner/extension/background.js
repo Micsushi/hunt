@@ -5,8 +5,17 @@ const instanceId = crypto.randomUUID();
 let reloadPending = false;
 import { registerWebsiteHandoff } from './website-handoff.js';
 import { preparePageViewport, viewportOwnership, viewportCleanupPending } from './page-viewport.js';
+import { createCurrentPageFill } from './current-page-fill.js';
+import { reconcileFieldReview, saveFillReview, showPageReview } from './fill-review-result.js';
 const origin = 'http://127.0.0.1:47831';
 let socket, heartbeat, socketToken, reconnect;
+const popupPageRequests=new Map();
+const currentPageFill=createCurrentPageFill(origin,()=>!reloadPending && socket?.readyState===WebSocket.OPEN,async tabId=>{
+  const pending=popupPageRequests.get(tabId);
+  if(!pending)return;
+  if(pending.operation!=='inspect')throw new Error('A page action is already in progress.');
+  await pending.request;
+});
 const attached = new Map();
 const browserVersion = () => `${navigator.brave ? 'Brave' : 'Chrome'}/${navigator.userAgent.match(/(?:Chrome|Chromium)\/([\d.]+)/)?.[1] || 'unknown'}`;
 const retryTabs = new Map();
@@ -72,7 +81,7 @@ async function executeCommand(method, params, connection) {
   if (method === 'agentStatus') return {version:chrome.runtime.getManifest().version,browser:browserVersion(),extensionId:chrome.runtime.id,instanceId,reloadPending,capabilities:['pageAction-v1','pageAction-v2','selected-page-handoff-v1','question-matching-v1','consent-redo-v1','profile-country-v1','website-handoff-v1','generic-attach-v1','workday-account-v1','workday-create-account-v1','workday-account-fill-v1','workday-page-v1','self-reload-v1']};
   if (reloadPending) throw new Error('Hunt is reloading. Wait for it to reconnect.');
   if (method === 'reloadExtension') {
-    if (connection !== socket || connection.readyState !== WebSocket.OPEN || attached.size || accountSessions.size || pageActionTabs.size || attachmentChanges.size) throw new Error('Pause active C3 operations before reloading the extension.');
+    if (connection !== socket || connection.readyState !== WebSocket.OPEN || attached.size || accountSessions.size || pageActionTabs.size || attachmentChanges.size || currentPageFill.busy()) throw new Error('Pause active C3 operations before reloading the extension.');
     reloadPending = true;
     // Acknowledge first; Chrome then reloads only this extension from its installed folder.
     setTimeout(() => chrome.runtime.reload(), 250);
@@ -233,16 +242,65 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
   if (owner.connection === socket) send({ method: 'detached', params: { tabId: source.tabId, reason:['target_closed','canceled_by_user'].includes(reason)?reason:'unspecified_or_other', viewportCleanupPending:await owner.viewportOwner?.has().catch(()=>false)===true } });
 });
 chrome.tabs.onRemoved?.addListener(tabId => {
+  void chrome.storage.session.remove('employerDocument:'+tabId).catch(()=>{});
   for (const [url, id] of retryTabs) if (id === tabId) retryTabs.delete(url);
+});
+// A native action popup disappears on blur. Its port closes with the view,
+// letting the employer-page controls reappear without timers.
+const toolbarPorts=new Map();
+chrome.runtime.onConnect?.addListener(port=>{
+  if(port.name!=='current-page-toolbar' || port.sender?.id!==chrome.runtime.id || port.sender.url!==chrome.runtime.getURL('popup.html'))return;
+  let selected;
+  const presence=open=>{
+    if(selected)void chrome.tabs.sendMessage(selected.tabId,{action:'toolbarPresence',expectedUrl:selected.url,open},{frameId:0}).catch(()=>{});
+  };
+  port.onMessage.addListener(message=>{
+    if(selected || !Number.isSafeInteger(message.tabId) || !exactGenericUrl(message.url))return;
+    selected=message;toolbarPorts.set(selected.tabId,port);presence(true);
+  });
+  port.onDisconnect.addListener(()=>{
+    if(selected && toolbarPorts.get(selected.tabId)===port){
+      toolbarPorts.delete(selected.tabId);presence(false);
+    }
+  });
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
+  if (message.action === 'ownFillDocumentId' && sender.frameId===0 && sender.tab?.id) {
+    respond(sender.documentId);return;
+  }
+  if (message.action === 'fillFromInvitation') {
+    // The isolated script admits a trusted click. The sender, never page
+    // arguments, determines the tab, top-level document and destination.
+    if (sender.frameId !== 0 || !sender.tab?.active || !sender.documentId || sender.url!==message.expectedUrl ||
+        !exactGenericUrl(sender.url) || reloadPending) {respond({ok:false,error:'This application page changed. Reopen Hunt.'});return;}
+    const {hostname} = new URL(sender.url);
+    const hosts = chrome.runtime.getManifest().content_scripts.find(script => script.js.includes('ats-invitation.js')).matches;
+    if (!hosts.some(pattern => {
+      const host = pattern.slice('https://'.length, -2);
+      return host.startsWith('*.') ? hostname.endsWith(host.slice(1)) : hostname === host;
+    })) return;
+    currentPageFill.start({tabId:sender.tab.id,url:sender.url,callerDocumentId:sender.documentId,manual:false})
+      .then(respond,error=>respond({ok:false,error:error.message}));
+    return true;
+  }
+  if (message.action === 'startCurrentPageFill' && sender.url === chrome.runtime.getURL('popup.html')) {
+    if(reloadPending || !/^[a-f0-9]{64}$/.test(message.expectedResumeSha256)){
+      respond({ok:false,error:'Check the selected resume and reconnect Hunt before filling.'});return;
+    }
+    currentPageFill.start({tabId:message.tabId,url:message.expectedUrl,expectedDocument:message.documentId,
+      expectedResume:message.expectedResumeSha256,manual:true}).then(respond,error=>respond({ok:false,error:error.message}));
+    return true;
+  }
   if (message.action === 'connectionStatus' && sender.url === chrome.runtime.getURL('popup.html')) {
     respond({connected:socket?.readyState === WebSocket.OPEN,version:chrome.runtime.getManifest().version,browser:browserVersion()}); return;
   }
   if (message.action === 'pageAction' && sender.url === chrome.runtime.getURL('popup.html')) {
+    if(currentPageFill.busy(message.tabId) || popupPageRequests.has(message.tabId)){
+      respond({ok:false,error:'Hunt is working on this page. Wait for it to finish.'});return;
+    }
     const expiresAt = Math.min(Date.now()+12000,Number.isFinite(message.expiresAt) ? message.expiresAt : Infinity);
-    (async()=>{
+    const request=(async()=>{
       const {token} = await chrome.storage.local.get('token');
       if(Date.now()>=expiresAt)throw new Error('The page action expired. Inspect the draft before retrying.');
       // The service validates live profile mode and queued resume ownership for every entry point.
@@ -250,13 +308,52 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const result=await response.json();
       if(!response.ok)throw new Error(response.status===404?'Update the local C3 app before filling this page.':typeof result?.error==='string'?result.error:'C3 could not confirm this page action. Inspect the draft before retrying.');
       return result;
-    })().then(result=>respond({ok:true,result})).catch(error=>respond({ok:false,error:error.message}));
+    })();
+    popupPageRequests.set(message.tabId,{operation:message.operation,request});
+    request.then(result=>respond({ok:true,result}),error=>respond({ok:false,error:error.message}))
+      .finally(()=>popupPageRequests.delete(message.tabId));
     return true;
   }
   if (message.action === 'revealIssue' && sender.url === chrome.runtime.getURL('popup.html')) {
     const {tabId,expectedUrl,documentId,frameId,fieldId}=message;
     pageAction({operation:'reveal',tabId,expectedUrl,documentId,frameId,fieldId},attached,origin)
       .then(()=>respond({ok:true})).catch(error=>respond({ok:false,error:error.message}));
+    return true;
+  }
+  if (message.action === 'fieldReview' && sender.frameId === 0 && sender.tab?.id && sender.url === sender.tab.url) {
+    (async()=>{
+      const tabId=sender.tab.id, key='fillReview:'+tabId;
+      const review=(await chrome.storage.session.get(key))[key];
+      if(!review?.token || message.token!==review.token)throw new Error('Review expired.');
+      if(message.command==='refresh'){
+        if(!sender.tab.active || reloadPending || currentPageFill.busy(tabId) || popupPageRequests.has(tabId) ||
+           review.browserDocumentId && review.browserDocumentId!==sender.documentId)throw new Error('Review unavailable.');
+        const result=await pageAction({operation:'inspect',tabId,expectedUrl:sender.url},attached,origin);
+        if(result.documentId!==review.documentId)throw new Error('Review expired.');
+        const latest=(await chrome.storage.session.get(key))[key];
+        if(latest?.token!==review.token)return;
+        const next=reconcileFieldReview(latest.issues,latest.index,result);
+        // Compare display data only. Fresh inspection targets also contain
+        // diagnostics that are intentionally absent from the saved view.
+        const sameDisplay=(a,b)=>a.label===b.label && a.message===b.message && !!a.country===!!b.country &&
+          a.target?.fieldId===b.target?.fieldId && a.target?.frameId===b.target?.frameId && a.target?.section===b.target?.section;
+        if(next.issues.length===latest.issues.length && next.issues.every((item,i)=>sameDisplay(item,latest.issues[i])))return;
+        const saved=await saveFillReview(tabId,review.page,review.documentId,next.issues,next.index,{
+          browserDocumentId:sender.documentId,phase:next.issues.length?'review':'done',liveUpdate:true,
+          summary:next.issues.length?'':'All flagged fields resolved.'});
+        await showPageReview(tabId,sender.url,saved,sender.documentId);
+        return;
+      }
+      if(message.command==='close'){await chrome.storage.session.remove(key);return;}
+      if(message.command==='step' && Number.isInteger(message.index) && message.index>=0 && message.index<review.targets.length){
+        await chrome.storage.session.set({[key]:{...review,index:message.index}});
+        return;
+      }
+      const target=Number.isSafeInteger(message.index) && review.targets?.[message.index];
+      if(message.command!=='show' || !target)throw new Error('Field unavailable.');
+      await pageAction({operation:'reveal',tabId,expectedUrl:sender.url,documentId:review.documentId,
+        frameId:target.frameId,fieldId:target.fieldId},attached,origin);
+    })().then(()=>respond({ok:true})).catch(()=>respond({ok:false}));
     return true;
   }
   if (message.action === 'connect') { connect().then(() => respond({ ok: true })).catch(() => respond({ ok: false, error: 'Could not connect to C3.' })); return true; }

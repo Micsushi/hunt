@@ -1,4 +1,5 @@
 export const viewportUnavailable = 'This tab has no usable page area. Resize or restore its browser window, then retry.';
+export const pagePreparationUnavailable = 'C3 lost access to the page while preparing it. Check the draft before retrying.';
 export const viewportCleanupPending = "Hunt could not restore this tab's page settings. Retry the job or page action to finish cleanup before filling.";
 
 export function viewportOwnership(targetId,storage=chrome.storage.local) {
@@ -13,7 +14,7 @@ export function viewportOwnership(targetId,storage=chrome.storage.local) {
 }
 
 /** Temporarily prepare only the owned page renderer; never activate its tab or window. */
-export async function preparePageViewport(send,ownership) {
+export async function preparePageViewport(send,ownership,{renderHidden=true}={}) {
   let owned=false,renderingOwned=false,framesOwned=false,framesUncertain=false;
   const rendering=ownership?.rendering;
   const restore=async()=>{
@@ -36,16 +37,16 @@ export async function preparePageViewport(send,ownership) {
   const visibility=async()=> {
     const response=await send('Runtime.evaluate',{expression:'document.visibilityState',returnByValue:true});
     const state=response?.result?.value;
-    if(response?.exceptionDetails || !['hidden','visible'].includes(state))throw new Error(viewportUnavailable);
+    if(response?.exceptionDetails || !['hidden','visible'].includes(state))throw new Error(pagePreparationUnavailable);
     return state;
   };
   const prepareRendering=async()=> {
-    if(!rendering || await visibility()==='visible')return restore;
+    if(!renderHidden || !rendering || await visibility()==='visible')return restore;
     // Hidden proves no preexisting visibility/focus emulation is active. Leave
     // visible pages (including another tool's emulation) entirely untouched.
     await rendering.claim();renderingOwned=true;
     await send('Emulation.setFocusEmulationEnabled',{enabled:true});
-    if(await visibility()!=='visible')throw new Error(viewportUnavailable);
+    if(await visibility()!=='visible')throw new Error(pagePreparationUnavailable);
     // Visibility emulation alone still leaves background compositor frames
     // throttled. Keep the owned renderer producing frames for virtual lists.
     // No acknowledgements: at most three 1px frames are emitted, not retained here.
@@ -67,7 +68,7 @@ export async function preparePageViewport(send,ownership) {
   const usable=async()=>{
     const metrics=(await send('Page.getLayoutMetrics'))?.cssLayoutViewport;
     const width=metrics?.clientWidth,height=metrics?.clientHeight;
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width<0 || height<0) throw new Error(viewportUnavailable);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width<0 || height<0) throw new Error(pagePreparationUnavailable);
     return width>0 && height>0;
   };
   let pending;
@@ -90,8 +91,8 @@ export async function preparePageViewport(send,ownership) {
       await new Promise(resolve=>setTimeout(resolve,50));
     }
     throw new Error(viewportUnavailable);
-  } catch {
+  } catch (error) {
     await restore();
-    throw new Error(viewportUnavailable);
+    throw new Error(error?.message===viewportUnavailable ? viewportUnavailable : pagePreparationUnavailable);
   }
 }

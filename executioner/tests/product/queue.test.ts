@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import { mkdtempSync, readFileSync, unlinkSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,10 +24,20 @@ test("queue snapshots inputs, supports remove/restore, and never retries uncerta
   assert.equal(queue.snapshot().jobs.length, 1);
   await queue.action(first!.id, "restore");
   assert.equal(first!.status, "paused");
+  first!.tabId = 17;
+  second!.tabId = 18;
   second!.status = "submitting";
   queue.setConcurrency(10);
   await queue.close();
+  const queueBytes=readFileSync(join(root,'jobs.json'));
+  assert.throws(()=>new ApplicationQueue(root,bridge,undefined,undefined,'0'.repeat(64)),/queue changed/);
+  assert.deepEqual(readFileSync(join(root,'jobs.json')),queueBytes);
+  const maintenance=new ApplicationQueue(root,bridge,undefined,undefined,createHash('sha256').update(queueBytes).digest('hex'));
+  assert.equal(maintenance.jobs[0]?.tabId,17);
+  assert.equal(maintenance.jobs[1]?.tabId,undefined);
+  await maintenance.close();
   const restored = new ApplicationQueue(root, bridge);
+  assert.equal(restored.jobs[0]?.tabId,undefined);
   assert.equal(restored.jobs[1]!.status, "submission_uncertain");
   await assert.rejects(restored.action(second!.id, "retry"));
   await restored.close();

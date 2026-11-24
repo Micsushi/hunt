@@ -122,6 +122,14 @@ def test_fletcher_queue_lifecycle(tmp_path, monkeypatch):
     assert (
         claimed is not None and claimed["queue_item_id"] == ident and claimed["status"] == "running"
     )
+    with pytest.raises(ValueError, match="Only queued"):
+        move_fletcher_job(ident, "down", db_path=db)
+    waiting = enqueue_fletcher_job({"description": "three"}, db_path=db)
+    assert (
+        move_fletcher_job(waiting["queue_item_id"], "up", db_path=db)["position"]
+        == waiting["position"]
+    )
+    cancel_fletcher_job(waiting["queue_item_id"], db_path=db)
     recovered = recover_interrupted_fletcher_jobs(db_path=db)
     assert [row["queue_item_id"] for row in recovered] == [ident]
     assert recovered[0]["status"] == "queued" and recovered[0]["started_at"] is None
