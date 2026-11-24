@@ -14,15 +14,38 @@ const jobErrors = new Map();
 $('profile-form').addEventListener('input', updateProfileDraft);
 $('account-form').addEventListener('input', () => { accountDraft = true; });
 const viewCopy={profile:'Profile',applications:'Applications',settings:'Settings'};
-for(const item of [$('account-form'),$('backup-file').closest('details'),$('import-profile').closest('details')]) $('settings-panel').append(item);
-const accountHeading=document.createElement('h2');accountHeading.textContent='Application account';$('account-form').prepend(accountHeading);
+const profileSections = [...document.querySelectorAll('.section-nav a')];
+let sectionId = profileSections.find(link => link.hash === location.hash)?.hash.slice(1) || 'contact';
+function showSection(id) {
+  sectionId = id;
+  for (const section of $('profile-form').querySelectorAll('.profile-section')) section.hidden = section.id !== id;
+  for (const link of profileSections) {
+    if (link.hash === '#'+id) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  }
+}
+for (const link of profileSections) link.onclick = event => {
+  event.preventDefault();
+  if (location.hash !== link.hash) history.pushState(null, '', link.hash);
+  showSection(link.hash.slice(1));
+};
+window.addEventListener('hashchange', () => {
+  const link = profileSections.find(item => item.hash === location.hash);
+  if (!link && location.hash) return;
+  document.querySelector('[data-view="profile"]').click();
+  showSection(link ? link.hash.slice(1) : 'contact');
+});
+$('profile-form').addEventListener('invalid', event => {
+  const firstInvalid = $('profile-form').querySelector(':invalid[name]');
+  if (event.target === firstInvalid) showSection(firstInvalid.closest('fieldset').id);
+}, true);
 for(const button of document.querySelectorAll('[data-view]'))button.onclick=()=>{
   for(const panel of document.querySelectorAll('[data-panel]'))panel.hidden=panel.dataset.panel!==button.dataset.view;
   for(const tab of document.querySelectorAll('[data-view]')){if(tab===button)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');}
   $('page-title').textContent=viewCopy[button.dataset.view];
 };
 if(proxied)document.querySelector('[data-view="applications"]').click();
-$('review-profile-answers').onclick=()=>{document.querySelector('[data-view="profile"]').click();$('profile-form').querySelector('[name]').focus();};
+$('review-profile-answers').onclick=()=>{document.querySelector('[data-view="profile"]').click();showSection('contact');$('profile-form').querySelector('[name]').focus();};
 $('concurrency').replaceChildren(...Array.from({length:30}, (_,i) => new Option(String(i+1), String(i+1))));
 $('concurrency').disabled = true;
 const undo = [], redo = [];
@@ -107,19 +130,19 @@ $('pair').onsubmit = e => { e.preventDefault(); void perform(async()=>{
 }); };
 $('batch').onsubmit = e => { e.preventDefault(); const submitted = $('links').value; void perform(async () => {
   const jobs = [...new Set(submitted.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))].map(url=>({url}));
-  const added = await api('jobs', { jobs }); const existing=new Set(state.jobs.map(job=>job.id));const distinct=[...new Map(added.map(job=>[job.id,job])).values()];const reused=distinct.filter(job=>existing.has(job.id)).length; $('notice').textContent=`${distinct.length-reused} new applications · ${reused} already in your list · ${added.length-distinct.length} duplicate links ignored`; if($('links').value === submitted) $('links').value = ''; $('links').focus();
+  const added = await api('jobs', { jobs }); const existing=new Set(state.jobs.map(job=>job.id));const distinct=[...new Map(added.map(job=>[job.id,job])).values()];const reused=distinct.filter(job=>existing.has(job.id)).length; $('notice').textContent=`${distinct.length-reused} new applications · ${reused} already in your list${added.length===distinct.length?'':' · '+(added.length-distinct.length)+' duplicate links ignored'}`; if($('links').value === submitted) $('links').value = ''; $('links').focus();
 }); };
 function handoffControls() {
   $('preview-handoff').disabled=busy||historyBusy||!stateFresh||!$('handoff-file').files[0];
   $('import-handoff').disabled=busy||historyBusy||!stateFresh||!state?.configured||!handoffBundle;
   $('cancel-handoff').disabled=busy||historyBusy;
-  if(handoffBundle)$('handoff-status').textContent=state?.configured?'Stops before submission.':'Save your profile first, then return here to add these applications.';
+  if(handoffBundle)$('handoff-status').textContent=state?.configured?'':'Save your profile first, then return here to add these applications.';
 }
 $('handoff-entry').ontoggle=()=>{if($('handoff-entry').open)$('batch-entry').open=false;};
 $('handoff-file').onchange=()=>{
   handoffFileVersion++;handoffBundle=undefined;$('handoff-preview').hidden=true;$('handoff-status').textContent='';$('handoff-status').setAttribute('role','status');handoffControls();
 };
-$('cancel-handoff').onclick=()=>{handoffBundle=undefined;$('handoff-preview').hidden=true;$('handoff-status').textContent='Preview cancelled. The selected file was kept; nothing was queued.';handoffControls();$('preview-handoff').focus();};
+$('cancel-handoff').onclick=()=>{handoffBundle=undefined;$('handoff-preview').hidden=true;$('handoff-status').textContent='Preview cancelled.';handoffControls();$('preview-handoff').focus();};
 $('preview-handoff').onclick=()=>{
   const file=$('handoff-file').files[0], version=handoffFileVersion;
   void perform(async()=>{
@@ -127,7 +150,7 @@ $('preview-handoff').onclick=()=>{
     try {
     if(!file||file.size>32*1024*1024)throw new Error('Choose a Hunt application file smaller than 32 MB.');
     let bundle;
-    try{bundle=JSON.parse(await file.text());}catch{throw new Error('This file is not valid JSON. Download the application file from Hunt again.');}
+    try{bundle=JSON.parse(await file.text());}catch{throw new Error('Choose a valid .hunt.json file downloaded from Hunt.');}
     if(version!==handoffFileVersion)return;
     const preview=await api('handoff/preview',bundle);
     if(version!==handoffFileVersion)return;
@@ -149,12 +172,12 @@ $('import-handoff').onclick=()=>{
   const bundle=handoffBundle, paused=handoffPaused, version=handoffFileVersion;
   void perform(async()=>{
     handoffBundle=undefined;$('handoff-preview').hidden=true;$('notice').textContent='';
-    $('handoff-status').textContent='Import requested. Check Your applications for confirmation before previewing or retrying this file.';handoffControls();
+    $('handoff-status').textContent='Import requested. Check the list before retrying.';handoffControls();
     const existing=new Set(state.jobs.map(job=>job.id));
     const added=await api(paused?'handoff/import-paused':'handoff/import',bundle);
     const reused=added.filter(job=>existing.has(job.id)).length;
     $('notice').textContent=`${added.length-reused} new applications · ${reused} already in your list. Selected resumes were kept.`;
-    if(version===handoffFileVersion){$('handoff-file').value='';$('handoff-preview').hidden=true;$('handoff-status').textContent='Import confirmed. Check progress in Your applications below.';}
+    if(version===handoffFileVersion){$('handoff-file').value='';$('handoff-preview').hidden=true;$('handoff-status').textContent='Import confirmed.';}
     if(document.activeElement===$('import-handoff')||document.activeElement===document.body)$('queue-title').focus();
   });
 };
@@ -168,15 +191,16 @@ $('profile-form').onsubmit = e => { e.preventDefault(); const focusWasSave=docum
   const resume = $('resume').files[0], applicant = Object.fromEntries(new FormData($('profile-form'))), before = await api('settings');
   if(!resume && !before) throw new Error('Choose your PDF resume.');
   if(resume?.size > 5*1024*1024) throw new Error('Choose a PDF smaller than 5 MB.');
-  const after = await api('settings', { applicant, expectedRevision:savedProfile?.profile?.profile?.revision ?? null, ...(resume ? {resumeBase64:await base64(resume)} : {}) });
+  const after = await api('settings', { applicant, expectedRevision:savedProfile?.profile?.profile?.revision ?? null, ...(resume ? {resumeBase64:await base64(resume), resumeName:resume.name} : {}) });
   if(before) remember({undo:()=>restoreSettings(before),redo:()=>restoreSettings(after)});
   profileDirty = JSON.stringify(Object.fromEntries(new FormData($('profile-form')))) !== JSON.stringify(applicant) || $('resume').files[0] !== resume;
   if($('resume').files[0] === resume) $('resume').value='';
   await loadProfile(after);
-  if(focusWasSave && (document.activeElement===$('save-profile')||document.activeElement===document.body))$('profile-form').querySelector('[name]').focus();
+  if(focusWasSave && (document.activeElement===$('save-profile')||document.activeElement===document.body))
+    $(sectionId).querySelector('input,select,textarea')?.focus();
   $('notice').textContent = 'Profile saved for new applications.';
 }); };
-async function restoreSettings(value) { const saved=await api('settings',{profile:value.profile,resumeBase64:value.resume,expectedRevision:savedProfile?.profile?.profile?.revision ?? null}); await loadProfile(saved); return saved; }
+async function restoreSettings(value) { const saved=await api('settings',{profile:value.profile,resumeBase64:value.resume,resumeName:value.resumeName,expectedRevision:savedProfile?.profile?.profile?.revision ?? null}); await loadProfile(saved); return saved; }
 function savedAnswer(name) {
   return String((savedProfile?.effectiveFacts ?? savedProfile?.profile?.profile?.facts)?.find(f=>f.factId===name)?.value ?? '');
 }
@@ -190,7 +214,8 @@ function updateProfileDraft() {
       previous=document.createElement('small');previous.className='saved-value';previous.id='saved-value-'+input.name;input.parentElement.append(previous);
     }
     previous.hidden=!differs;
-    const descriptions = differs ? [previous.id] : [];
+    const descriptions = input.name === 'ai_evaluation_consent' ? ['consent-scope'] : [];
+    if(differs) descriptions.push(previous.id);
     if(descriptions.length)input.setAttribute('aria-describedby',descriptions.join(' '));else input.removeAttribute('aria-describedby');
     const value=savedAnswer(input.name);
     previous.textContent=`Saved: ${input.tagName==='SELECT'?[...input.options].find(o=>o.value===value)?.textContent||value||'Not answered':value||'Not answered'}`;
@@ -205,7 +230,7 @@ function renderProfileStatus() {
     : state?.configured ? 'Saved on this device' : 'Profile and resume required';
   if($('profile-status').textContent!==status)$('profile-status').textContent=status;
 }
-$('refresh-profile').onclick=()=>perform(async()=>{await loadProfile();$('notice').textContent=profileDirty?'Saved profile refreshed. Your unsaved edits were kept; compare the saved values before saving.':'Saved profile refreshed.';});
+$('refresh-profile').onclick=()=>perform(async()=>{await loadProfile();$('notice').textContent=profileDirty?'Saved values refreshed. Your edits were kept.':'Saved profile refreshed.';});
 async function loadProfile(saved) {
   if(!profileLoaded)profileControls(false);
   if (!$('answer-fields').children.length) {
@@ -232,25 +257,33 @@ async function loadProfile(saved) {
       if (field.id === 'configured_narrative') { input.rows=4; label.className='wide'; }
       const group=field.id==='ai_evaluation_consent'||/disclosure|self_identification/.test(field.id)?'disclosures':field.type==='boolean'?'eligibility':/salary|start_date|weekly_hours|notice_period|travel_percentage/.test(field.id)?'availability':'work';
       label.append(input); containers[group].append(label);
+      if (field.id === 'ai_evaluation_consent') {
+        const hint = document.createElement('small');
+        hint.id = 'consent-scope';
+        hint.textContent = 'Applies to new applications and saved drafts on the next fill.';
+        label.append(hint);
+      }
     }
   }
+  showSection(sectionId);
   if(!profileLoaded)profileControls(false);
   if(saved===undefined)saved=await api('settings');
   savedProfile=saved;
-  $('test-value-note').hidden=saved?.profile?.executionPolicy?.answerFallbackPolicy!=='deterministic_site_valid_editable';
-  $('profile-answer-warning').hidden=!saved;
+  const manifest=saved?.profile;
+  $('profile-answer-warning').hidden=!(manifest?.executionPolicy?.answerFallbackPolicy==='deterministic_site_valid_editable' ||
+    manifest?.profilePlan?.mode==='synthetic_test_non_submittable' || manifest?.profile?.facts?.some(f=>f.lane==='synthetic_test_default'));
   if(!profileDirty)for(const input of $('profile-form').querySelectorAll('[name]')) {
     input.value=savedAnswer(input.name);
   }
   profileLoaded=true; profileControls(true); $('profile-error').hidden=true;
   if(savedResumeUrl)URL.revokeObjectURL(savedResumeUrl);
   savedResumeUrl=undefined;$('view-resume').hidden=!saved?.resume;
-  if(saved?.resume){const bytes=Uint8Array.from(atob(saved.resume),c=>c.charCodeAt(0));savedResumeUrl=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));$('view-resume').href=savedResumeUrl;$('saved-resume').textContent='';}
+  if(saved?.resume){const bytes=Uint8Array.from(atob(saved.resume),c=>c.charCodeAt(0));savedResumeUrl=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));$('view-resume').href=savedResumeUrl;$('view-resume').textContent=saved.resumeName || 'View saved PDF';$('saved-resume').textContent='';}
   else $('saved-resume').textContent='Choose a PDF to save your profile.';
   updateProfileDraft();
 }
 function downloadBackup(value) {
-  const settings={profile:value.profile,resume:value.resume};
+  const settings={profile:value.profile,resume:value.resume,resumeName:value.resumeName};
   const blob=new Blob([JSON.stringify({format:'hunt-c3-profile',version:1,exportedAt:new Date().toISOString(),settings},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob), link=document.createElement('a'); link.href=url;link.download=`hunt-c3-profile-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -268,7 +301,7 @@ $('import-profile').onclick=()=>perform(async()=>{
   const draft = JSON.stringify(Object.fromEntries(new FormData($('profile-form'))));
   const file=$('profile').files[0], resume=$('import-resume').files[0], profileResume=$('resume').files[0], before=await api('settings');
   if(!file || (!resume && !before))throw new Error('Choose a prepared C3 profile and a PDF resume.');
-  const after=await api('settings',{profile:JSON.parse(await file.text()),resumeBase64:resume ? await base64(resume) : before.resume,expectedRevision:savedProfile?.profile?.profile?.revision ?? null});
+  const after=await api('settings',{profile:JSON.parse(await file.text()),resumeBase64:resume ? await base64(resume) : before.resume,resumeName:resume?.name ?? before?.resumeName,expectedRevision:savedProfile?.profile?.profile?.revision ?? null});
   if(before)remember({undo:()=>restoreSettings(before),redo:()=>restoreSettings(after)});
   profileDirty = JSON.stringify(Object.fromEntries(new FormData($('profile-form')))) !== draft || $('resume').files[0] !== profileResume;
   if($('import-resume').files[0] === resume) $('import-resume').value='';
@@ -286,22 +319,24 @@ function savedPasswordText(value) { return value===null?'Saved file could not be
 async function loadAccountStatus() {
   accountStatus=await api('account/status');
   const application=accountStatus.applicationPassword,gmail=accountStatus.gmail;
-  $('application-password-state').textContent=`${savedPasswordText(application.saved)}. Employer sign-in not checked.`;
+  $('application-password-state').textContent=application.saved || application.configured ?
+    `${savedPasswordText(application.saved)}. Employer sign-in not checked.` : savedPasswordText(application.saved);
   const mailText=gmail.status==='verified'?'Inbox access verified':gmail.status==='failed'?'Inbox check failed':gmail.status==='missing'?'No Gmail credentials configured':'Inbox access not checked';
-  $('gmail-password-state').textContent=`${savedPasswordText(gmail.saved)}. ${mailText}.${gmail.lastSuccessAt?` Last successful check: ${checkTime(gmail.lastSuccessAt)}.`:''}${gmail.error?' Recheck, or enter a replacement Gmail app password.':''}`;
+  const mailState=gmail.saved===false && gmail.status==='missing' ? 'Not configured' : `${savedPasswordText(gmail.saved)}. ${mailText}`;
+  $('gmail-password-state').textContent=`${mailState}.${gmail.lastSuccessAt?` Last successful check: ${checkTime(gmail.lastSuccessAt)}.`:''}${gmail.error?' Recheck, or enter a replacement Gmail app password.':''}`;
   if(!accountDraft && typeof accountStatus.email==='string')$('email').value=accountStatus.email;
   if(accountStatus.evidencePersistenceError)$('account-storage-status').textContent='The check finished, but its status could not be saved. Check local storage before relying on it.';
   historyButtons();
 }
 $('check-account').onclick=()=>perform(async()=>{
   $('check-account').textContent='Checking inbox access…';
-  try { await api('account/check',{}); await loadAccountStatus(); $('notice').textContent=accountStatus.gmail.status==='verified'?'Saved Gmail inbox access verified. Employer sign-in remains separate.':'Gmail check failed. The saved account was kept.'; }
+  try { await api('account/check',{}); await loadAccountStatus(); $('notice').textContent=accountStatus.gmail.status==='verified'?'Gmail inbox access verified.':'Gmail check failed. The saved account was kept.'; }
   catch(error) { await loadAccountStatus().catch(()=>{});throw error; }
   finally { $('check-account').textContent='Recheck saved Gmail'; }
 });
 async function loadConnectionStatus() {
   const status=await api('agent/status');
-  $('connection-details').textContent=status.extension?`${status.extension.browser || 'Browser'} connected to this local C3 workspace.`:status.connected?'Browser connected. Reload Hunt C3 to show its version.':'No browser connected. Open Hunt C3 in the browser you want to use and select Connect to local app.';
+  $('connection-details').textContent=status.extension?`${status.extension.browser || 'Browser'} connected.`:status.connected?'Browser connected. Reload Hunt C3 to show its version.':'Open Hunt C3 in your browser and select Connect to local app.';
   $('connection-version').textContent=`Local app ${status.serviceVersion}${status.extension?.version?` · Extension ${status.extension.version}`:''}`;
 }
 $('check-connection').onclick=()=>perform(async()=>{await loadConnectionStatus();$('notice').textContent='Connection checked.';});
@@ -331,8 +366,10 @@ async function refresh() {
   $('summary').textContent=`${state.jobs.filter(j=>j.status==='review').length} at review · ${state.jobs.filter(needsAttention).length} need attention · ${state.jobs.filter(j=>j.status==='running').length} running`;
   const conflicting=state.conflictingJobCount || 0, unreadable=(state.unavailableJobCount || 0)-conflicting;
   $('link-recovery').hidden=proxied || !unreadable;
-  if(conflicting) $('summary').textContent+=` · ${conflicting} saved applications have conflicting posting links. Preserve your local data and restore an Applications backup with one active entry per posting.`;
-  if(unreadable) $('summary').textContent+=` · ${unreadable} saved ${unreadable===1?'application has an unreadable link':'applications have unreadable links'}${proxied ? '. Open local Applications to repair.' : ''}`;
+  const warnings=[];
+  if(conflicting) warnings.push(`${conflicting} saved applications have conflicting links. Keep your local data and restore an Applications backup with one entry per posting.`);
+  if(unreadable) warnings.push(`${unreadable} saved ${unreadable===1?'application has an unreadable link':'applications have unreadable links'}.${proxied ? ' Open local Applications to repair.' : ''}`);
+  $('queue-warning').hidden=!warnings.length; $('queue-warning').textContent=warnings.join(' ');
   $('empty').hidden=state.jobs.length>0;
   historyButtons(); renderJobs();
   if(!profileLoaded) {
@@ -350,6 +387,8 @@ async function refresh() {
 function renderJobs() {
   if(!state)return;
   $('start').disabled=busy||historyBusy||!stateFresh||!state.configured||!state.connected;
+  $('batch-blocker').hidden=!stateFresh || (state.configured && state.connected);
+  $('batch-blocker').textContent=!state.configured?'Save your profile and resume before filling.':!state.connected?'Connect the Hunt C3 extension to fill applications.':'';
   $('concurrency').disabled=busy||historyBusy||!stateFresh;
   const query=$('job-search').value.trim().toLowerCase(), filter=$('job-filter').value;
   const jobs=state.jobs.filter(job=>(!query || `${job.title} ${job.url}`.toLowerCase().includes(query)) &&
@@ -359,11 +398,12 @@ function renderJobs() {
   $('no-matches').hidden=jobs.length>0||state.jobs.length===0;
   const signature=JSON.stringify([state.jobs,query,filter,stateFresh,busy,historyBusy,profileLoaded,profileDirty,savedProfile?.profile?.profile?.revision,pendingJob,[...jobErrors]]); if(signature===rendered)return; rendered=signature;
   const active=document.activeElement, focusJob=active?.closest('[data-job]')?.dataset.job, focusText=active?.dataset.focusAction||active?.textContent;
+  const expandedDiagnostics=new Set([...$('jobs').querySelectorAll('.job-diagnostics[open]')].map(item=>item.closest('[data-job]').dataset.job));
   const rows=jobs.map(job=>{
     const li=document.createElement('li'); li.dataset.job=job.id;li.tabIndex=-1;
     const content=document.createElement('div'), title=document.createElement('a'); title.className='job-title';title.textContent=job.title;title.href=job.url;title.target='_blank';title.rel='noopener noreferrer'; content.append(title);
     const status=document.createElement('p');status.className='job-status';status.textContent=job.status==='paused'&&job.actionPending?'Pausing…':ownerReview(job)?'Owner review needed':({queued:'Queued',running:'Running',paused:'Paused',review:'At review',submitting:'Submitting',submitted:'Submitted',submission_uncertain:'Submission uncertain'}[job.status]||job.status);status.dataset.attention=String(needsAttention(job));content.append(status);
-    if(job.currentPageOnly && ['paused','review'].includes(job.status)){const stage=document.createElement('p');stage.className='job-stage';stage.textContent=job.pageHandoff?'Open the job link, then choose Fill current page to use its selected resume.':'Finish this saved draft on the employer page with its selected resume.';content.append(stage);}
+    if(job.currentPageOnly && ['paused','review'].includes(job.status)){const stage=document.createElement('p');stage.className='job-stage';stage.textContent=job.pageHandoff?'Open the job link, then choose Fill current page to use its selected resume.':'Open the job link and choose Fill current page. It uses your default resume.';content.append(stage);}
     else if(job.stage!==status.textContent&&!(job.stage==='Needs attention'&&job.error)){const stage=document.createElement('p');stage.className=ownerReview(job)?'job-stage owner-warning':'job-stage';stage.textContent=ownerReview(job)?job.stage.replace(/^Owner review needed: /,'').replace(/^./,c=>c.toUpperCase()):job.stage;content.append(stage);}
     if(job.resumeName){const resume=document.createElement('p');resume.className='job-stage';resume.textContent=`Resume: ${job.resumeName}${job.resumeVersion ? ' · '+job.resumeVersion : ''}`;content.append(resume);}
     if(proxied && job.sourceJobId){const source=document.createElement('a');source.href=`/jobs/${job.sourceJobId}`;source.target='_top';source.textContent='View Hunt job';content.append(source);}
@@ -372,7 +412,9 @@ function renderJobs() {
       detail.className = 'job-stage';
       detail.textContent = [job.componentFailure.component, job.componentFailure.operation]
         .map(part => part.replaceAll('_', ' ')).join(' / ');
-      content.append(detail);
+      const diagnostics=document.createElement('details'),summary=document.createElement('summary');
+      diagnostics.className='job-diagnostics'; diagnostics.open=expandedDiagnostics.has(job.id); summary.textContent='Technical details';
+      diagnostics.append(summary,detail); content.append(diagnostics);
     }
     if(job.error){const p=document.createElement('p');p.className='job-error';p.setAttribute('role','alert');p.textContent=job.error;content.append(p);}
     if(jobErrors.has(job.id)&&jobErrors.get(job.id).message!==job.error){const p=document.createElement('p');p.className='job-action-error';p.setAttribute('role','alert');p.textContent=jobErrors.get(job.id).message;content.append(p);}
@@ -399,9 +441,9 @@ function renderJobs() {
       const apply=()=>api(`jobs/${job.id}/action`,{action:'refresh_profile',expectedProfileRevision,expectedProfileDigest});
       let refreshed=await apply();
       if(refreshed.inputDigest)remember({undo:()=>api(`jobs/${job.id}/action`,{action:'undo_profile_refresh',inputDigest:refreshed.inputDigest,refreshToken:refreshed.refreshToken}),redo:async()=>{refreshed=await apply();}});
-      $('notice').textContent=refreshed.unchanged?'This application already uses the saved profile.':'Saved profile applied to this paused application. Its resume is unchanged. Undo is available; choose Retry when ready.';
+      $('notice').textContent=refreshed.unchanged?'This application already uses the saved profile.':'Saved profile applied. Choose Retry to continue.';
     },job.id,job.actionPending||!profileLoaded||profileDirty));
-    if(['paused','queued','review'].includes(job.status))actions.append(button('Remove',async()=>{await act('remove');remember({undo:()=>act('restore'),redo:()=>act('remove')});$('notice').textContent='Removed from the list. Undo is available in this tab until reload or 20 more changes. Saved inputs are kept.';},job.id,job.actionPending));
+    if(['paused','queued','review'].includes(job.status))actions.append(button('Remove',async()=>{await act('remove');remember({undo:()=>act('restore'),redo:()=>act('remove')});$('notice').textContent='Removed from the list. Undo is available in this tab until reload or 20 more changes.';},job.id,job.actionPending));
     if(!job.currentPageOnly && (job.status==='review'||job.status==='paused'&&job.reviewUrl))actions.append(button('Refresh review',()=>act('refresh_review'),job.id,job.actionPending));
     if(job.status==='review'){
       if(!job.currentPageOnly && job.submissionAllowed)actions.append(button('Submit…',async()=>{pendingSubmit=job;$('submit-title').textContent=job.title;$('reviewed').checked=false;$('submit-dialog').returnValue='';$('submit-dialog').showModal();},job.id,job.actionPending));
@@ -409,7 +451,7 @@ function renderJobs() {
     li.append(content,actions);return li;
   });
   $('jobs').replaceChildren(...rows);
-  if(focusJob && !active.isConnected){const row=rows.find(r=>r.dataset.job===focusJob), buttons=[...(row?.querySelectorAll('button:not(:disabled)')||[])];const next=buttons.find(b=>b.textContent===focusText)||(!busy&&!historyBusy&&(buttons.find(b=>b.textContent!=='Open application')||buttons[0]))||row||$('queue-title');if(next===row)row.dataset.focusAction=focusText;next.focus();}
+  if(focusJob && !active.isConnected){const row=rows.find(r=>r.dataset.job===focusJob), buttons=[...(row?.querySelectorAll('button:not(:disabled),summary')||[])];const next=buttons.find(b=>b.textContent===focusText)||(!busy&&!historyBusy&&(buttons.find(b=>b.tagName==='BUTTON'&&b.textContent!=='Open application')||buttons[0]))||row||$('queue-title');if(next===row)row.dataset.focusAction=focusText;next.focus();}
 }
 $('submit-dialog').addEventListener('close',()=>{if($('submit-dialog').returnValue!=='submit')return; const job=pendingSubmit;
   void perform(()=>api(`jobs/${job.id}/action`,{action:'submit',confirmed:$('reviewed').checked,reviewDigest:job.reviewDigest}));

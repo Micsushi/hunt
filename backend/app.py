@@ -5612,7 +5612,8 @@ def job_detail(
     back_link = safe_return_to or "/jobs"
     error_panel = (
         f'<div class="panel"><h2>Enrichment error</h2><pre>{format_text(row["last_enrichment_error"])}</pre></div>'
-        if row.get("last_enrichment_error") else ""
+        if row.get("last_enrichment_error")
+        else ""
     )
     body = f"""
     <section class="hero">

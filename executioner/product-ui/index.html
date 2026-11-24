@@ -1,19 +1,19 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hunt C3</title><link rel="stylesheet" href="./style.css"><script src="./app.js" defer></script></head>
 <body><main>
-  <header class="app-header"><a class="brand" href="#">Hunt <span>C3</span></a><span id="connection" role="status">Connecting</span></header>
+  <header class="app-header"><span class="brand">Hunt <span>C3</span></span><span id="connection" role="status">Connecting</span></header>
   <nav class="app-nav" aria-label="Workspace"><button type="button" data-view="profile" aria-current="page">Profile</button><button type="button" data-view="applications">Applications</button><button type="button" data-view="settings">Settings</button></nav>
   <div class="page-heading"><h1 id="page-title">Profile</h1></div>
-  <div id="profile-answer-warning" class="owner-warning" hidden><p>Earlier versions may have saved test values. Review your answers before preparing applications.</p><button id="review-profile-answers" type="button" class="secondary">Review profile answers</button></div>
+  <div id="profile-answer-warning" class="owner-warning" hidden><p>This profile includes a test setting or test answers. Check it before filling.</p><button id="review-profile-answers" type="button" class="secondary">Review profile answers</button></div>
   <p id="error" role="alert" hidden></p>
   <div id="connection-error" hidden><p role="alert"></p><button id="retry-connection" type="button" class="secondary">Reconnect</button></div>
   <button id="recover-storage" class="secondary" hidden>Retry saving progress</button>
-  <form id="pair"><label>Pairing key<input id="token" type="password" autocomplete="off" required></label><button>Connect C3</button></form>
+  <form id="pair" hidden><label>Pairing key<input id="token" type="password" autocomplete="off" required></label><button>Connect C3</button></form>
   <section data-panel="applications" hidden aria-label="New applications">
     <details id="batch-entry" open><summary>Add application links</summary>
     <form id="batch"><label for="links">Job links</label><textarea id="links" rows="5" spellcheck="false" placeholder="One job URL per line" required></textarea>
       <div class="actions"><button id="start">Fill applications</button><label class="compact">At a time<select id="concurrency"><option>1</option><option>3</option><option selected>6</option><option>10</option><option>20</option><option>30</option></select></label></div>
-      <p class="note">Stops before submission.</p>
+      <p id="batch-blocker" role="status" class="note" hidden></p>
     </form>
     </details>
     <details id="handoff-entry"><summary>Import applications from Hunt</summary>
@@ -25,7 +25,7 @@
   </section>
   <section id="setup" data-panel="profile" aria-label="Your profile">
     <div id="profile-error" hidden><p role="alert"></p><button id="retry-profile" type="button" class="secondary">Retry loading profile</button></div>
-    <nav class="section-nav" aria-label="Profile sections"><a href="#contact">Contact</a><a href="#work">Work &amp; education</a><a href="#availability">Availability</a><a href="#eligibility">Eligibility</a><a href="#disclosures">Disclosures</a><a href="#preferences">Resume</a></nav>
+    <nav class="section-nav" aria-label="Profile sections"><a href="#contact" aria-current="location">Contact</a><a href="#work">Work &amp; education</a><a href="#availability">Availability</a><a href="#eligibility">Eligibility</a><a href="#disclosures">Disclosures</a><a href="#preferences">Resume</a></nav>
     <form id="profile-form"><fieldset id="contact" class="profile-section"><legend>Contact</legend><div class="profile-grid">
       <label>First name<input name="given_name" autocomplete="given-name" required></label><label>Last name<input name="family_name" autocomplete="family-name" required></label>
       <label>Email<input name="email_address" type="email" autocomplete="email" required></label><label>Phone<input name="phone_number" type="tel" autocomplete="tel"></label>
@@ -34,24 +34,33 @@
       <label>Street address<input name="address_line1" autocomplete="address-line1"></label><label>Apartment or unit<input name="address_line2" autocomplete="address-line2"></label>
     </div></fieldset>
     <div id="answer-fields" class="answer-sections"></div>
-    <fieldset id="preferences" class="profile-section"><legend>Resume &amp; preferences</legend>
+    <fieldset id="preferences" class="profile-section" hidden><legend>Default resume</legend>
     <p id="saved-resume" class="note" role="status">No saved resume.</p><a id="view-resume" hidden target="_blank" rel="noopener">View saved resume</a>
-    <label>Replace default resume (PDF, up to 5 MB)<input id="resume" type="file" accept="application/pdf,.pdf"></label>
-    <p class="note">Applications use your saved answers. Missing answers stay blank for your review.</p>
-    <p id="test-value-note" class="note" hidden>An older test-value preference is saved. Live applications still use only your saved answers.</p></fieldset>
-    <div class="save-bar"><div><strong id="profile-status" role="status">Loading profile…</strong><p class="note">Changes apply to new applications. AI screening consent also applies when you fill or retry a saved draft.</p></div><div class="actions"><button id="refresh-profile" type="button" class="secondary">Refresh saved profile</button><button id="save-profile">Save profile</button></div></div>
-    <details><summary>Import an existing C3 profile</summary><label>Prepared profile<input id="profile" type="file" accept="application/json,.json"></label><label>Resume for imported profile<input id="import-resume" type="file" accept="application/pdf,.pdf"></label><button id="import-profile" type="button" class="secondary">Import profile</button></details></form>
-    <form id="account-form"><dl class="status-list" aria-label="Saved account status"><div><dt>Application password</dt><dd id="application-password-state">Checking saved account</dd></div><div><dt>Gmail verification</dt><dd id="gmail-password-state">Checking saved account</dd></div></dl><button id="check-account" type="button" class="secondary" disabled>Recheck saved Gmail</button><label>Account email<input id="email" type="email" autocomplete="username" required></label><label>Application password<input id="password" type="password" autocomplete="current-password" aria-describedby="account-password-hint"></label><label>Gmail app password<input id="gmail" type="password" autocomplete="off" aria-describedby="account-password-hint"></label><p id="account-password-hint" class="note">Leave passwords blank to keep saved values for this email. New Gmail credentials are checked before replacing the saved account.</p><button id="save-account">Save account</button><p class="note" id="account-storage-status" role="status"></p></form>
+    <label>Choose PDF (up to 5 MB)<input id="resume" type="file" accept="application/pdf,.pdf"></label>
+    </fieldset>
+    <div class="save-bar"><div><strong id="profile-status" role="status">Loading profile…</strong></div><div class="actions"><button id="refresh-profile" type="button" class="secondary">Refresh saved profile</button><button id="save-profile">Save profile</button></div></div>
+    </form>
+  </section>
+  <section id="settings-panel" data-panel="settings" hidden aria-label="Settings and backup">
+    <section class="connection-settings" aria-labelledby="connection-heading">
+      <h2 id="connection-heading">Browser connection</h2><p id="connection-details" role="status">Checking connection…</p>
+      <details><summary>Connection details</summary><p id="connection-version" class="note"></p><button id="check-connection" type="button" class="secondary">Check connection</button></details>
+    </section>
+    <section aria-labelledby="account-heading"><h2 id="account-heading">Application account</h2>
+    <dl class="status-list" aria-label="Saved account status"><div><dt>Application password</dt><dd id="application-password-state">Checking saved account</dd></div><div><dt>Gmail verification</dt><dd id="gmail-password-state">Checking saved account</dd></div></dl><button id="check-account" type="button" class="secondary" disabled>Recheck saved Gmail</button><p class="note" id="account-storage-status" role="status"></p><details><summary>Edit credentials</summary><form id="account-form"><label>Account email<input id="email" type="email" autocomplete="username" required></label><label>Application password<input id="password" type="password" autocomplete="current-password" aria-describedby="account-password-hint"></label><label>Gmail app password<input id="gmail" type="password" autocomplete="off" aria-describedby="account-password-hint"></label><p id="account-password-hint" class="note">For the same email, blank passwords keep the saved values.</p><button id="save-account">Save account</button></form></details>
+    </section>
+    <details><summary>Import an existing C3 profile</summary><label>Prepared profile<input id="profile" type="file" accept="application/json,.json"></label><label>Resume for imported profile<input id="import-resume" type="file" accept="application/pdf,.pdf"></label><button id="import-profile" type="button" class="secondary">Import profile</button></details>
+
     <details><summary>Local storage and backup</summary><p class="note">Backups include your personal details and resume, without passwords.</p><p id="storage-path" class="note"></p><div class="actions"><button id="export-backup" type="button" class="secondary">Download backup</button><label>Restore profile backup<input id="backup-file" type="file" accept="application/json,.json"></label><button id="restore-backup" type="button" class="secondary">Restore backup</button></div></details>
   </section>
-  <section id="settings-panel" data-panel="settings" hidden aria-label="Settings and backup"><section class="connection-settings" aria-labelledby="connection-heading"><h2 id="connection-heading">Browser connection</h2><p id="connection-details" role="status">Checking the connected browser</p><p id="connection-version" class="note"></p><button id="check-connection" type="button" class="secondary">Check connection</button></section></section>
+
   <section data-panel="applications" hidden aria-label="Application progress"><div class="queue-heading"><h2 id="queue-title" tabindex="-1">Your applications</h2><span id="summary" role="status"></span></div>
+    <p id="queue-warning" class="owner-warning" role="alert" hidden></p>
     <details id="link-recovery" hidden><summary>Repair a saved link</summary>
-      <p class="note">Paste the original employer posting link to reconnect its saved application.</p>
-      <form id="repair-link-form"><label>Employer posting URL<input id="repair-link-url" type="url" required maxlength="4096" autocomplete="off"></label><button id="repair-link" type="submit" class="secondary">Repair link</button></form>
+      <form id="repair-link-form"><label>Original employer posting URL<input id="repair-link-url" type="url" required maxlength="4096" autocomplete="off"></label><button id="repair-link" type="submit" class="secondary">Repair link</button></form>
     </details>
     <div class="queue-filters"><label>Find an application<input id="job-search" type="search" placeholder="Company, job title or link"></label><label>Status<select id="job-filter"><option value="all">All applications</option><option value="attention">Needs attention</option><option value="review">At review</option><option value="active">Queued or running</option><option value="paused">Paused</option><option value="submitted">Submitted</option></select></label></div>
-    <p id="filter-summary" role="status" class="note"></p><p id="empty">Add job links above, or choose “Prepare this job” in the browser extension.</p><p id="no-matches" hidden>No applications match. <button id="clear-filters" type="button" class="secondary">Clear filters</button></p><ol id="jobs"></ol></section>
+    <p id="filter-summary" role="status" class="note"></p><p id="empty">No applications yet. Add a job link to get started.</p><p id="no-matches" hidden>No applications match. <button id="clear-filters" type="button" class="secondary">Clear filters</button></p><ol id="jobs"></ol></section>
   <div id="history" class="actions"><button id="undo" class="secondary" disabled>Undo</button><button id="redo" class="secondary" disabled>Redo</button><span id="notice" role="status"></span></div>
   <dialog id="submit-dialog"><form method="dialog"><h2>Submit this application?</h2><p id="submit-title"></p><p>This sends your application to the employer and cannot be undone here.</p><label class="check"><input id="reviewed" type="checkbox" required>I reviewed the resume and every answer, including any suggested defaults.</label><div class="actions"><button id="confirm-submit" value="submit">Submit application</button><button value="cancel" class="secondary" formnovalidate>Keep at Review</button></div></form></dialog>
 </main></body></html>

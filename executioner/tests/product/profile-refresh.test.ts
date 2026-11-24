@@ -83,6 +83,13 @@ test('Use saved profile updates a paused draft through the normal UI and support
     service.queue.configureApplicant({...values,city:'After'});
     const page=await browser.newPage({viewport:{width:390,height:844}});
     await page.goto(service.origin+'/#token='+encodeURIComponent(readFileSync(service.tokenPath,'utf8').trim()));
+    const firstName = page.getByRole('textbox',{name:'First name',exact:true});
+    await firstName.fill('');
+    await page.getByRole('link',{name:'Disclosures',exact:true}).click();
+    await page.getByRole('button',{name:'Save profile',exact:true}).click();
+    assert.equal(await firstName.evaluate(input => input === document.activeElement),true);
+    await firstName.fill(values.given_name);
+    await page.getByRole('link',{name:'Disclosures',exact:true}).click();
     const consent = page.getByLabel('Allow AI screening of my application when an employer requires an answer',{exact:true});
     await consent.waitFor();
     assert.equal(await consent.inputValue(),'');
