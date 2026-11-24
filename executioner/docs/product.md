@@ -98,6 +98,10 @@ in a new tab without changing the selection. In that
 tab, **Browse saved resumes** lets you open other PDFs without changing the
 selection for Fill current page. The local full menu also has this list under
 **Profile → Resume**.
+Use the trash icon beside a PDF to move it out of the picker. Open **Trash**
+at the bottom of the list to preview or restore it. Drafts keep their assigned
+PDFs. If you move your profile's default PDF to Trash, choose a resume before
+filling a new page.
 **Prepare this job** keeps using the job's saved PDF.
 
 After a fill, the popup shows fields that still need attention. Use **Previous**

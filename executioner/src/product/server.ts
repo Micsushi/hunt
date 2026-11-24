@@ -125,8 +125,9 @@ export async function startProductServer(options: { root?: string; port?: number
         const id=path.slice('/fill-history/'.length);
         response.end(JSON.stringify(readPageFillLog(join(root,'learning','page-'+id))));return;
       }
-      if (request.method === 'GET' && path === '/resumes') {
-        response.end(JSON.stringify(queue.availableResumes()));return;
+      if (request.method === 'GET' && (path === '/resumes' || path === '/resumes/trash')) {
+        const catalog=queue.resumeCatalog();
+        response.end(JSON.stringify(path === '/resumes' ? catalog.resumes : catalog.trashedResumes));return;
       }
       if (request.method === 'GET' && /^\/resumes\/[a-f0-9]{64}$/.test(path)) {
         const doc = queue.resumeBySha256(path.slice('/resumes/'.length));
@@ -163,7 +164,12 @@ export async function startProductServer(options: { root?: string; port?: number
       for await (const chunk of request) { size += chunk.length; if (size > 32 * 1024 * 1024) throw new Error("Request is too large."); chunks.push(chunk); }
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       let result: unknown = { ok: true };
-      if (path === '/browser/extension/reload') {
+      const resumeChange = /^\/resumes\/([a-f0-9]{64})\/(trash|restore)$/.exec(path);
+      if (resumeChange) {
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) throw new Error('Resume library actions accept no arguments.');
+        queue.setResumeTrashed(resumeChange[1]!,resumeChange[2]==='trash');
+        result=queue.resumeCatalog();
+      } else if (path === '/browser/extension/reload') {
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) throw new Error('Extension reload accepts no arguments.');
         if (queue.snapshot().jobs.some(job => ['queued','running','submitting'].includes(job.status) || job.actionPending)) throw new Error('Pause active applications before reloading Hunt.');
         result = await bridge.reloadExtension();
@@ -205,15 +211,15 @@ export async function startProductServer(options: { root?: string; port?: number
           response.setHeader('Content-Type','application/pdf');
           response.end(doc.pdf);return;
         }
-        const resumes = queue.availableResumes();
+        const {resumes,trashedResumes} = queue.resumeCatalog();
         const queuedMeta = queued ? {...queued.metadata,...(queuedJob && selectableQueueResume(queuedJob) && {jobId:queuedJob.id})} : null;
         if (queuedMeta) {
           const match = resumes.find(item => item.sha256 === queuedMeta.sha256);
           if (match && queuedMeta.jobId) match.jobId = queuedMeta.jobId;
-          else if (!match) resumes.push({id: queuedMeta.sha256, source: queuedMeta.source as 'default'|'selected', name: queuedMeta.name, sha256: queuedMeta.sha256, ...(queuedMeta.version && {version: queuedMeta.version}), ...(queuedMeta.jobId && {jobId: queuedMeta.jobId})});
+          else if (!match && !trashedResumes.some(item=>item.sha256===queuedMeta.sha256)) resumes.push({id: queuedMeta.sha256, source: queuedMeta.source as 'default'|'selected', name: queuedMeta.name, sha256: queuedMeta.sha256, ...(queuedMeta.version && {version: queuedMeta.version}), ...(queuedMeta.jobId && {jobId: queuedMeta.jobId})});
         }
         result = {supportsQueue:!!target,currentPage:currentPage?.metadata??null,
-          ...(queuedError && {queuedError}),queued:queuedMeta,resumes};
+          ...(selected && {currentPageBound:true}),...(queuedError && {queuedError}),queued:queuedMeta,resumes,trashedResumes};
       } else if (path === '/browser/page') {
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key=>!['operation','tabId','expectedUrl','documentId','expiresAt','expectedResumeSha256','currentPageJobId','resumeSha256'].includes(key)) ||
           !['inspect','fill','undo','redo','use_profile_country'].includes(body.operation) || !Number.isSafeInteger(body.tabId) || body.tabId < 1 || typeof body.expectedUrl !== 'string' ||

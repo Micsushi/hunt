@@ -35,6 +35,13 @@
         </div>
         <ul id="resume-list" aria-label="Matching resumes"></ul>
         <p id="no-resumes" role="status" hidden>No matching resumes.</p>
+        <p id="resume-picker-status" role="status"></p>
+        <div class="resume-footer">
+          <button id="resume-trash-toggle" aria-pressed="false" aria-controls="resume-list">
+            <svg viewBox="0 0 24 24" class="resume-svg" aria-hidden="true"><use class="trash-symbol" href="#trash-drawing"></use><path class="back-symbol" d="M20 12H4m7-7-7 7 7 7"/></svg>
+            <span id="resume-trash-label">Trash</span>
+          </button>
+        </div>
       </section>
     </div>
     <div id="actions">
@@ -67,5 +74,11 @@
     </div>
   </section>
   <div id="status" role="status"></div>
+  <svg class="resume-icon-defs" width="0" height="0" aria-hidden="true"><defs>
+    <path id="trash-drawing" d="M4 6h16M9 6V3h6v3M6 6l1 14h10l1-14M10 10v6m4-6v6"/>
+  </defs></svg>
+  <template id="resume-icon-open"><svg viewBox="0 0 24 24" class="resume-svg" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14m-1-9H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-4"/></svg></template>
+  <template id="resume-icon-trash"><svg viewBox="0 0 24 24" class="resume-svg" aria-hidden="true"><use href="#trash-drawing"></use></svg></template>
+  <template id="resume-icon-restore"><svg viewBox="0 0 24 24" class="resume-svg" aria-hidden="true"><path d="M4 5v6h6m-6 0 4-4a7 7 0 1 1 0 10"/></svg></template>
 </body>
 </html>

@@ -95,6 +95,9 @@ function verifiedSavedPublication(posting:string, link:string) {
   return verifySmartRecruitersApplication(posting,selected.href);
 }
 const postingConflict = 'Saved applications have conflicting posting links. Preserve your local data and restore an Applications backup with one active entry for this posting.';
+type LibraryResume = {id: string; source: 'default' | 'selected'; name: string; sha256: string; version?: string; jobId?: string};
+type SavedLibraryResume = Pick<LibraryResume, 'name' | 'source' | 'version'> & {trashed: boolean};
+
 export class ApplicationQueue {
   // Keep unreadable legacy links on disk, outside every operational job lookup.
   private records: ProductJob[] = [];
@@ -287,14 +290,27 @@ export class ApplicationQueue {
     const pdf = Buffer.from(input.resume,'base64');
     if (!pdf.subarray(0,5).equals(Buffer.from('%PDF-'))) throw new Error('Save a valid PDF before filling.');
     const sha256 = createHash('sha256').update(pdf).digest('hex');
-    const source = job?.resumeVersion ? 'selected' : 'default';
+    const source: LibraryResume['source'] = job?.resumeVersion ? 'selected' : 'default';
     const savedName = job?.resumeName && job.resumeName !== 'Default resume' ? job.resumeName :
       input.resume === this.settings?.resume ? this.settings.resumeName : undefined;
     const name = savedName || (source === 'selected' ? 'Selected resume' : 'Default resume') + ' · ' + sha256.slice(0,8);
     return {pdf, metadata:{source,name,sha256,...(job?.resumeVersion && {version:job.resumeVersion})}};
   }
-  availableResumes() {
-    const list: {id: string; source: 'default' | 'selected'; name: string; sha256: string; version?: string; jobId?: string}[] = [];
+  private savedLibrary(): Record<string,SavedLibraryResume> {
+    const path = join(this.root,'resume-library','index.json');
+    if (!existsSync(path)) return {};
+    const index: Record<string,SavedLibraryResume> = JSON.parse(readFileSync(path,'utf8'));
+    if (!index || typeof index !== 'object' || Array.isArray(index) ||
+        Object.entries(index).some(([key,row]) => !/^[a-f0-9]{64}$/.test(key) ||
+          !row || typeof row.name !== 'string' || !['default','selected'].includes(row.source) ||
+          typeof row.trashed !== 'boolean' || row.version !== undefined && typeof row.version !== 'string')) {
+      throw new Error('The saved resume library could not be read. Preserve it before restoring a backup.');
+    }
+    return index;
+  }
+  resumeCatalog() {
+    const saved = this.savedLibrary();
+    const list: LibraryResume[] = [];
     const seen = new Set<string>();
     try {
       const def = this.resumeDocument();
@@ -320,9 +336,35 @@ export class ApplicationQueue {
         });
       } catch { /* Skip damaged job inputs so other resumes remain selectable. */ }
     }
-    return list;
+    const trashedResumes: LibraryResume[] = [];
+    for (const [sha256,{trashed,source,name,version}] of Object.entries(saved)) {
+      const item = {id:sha256, sha256, source, name, ...(version && {version})};
+      if (trashed) trashedResumes.push(item);
+      else if (!seen.has(sha256)) list.push(item);
+    }
+    return {resumes:list.filter(item => !saved[item.sha256]?.trashed),trashedResumes};
+  }
+  setResumeTrashed(sha256: string, trashed: boolean) {
+    if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('Invalid resume.');
+    const index = this.savedLibrary();
+    const item = index[sha256];
+    if (item?.trashed === trashed) return;
+    if (!item && !trashed) {
+      if (this.resumeBySha256(sha256)) return;
+      throw new Error('This resume is unavailable.');
+    }
+    const doc = this.resumeBySha256(sha256);
+    if (!doc) throw new Error('This resume is unavailable.');
+    const library = join(this.root,'resume-library');
+    mkdirSync(library,{recursive:true,mode:0o700});
+    // Preserve the exact PDF before publishing a library entry. Draft inputs remain independent.
+    writePrivateFileAtomic(join(library,sha256+'.pdf'),doc.pdf);
+    const {source,name,version} = doc.metadata;
+    index[sha256] = {source,name,...(version && {version}),trashed};
+    writePrivateFileAtomic(join(library,'index.json'),Buffer.from(JSON.stringify(index)));
   }
   resumeBySha256(sha256: string) {
+    if (!/^[a-f0-9]{64}$/.test(sha256)) return null;
     try {
       const def = this.resumeDocument();
       if (def?.metadata.sha256 === sha256) return {...def, base64: def.pdf.toString('base64')};
@@ -335,7 +377,12 @@ export class ApplicationQueue {
         if (doc?.metadata.sha256 === sha256) return {...doc, base64: doc.pdf.toString('base64')};
       } catch { /* Ignore unreadable job inputs. */ }
     }
-    return null;
+    const item = this.savedLibrary()[sha256];
+    if (!item) return null;
+    const pdf = readFileSync(join(this.root,'resume-library',sha256+'.pdf'));
+    if (createHash('sha256').update(pdf).digest('hex') !== sha256) throw new Error('The saved PDF failed verification.');
+    const {source,name,version} = item;
+    return {pdf,metadata:{source,name,sha256,...(version && {version})},base64:pdf.toString('base64')};
   }
   recoverStorage() { this.save(); this.storageError = undefined; this.safePump(); }
   configureApplicant(values: unknown, resumeBase64?: string, resumeName?: string) {

@@ -16,6 +16,11 @@ try {
     return response;
   }
   const resumes = await (await read('/resumes')).json();
+  if (digest && /^[a-f0-9]{64}$/.test(digest) && !resumes.some(item => item.sha256 === digest)) {
+    const trash = await (await read('/resumes/trash')).json();
+    const selected = trash.find(item => item.sha256 === digest);
+    if (selected) resumes.push(selected);
+  }
   for (const resume of resumes) {
     const link = document.createElement('a');
     link.href = '?pdf='+resume.sha256;

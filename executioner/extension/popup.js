@@ -40,6 +40,8 @@ async function initializePopup() {
     return list;
   }
   const picker=$('resume-picker'), resumeButton=$('resume-select'), resumeSearch=$('resume-search'), resumeSort=$('resume-sort');
+  const resumeList=$('resume-list'), trashToggle=$('resume-trash-toggle'), pickerStatus=$('resume-picker-status');
+  let viewingTrash=false, changingLibrary=false, libraryRevision=0;
   const collator=new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});
   const resumeLabel=item=>item.version ? item.name+' · '+item.version : item.name;
   function displayFilename(container,item){
@@ -57,41 +59,100 @@ async function initializePopup() {
   let pickerSignature;
   function renderPicker(){
     if(picker.hidden)return;
+    const trash=alternatives?.trashedResumes || [];
+    const archived=new Set(trash.map(item=>item.sha256));
     const query=resumeSearch.value.trim().toLocaleLowerCase();
-    const rows=resumeOptions(alternatives).filter(item=>resumeLabel(item).toLocaleLowerCase().includes(query));
+    const library=viewingTrash ? trash : resumeOptions(alternatives).filter(item=>!archived.has(item.sha256));
+    const rows=library.filter(item=>resumeLabel(item).toLocaleLowerCase().includes(query));
     rows.sort((a,b)=>{
       const versionOrder=collator.compare(String(a.version||'').replace(/^v(?=\d)/i,''),String(b.version||'').replace(/^v(?=\d)/i,''));
       if(resumeSort.value!=='name' && versionOrder)return resumeSort.value==='version' ? -versionOrder : versionOrder;
       return collator.compare(a.name,b.name)||versionOrder;
     });
-    const signature=JSON.stringify([resumeButton.value,rows.map(item=>[item.sha256,resumeLabel(item)])]);
+    trashToggle.setAttribute('aria-pressed',String(viewingTrash));
+    $('resume-trash-label').textContent=viewingTrash ? 'Back to resumes' : 'Trash ('+trash.length+')';
+    const signature=JSON.stringify([viewingTrash,query,resumeButton.value,rows.map(item=>[item.sha256,resumeLabel(item)])]);
     if(signature===pickerSignature)return;
     pickerSignature=signature;
+    const focusedRow=document.activeElement?.closest('#resume-list li');
+    const focusIndex=Array.from(resumeList.children).indexOf(focusedRow);
+    const focusClass=document.activeElement?.dataset.action;
     $('no-resumes').hidden=rows.length!==0;
-    $('resume-list').replaceChildren(...rows.map(item=>{
-      const row=document.createElement('li'), choose=document.createElement('button'), preview=document.createElement('a');
+    $('no-resumes').textContent=query ? 'No matching resumes.' : viewingTrash ? 'Trash is empty.' : 'No resumes in this list.';
+    resumeList.setAttribute('aria-label',viewingTrash ? 'Resumes in Trash' : 'Matching resumes');
+    resumeList.replaceChildren(...rows.map(item=>{
+      const row=document.createElement('li');
       const label=resumeLabel(item);
-      choose.className='secondary';
-      choose.value=item.sha256;
-      choose.title=label;
-      displayFilename(choose,item);
-      choose.setAttribute('aria-pressed',String(item.sha256===resumeButton.value));
-      choose.onclick=()=>chooseResume(item.sha256);
-      preview.textContent='Open PDF';
+      const name=document.createElement(viewingTrash?'span':'button');
+      name.className=viewingTrash?'trashed-name':'resume-choice';
+      name.title=label;
+      displayFilename(name,item);
+      if(!viewingTrash){
+        name.value=item.sha256;
+        name.dataset.action='select';
+        name.setAttribute('aria-pressed',String(item.sha256===resumeButton.value));
+        name.onclick=()=>chooseResume(item.sha256);
+      }
+      const preview=document.createElement('a');
+      preview.className='resume-icon';
+      preview.dataset.action='open';
+      preview.title='Open PDF';
       preview.setAttribute('aria-label','Open PDF: '+label);
+      preview.append($('resume-icon-open').content.cloneNode(true));
       preview.href='resume-preview.html?pdf='+item.sha256;
       preview.target='_blank';
       preview.rel='noopener';
-      row.append(choose,preview);
+      const action=document.createElement('button');
+      action.className='resume-icon';
+      action.dataset.action=viewingTrash?'restore':'trash';
+      action.title=viewingTrash?'Restore':'Move to Trash';
+      action.setAttribute('aria-label',action.title+': '+label);
+      action.append($('resume-icon-'+action.dataset.action).content.cloneNode(true));
+      action.onclick=()=>changeLibrary(item.sha256,action.dataset.action);
+      row.append(name,preview,action);
       return row;
     }));
+    if(focusIndex>=0 && document.activeElement===document.body){
+      const row=resumeList.children[Math.min(focusIndex,rows.length-1)];
+      (row?.querySelector('[data-action="'+focusClass+'"]') || trashToggle).focus();
+    }
   }
+  async function changeLibrary(sha,action){
+    if(changingLibrary || busy)return;
+    changingLibrary=true;
+    pickerStatus.textContent='';
+    try{
+      const {token}=await chrome.storage.local.get('token');
+      const response=await fetch(origin+'/resumes/'+sha+'/'+action,{method:'POST',
+        headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}',
+        redirect:'error',signal:AbortSignal.timeout(8000)});
+      if(!response.ok)throw new Error();
+      const library=await response.json();
+      ++libraryRevision;
+      if(alternatives)renderSelection({...alternatives,resumes:library.resumes,trashedResumes:library.trashedResumes});
+      controls();
+      pickerStatus.textContent=action==='trash'?'Moved to Trash.':'Resume restored.';
+    }catch{
+      pickerStatus.textContent='Could not confirm the change. Reopen the picker to check.';
+      await checkConnection();
+    }finally{changingLibrary=false;}
+  }
+  trashToggle.onclick=()=>{
+    viewingTrash=!viewingTrash;
+    resumeSearch.value='';
+    pickerStatus.textContent='';
+    renderPicker();
+    resumeList.scrollTop=0;
+  };
   function togglePicker(open){
     picker.hidden=!open;
     resumeButton.setAttribute('aria-expanded',String(open));
     if(open){
+      viewingTrash=false;
+      pickerStatus.textContent='';
       resumeSearch.value='';
       renderPicker();
+      resumeList.scrollTop=0;
       resumeSearch.focus();
     }
   }
@@ -103,8 +164,8 @@ async function initializePopup() {
       togglePicker(false);
       resumeButton.focus();
     }else if(!picker.hidden && (event.key==='ArrowDown'||event.key==='ArrowUp') && event.target!==resumeSort){
-      const buttons=[...$('resume-list').querySelectorAll('button')];
-      const index=buttons.indexOf(event.target.closest('li')?.querySelector('button'));
+      const buttons=[...resumeList.querySelectorAll(viewingTrash?'[data-action=restore]':'.resume-choice')];
+      const index=Array.from(resumeList.children).indexOf(event.target.closest('li'));
       const next=index+(event.key==='ArrowDown'?1:-1);
       if(buttons[next]){
         event.preventDefault();
@@ -114,28 +175,30 @@ async function initializePopup() {
   };
   function renderSelection(next, error=''){
     alternatives=next;
+    const trash=next?.trashedResumes || [];
     const options=resumeOptions(next);
     const queued=next?.queued;
     const prefMatch=preference?.url===tab?.url
-      ? options.find(item=>item.sha256===preference.sha256 && (!preference.jobId || item.jobId===preference.jobId || item.sha256===queued?.sha256))
+      ? [...options,...trash].find(item=>item.sha256===preference.sha256 && (!preference.jobId || item.jobId===preference.jobId || item.sha256===queued?.sha256))
       : null;
-    const activeResume=prefMatch||next?.currentPage||options[0]||null;
+    const implicitArchived=!next?.currentPageBound && trash.some(item=>item.sha256===next?.currentPage?.sha256);
+    const activeResume=prefMatch || (!implicitArchived && next?.currentPage) || null;
     const matchesQueued=Boolean(prefMatch && queued?.source==='selected' && queued.jobId && activeResume?.sha256===queued.sha256 && queued.sha256!==next?.currentPage?.sha256);
     currentPageJobId=matchesQueued?queued.jobId:undefined;
     selectedResumeSha256=prefMatch && !matchesQueued && activeResume?.sha256!==next?.currentPage?.sha256 ? activeResume.sha256 : undefined;
-    selection=next?(activeResume?{...next,currentPage:activeResume}:next):null;
+    selection=next?{...next,currentPage:activeResume}:null;
     $('prepare-action').hidden=!next?.supportsQueue;
     $('support').textContent=error || next?.queuedError || (!canPartial?'Switch to a website, then reopen Hunt.':'');
     resumeButton.value=activeResume?.sha256||'';
-    const title=activeResume?resumeLabel(activeResume):'';
+    const title=activeResume?resumeLabel(activeResume):'Choose a resume';
     if(resumeButton.title!==title){
       resumeButton.title=title;
       if(activeResume)displayFilename($('resume-name'),activeResume);
-      else $('resume-name').replaceChildren();
+      else $('resume-name').textContent=title;
     }
-    if(activeResume)renderPicker();
+    if(next)renderPicker();
     else togglePicker(false);
-    $('resumes').hidden=!options.length;
+    $('resumes').hidden=!options.length && !trash.length;
   }
   renderSelection(null);
   let canUndo=false,canRedo=false,profileCountryConflict=false;
@@ -143,11 +206,11 @@ async function initializePopup() {
   const countryMismatch='Country is set to United States. Your profile uses Canada.';
   function controls(){
     $('fill').disabled=busy||!selection?.supportsQueue||!selection.queued||!!selection.queuedError||!serviceReady||!browserReady;
-    $('partial').disabled=busy||!canPartial||!selection||!serviceReady||!browserReady;
+    $('partial').disabled=busy||!canPartial||!selection?.currentPage||!serviceReady||!browserReady;
     $('undo').disabled=busy||!canUndo;$('redo').disabled=busy||!canRedo;
     $('history').hidden=!canUndo&&!canRedo;
     countryAction.disabled=busy||!profileCountryConflict||!serviceReady||!browserReady;
-    resumeButton.disabled=busy||!selection?.currentPage;
+    resumeButton.disabled=busy||!selection;
     if(busy)togglePicker(false);
     $('connect-local').disabled=busy;$('batch').disabled=busy;
     $('more-actions').hidden=!selection?.supportsQueue && !canUndo && !canRedo;
@@ -231,11 +294,13 @@ async function initializePopup() {
       browserReady=Boolean(local?.connected);
       $('connection').textContent=!browserReady?(state.connected?'Another browser is connected':'Browser connection pending'):!serviceReady?'Connected · Save profile in full menu':'Connected';
       if(serviceReady && browserReady && canPartial){
+        const requestedRevision=libraryRevision;
         try{
           const metadata=await fetch(origin+'/browser/page-resume',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
             body:JSON.stringify({tabId:tab.id,expectedUrl:tab.url}),signal:AbortSignal.timeout(4000),redirect:'error'});
           if(!metadata.ok)throw new Error((await metadata.json()).error||'Open the full menu to check the selected resume.');
           const next=await metadata.json();
+          if(requestedRevision!==libraryRevision)return;
           const formerChoice=currentPageJobId||selectedResumeSha256;
           renderSelection(next);
           if(preference?.url===tab.url && !currentPageJobId && !selectedResumeSha256 && preference.sha256!==next?.currentPage?.sha256){
@@ -408,14 +473,12 @@ async function initializePopup() {
   async function chooseResume(chosenSha){
     togglePicker(false);
     resumeButton.focus();
-    if(chosenSha===resumeButton.value)return;
+    if(chosenSha===preference?.sha256 && preference.url===tab.url)return;
     await run(async()=>{
-      const isDefault=chosenSha===alternatives?.currentPage?.sha256;
       const queued=alternatives?.queued;
-      const matchedJobId=queued?.source==='selected' && queued.sha256===chosenSha ? queued.jobId : undefined;
-      const next=!isDefault && chosenSha ? {sha256:chosenSha,...(matchedJobId&&{jobId:matchedJobId}),url:tab.url} : null;
-      if(next)await chrome.storage.session.set({[choiceKey]:next});
-      else await chrome.storage.session.remove(choiceKey);
+      const matchedJobId=queued?.source==='selected' && queued.sha256===chosenSha && chosenSha!==alternatives?.currentPage?.sha256 ? queued.jobId : undefined;
+      const next={sha256:chosenSha,...(matchedJobId&&{jobId:matchedJobId}),url:tab.url};
+      await chrome.storage.session.set({[choiceKey]:next});
       preference=next;
       renderSelection(alternatives);
       await refreshHistory();

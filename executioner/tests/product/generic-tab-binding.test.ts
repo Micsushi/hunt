@@ -29,7 +29,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     {...productApplicationTarget(postingUrl),id:smartId,url:postingUrl,status:'paused',tabId:4,selectedDocument:'original-loader',selectedApplicationUrl},
     {...productApplicationTarget('https://held.bamboohr.com/careers/123'),id:randomUUID(),url:'unreadable',status:'paused',pageHandoff:true,sourceJobId:456,resumeVersion:'v18'}
   ]}));
-  const app=await startProductServer({root,port:0});
+  let app=await startProductServer({root,port:0});
   const post=(path:string,body:unknown)=>fetch(app.origin+path,{method:'POST',headers:{
     Authorization:'Bearer '+readFileSync(app.tokenPath,'utf8'),'Content-Type':'application/json'
   },body:JSON.stringify(body)});
@@ -179,12 +179,22 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     const hash=createHash('sha256').update(resume).digest('hex');
     const currentPage={name:'Selected.pdf',source:'selected',version:'v17',sha256:hash};
     const defaultHash=createHash('sha256').update('%PDF-default').digest('hex');
-    assert.deepEqual(metadata,{supportsQueue:false,currentPage,queued:null,resumes:[
+    assert.deepEqual(metadata,{supportsQueue:false,currentPage,currentPageBound:true,queued:null,trashedResumes:[],resumes:[
       {id:'default',name:'Default resume · '+defaultHash.slice(0,8),source:'default',sha256:defaultHash},
       {...currentPage,id:hash,jobId:selected.id},
     ]});
     const preview=await post('/browser/page-resume',{...selection,workflow:'currentPage',sha256:hash});
     const catalogUrl=app.origin+'/resumes';
+    const trashPath='/resumes/'+hash+'/trash';
+    assert.equal((await fetchLocal(app.origin+trashPath,{method:'POST',body:'{}'})).status,401);
+    const trashed=await (await post(trashPath,{})).json();
+    assert.deepEqual(trashed.resumes,[metadata.resumes[0]]);
+    assert.deepEqual(trashed.trashedResumes,[{...currentPage,id:hash}]);
+    assert.deepEqual(await (await post(trashPath,{})).json(),trashed,'retrying Trash keeps one copy');
+    const afterTrash=await (await post('/browser/page-resume',selection)).json();
+    assert.deepEqual(afterTrash.currentPage,currentPage,'the existing draft keeps its PDF');
+    assert.deepEqual(afterTrash.resumes,trashed.resumes);
+    assert.deepEqual(afterTrash.trashedResumes,trashed.trashedResumes);
     assert.equal((await fetchLocal(catalogUrl)).status,401);
     assert.equal((await fetchLocal(catalogUrl+'/'+hash)).status,401);
     assert.equal(preview.headers.get('content-type'),'application/pdf');
@@ -273,6 +283,24 @@ test('unfamiliar applications stay on the current page and old selected inputs r
     assert.equal(app.queue.jobs[0]!.status,'paused');
     assert.equal(app.queue.jobs[0]!.resumeVersion,'v18');
     assert.equal(readFileSync(inputPath,'utf8'),input);
+    // Archive a default that has no draft copy, replace it, then restore its verified bytes after restart.
+    const orphan=Buffer.from('%PDF-only-in-profile');
+    const orphanSha=createHash('sha256').update(orphan).digest('hex');
+    app.queue.configure(profile,orphan.toString('base64'),'Archive me.pdf');
+    assert.equal((await post('/resumes/'+orphanSha+'/trash',{})).status,200);
+    app.queue.configure(profile,Buffer.from('%PDF-replacement').toString('base64'),'New default.pdf');
+    await app.close();
+    app=await startProductServer({root,port:0});
+    const headers={Authorization:'Bearer '+readFileSync(app.tokenPath,'utf8')};
+    const getLibrary=(path:string)=>fetchLocal(app.origin+'/resumes'+path,{headers});
+    const archived=(await (await getLibrary('/trash')).json()).map((item:{sha256:string})=>item.sha256);
+    assert.deepEqual(new Set(archived),new Set([hash,orphanSha]));
+    assert.deepEqual(Buffer.from(await (await getLibrary('/'+orphanSha)).arrayBuffer()),orphan);
+    const recovered=await (await post('/resumes/'+orphanSha+'/restore',{})).json();
+    assert.ok(recovered.resumes.some((item:{sha256:string; name:string})=>item.sha256===orphanSha && item.name==='Archive me.pdf'));
+    assert.deepEqual(recovered.trashedResumes,trashed.trashedResumes);
+    assert.deepEqual(await (await getLibrary('')).json(),recovered.resumes);
+    assert.deepEqual(Buffer.from(await (await getLibrary('/'+orphanSha)).arrayBuffer()),orphan);
     // A deliberate re-import can adopt the *same* saved PDF. The default fill above did not.
     assert.equal(app.queue.jobs[0]!.pageHandoff,undefined);
     const explicit=bundleFor(url,123);

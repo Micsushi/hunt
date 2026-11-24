@@ -31,8 +31,8 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     await context.route(url,route=>route.fulfill({contentType:'text/html',body:'<!doctype html><form><label>First name<input required autocomplete="given-name"></label><label>Email<input required type="email"></label><label>Resume<input required type="file" accept=".pdf"></label><button type="submit">Submit application</button></form>'}));
     const page=await context.newPage();await page.goto(url);
     const tabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===url).id,url);
-    const openPopup=async()=>{
-      await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),tabId);
+    const openPopup=async(targetTabId=tabId)=>{
+      await worker.evaluate(tabId=>(globalThis as any).chrome.tabs.update(tabId,{active:true}),targetTabId);
       return (await Promise.all([context!.waitForEvent('page'),worker.evaluate(url=>(globalThis as any).chrome.tabs.create({url,active:false}),popup.url())]))[0];
     };
     const runPopupAction=async(view:typeof popup,action:string)=>{
@@ -131,19 +131,20 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     }
     await resumeSelect.click();
     const list=chooser.locator('#resume-list'), search=chooser.getByRole('searchbox',{name:'Search saved resumes'});
+    const sortedChoices=()=>list.locator('.resume-choice').evaluateAll(buttons=>buttons.map(button=>(button as HTMLButtonElement).value));
     const sort=chooser.getByRole('combobox',{name:'Sort saved resumes'});
     assert.equal(await search.evaluate(e=>e===document.activeElement),true);
     await sort.selectOption('version');
-    assert.deepEqual(await list.getByRole('button').allTextContents(),[longName+' · v12','Selected.pdf · v8',choice.currentPage.name]);
+    assert.deepEqual(await sortedChoices(),[other.resumeSha256,choice.queued.sha256,choice.currentPage.sha256]);
     await sort.selectOption('version-asc');
-    assert.deepEqual(await list.getByRole('button').allTextContents(),[choice.currentPage.name,'Selected.pdf · v8',longName+' · v12']);
+    assert.deepEqual(await sortedChoices(),[choice.currentPage.sha256,choice.queued.sha256,other.resumeSha256]);
     await chooser.setViewportSize({width:280,height:230});
     assert.equal(await chooser.locator('body').evaluate(el=>el.scrollWidth<=el.clientWidth && el.clientWidth<=280),true);
     assert.equal(await list.evaluate(el=>el.scrollWidth===el.clientWidth),true);
     await search.fill('missing fixture');
     assert.equal(await chooser.getByText('No matching resumes.').isVisible(),true);
     await search.fill('AnAlyTiCs');
-    assert.deepEqual(await list.getByRole('button').allTextContents(),[longName+' · v12']);
+    assert.deepEqual(await sortedChoices(),[other.resumeSha256]);
     await search.fill('');
     const [viewer]=await Promise.all([context.waitForEvent('page'),list.getByRole('link',{name:/Open PDF: Default resume/}).click()]);
     assert.equal(await previewBytes(viewer),resume);
@@ -152,7 +153,7 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     assert.equal(await previewBytes(viewer),selected);
     await viewer.close();
     await search.fill('v8');
-    assert.deepEqual(await list.getByRole('button').allTextContents(),['Selected.pdf · v8']);
+    assert.deepEqual(await sortedChoices(),[choice.queued.sha256]);
     const [picked]=await Promise.all([context.waitForEvent('page'),list.getByRole('link',{name:/Open PDF: Selected/}).click()]);
     assert.equal(await previewBytes(picked),selected);
     await picked.close();
@@ -174,7 +175,7 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     await library.close();
     await workspace.close();
     await resumeSelect.click();
-    await list.getByRole('button',{name:/Default resume/}).click();
+    await list.locator('.resume-choice').filter({hasText:'Default resume'}).click();
     await chooser.locator('#resume-select[value="'+choice.currentPage.sha256+'"]').waitFor();
     await chooser.locator('#resume-select:not(:disabled)').waitFor();
     await chooser.close();
@@ -406,5 +407,55 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
     await runPopupAction(bambooPopup,'undo');
     await findIssue(bambooPopup,/could not verify the restored address/);
     assert.deepEqual(await address(),{...canada,postal:'Owner edit'});
+    await bambooPopup.close();
+
+    const libraryUrl=new URL('/fixture/jobs/301',url).href;
+    await context.route(libraryUrl.replace('301','30*'), route=>route.fulfill({contentType:'text/html',
+      body:'<form><label>First name<input autocomplete="given-name" required></label><label>Email<input type="email" required></label><label>Resume<input type="file" accept=".pdf" required></label><button>Submit application</button></form>'}));
+    await page.goto(libraryUrl);
+    const draft=service.queue.add([{url:libraryUrl,tabId,resumeBase64:selected,resumeName:'Selected.pdf',resumeVersion:'v8',sourceJobId:301}],{paused:true})[0]!;
+    const draftFile=join(root,'service',draft.id+'.input.json'), draftBefore=readFileSync(draftFile);
+    const manage=await openPopup(), picker=manage.locator('#resume-select');
+    await picker.click();
+    await manage.locator('.resume-choice').filter({hasText:'Selected.pdf'}).click();
+    await manage.locator('#resume-select[value="'+choice.queued.sha256+'"]').waitFor();
+    await picker.click();
+    const trashDefault=manage.getByRole('button',{name:/Move to Trash: Default resume/});
+    await trashDefault.click();
+    await trashDefault.waitFor({state:'detached'});
+    await manage.getByRole('button',{name:/Move to Trash: Selected\.pdf/}).click();
+    await manage.locator('#resume-list .resume-choice').waitFor({state:'detached'});
+    const usefulFocus=()=>{const el=document.activeElement;return el instanceof HTMLElement && el.matches('button:enabled,input:enabled,a[href]') && el.checkVisibility();};
+    assert.equal(await manage.evaluate(usefulFocus),true);
+    await manage.close();
+
+    const boundView=await openPopup();
+    await boundView.locator('#resume-select[value="'+choice.queued.sha256+'"]').waitFor();
+    await runPopupAction(boundView,'partial');
+    assert.equal(await page.getByLabel('Resume').evaluate(async(e:HTMLInputElement)=>e.files?.[0] && btoa(await e.files[0].text())),selected);
+    assert.deepEqual(readFileSync(draftFile),draftBefore,'Trash preserves the original bound input');
+    await boundView.close();
+
+    const fresh=await context.newPage();await fresh.goto(libraryUrl.replace('301','302'));
+    const freshId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((t:any)=>t.url===url).id,fresh.url());
+    const recovery=await openPopup(freshId);
+    await recovery.getByRole('button',{name:/Choose a resume/i}).waitFor();
+    assert.equal(await recovery.locator('#partial').isDisabled(),true,'a new tab cannot implicitly fill with a trashed default PDF');
+    await recovery.locator('#resume-select').click();
+    await recovery.locator('#resume-trash-toggle').click();
+    const restoreDefault=recovery.getByRole('button',{name:/Restore: Default resume/});
+    const [archived]=await Promise.all([context.waitForEvent('page'),recovery.getByRole('link',{name:/Open PDF: Selected\.pdf/}).click()]);
+    assert.equal(await previewBytes(archived),selected);
+    await archived.close();
+    await recovery.getByRole('button',{name:/Restore: Selected\.pdf/}).click();
+    await restoreDefault.click();
+    await restoreDefault.waitFor({state:'detached'});
+    assert.equal(await recovery.evaluate(usefulFocus),true);
+    await recovery.close();
+    const restored=await openPopup(freshId);
+    await restored.locator('#resume-select[value="'+choice.currentPage.sha256+'"]').waitFor();
+    assert.equal(await restored.locator('#partial').isEnabled(),true);
+    await restored.locator('#resume-select').click();
+    assert.equal(await restored.locator('.resume-choice').filter({hasText:'Selected.pdf'}).count(),1);
   }finally{await context?.close();await service.close();}
 });
