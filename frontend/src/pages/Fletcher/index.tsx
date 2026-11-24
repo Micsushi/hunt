@@ -1265,7 +1265,7 @@ function FletcherQueuePanel({
               )
             })
           ) : (
-            <div className={styles.meta}>No active Fletcher jobs.</div>
+            <div className={styles.meta}>Queue is empty.</div>
           )}
         </div>
       </section>
@@ -1273,7 +1273,7 @@ function FletcherQueuePanel({
       <section className={styles.queuePanel}>
         <div className={styles.queueHeader}>
           <h2 ref={historyHeading} tabIndex={-1} className={styles.workflowTitle}>
-            Fletcher history
+            Resume history
           </h2>
           <button
             className={`${styles.btn} ${styles.btnDanger}`}
@@ -1661,7 +1661,7 @@ function FletcherJobDetailModal({
 
         <div className={styles.detailBody}>
           <aside className={styles.detailMetaPanel}>
-            <h3>Run Details</h3>
+            <h3>Run details</h3>
             <div className={styles.detailMetaGrid}>
               <div>
                 <span>Status</span>

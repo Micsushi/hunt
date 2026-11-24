@@ -228,6 +228,7 @@
 }
 
 .applicationActions {
+  margin-top: 8px;
   display: grid;
   gap: 8px;
   flex-basis: 100%;

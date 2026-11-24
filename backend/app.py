@@ -941,14 +941,14 @@ def _nav_link(label, href, *, current_path, exact=False):
 
 def render_nav(current_path):
     return f"""
-      <div class="nav">
+      <nav class="nav" aria-label="Main navigation">
         <div class="nav-group">
           {_nav_link("Overview", "/", current_path=current_path, exact=True)}
           {_nav_link("Jobs", "/jobs", current_path=current_path)}
           {_nav_link("Queue & health", "/health-view", current_path=current_path, exact=True)}
           {_nav_link("Ops", "/ops", current_path=current_path, exact=True)}
         </div>
-      </div>
+      </nav>
     """
 
 
@@ -1028,6 +1028,8 @@ def render_layout(title, body, *, current_path="/"):
       top: 12px;
       z-index: 10;
     }
+    summary { cursor: pointer; font-weight: 600; }
+    details[open] > summary { margin-bottom: 10px; }
     .nav-group {
       display: flex;
       flex-wrap: wrap;
@@ -2091,20 +2093,18 @@ def render_queue_jump_strip(summary):
     auth_class = "pill" if auth_ok else "pill active"
     return f"""
     <div class="panel">
-      <h2 style="margin-top:0;font-size:1.05rem;">Jump into the queue</h2>
+      <h2 style="margin-top:0;font-size:1.05rem;">Job queue</h2>
       <p class="muted" style="margin:0 0 10px 0;">
-        At a glance : <strong>{summary["total"]}</strong> rows total,
+        <strong>{summary["total"]}</strong> jobs,
         <strong>{summary["ready_count"]}</strong> ready,
         <strong>{summary["pending_count"]}</strong> pending,
         <strong>{failed_n}</strong> failed,
         <strong>{done_n}</strong> done.
-        <a class="{auth_class}" style="margin-left:8px;" href="/health-view#review-auth-panel" data-app-nav="true">{html.escape(auth_hint)}</a>
       </p>
-      <div class="actions" style="flex-wrap:wrap;gap:8px;">{"".join(parts)}</div>
-      <p class="muted" style="margin:12px 0 0 0;font-size:0.9rem;">
-        Full tables and events : <a href="/health-view" data-app-nav="true">Queue &amp; health</a>
-        · Operator tools : <a href="/ops" data-app-nav="true">Ops</a>
-      </p>
+      <div class="actions" style="flex-wrap:wrap;gap:8px;">
+        {"".join(parts)}
+        <a class="{auth_class}" href="/health-view#review-auth-panel" data-app-nav="true">{html.escape(auth_hint)}</a>
+      </div>
     </div>
     """
 
@@ -2118,14 +2118,8 @@ def render_auth_status(summary):
     available = linkedin_auth.get("available", True)
     status_class = "done" if available else "failed"
     headline = "LinkedIn auth ready" if available else "LinkedIn auth paused"
-    description = (
-        "Saved LinkedIn auth is currently available for unattended enrichment."
-        if available
-        else "LinkedIn enrichment is paused until the saved auth state is refreshed and saved again."
-    )
     details = [
         ("State", linkedin_auth.get("status") or "unknown"),
-        ("Available", str(bool(linkedin_auth.get("available", True))).lower()),
         ("Updated", linkedin_auth.get("updated_at") or "unknown"),
     ]
     if linkedin_auth.get("last_error"):
@@ -2183,16 +2177,16 @@ def render_auth_status(summary):
         hint = '<p style="color: var(--muted);">Refresh auth with <code>DISPLAY=:98 ./hunter.sh auth-save --channel chrome</code>, then press Enter after the LinkedIn feed is visible.</p>'
     return f"""
     <div class="panel" id="review-auth-panel">
-      <h2>{html.escape(headline)}</h2>
-      <div style="margin-bottom: 12px;"><span class="status {status_class}">{html.escape(headline)}</span></div>
-      <p>{html.escape(description)}</p>
+      <h2><span class="status {status_class}">{html.escape(headline)}</span></h2>
+      {hint}
+      <details{" open" if not available or linkedin_auth.get("last_error") else ""}><summary>Connection details</summary>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Detail</th><th>Value</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </div>
-      {hint}
+      </details>
     </div>
     """
 
@@ -2679,9 +2673,9 @@ def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, t
     )
     return f"""
     <details class="jobs-advanced-panel">
-      <summary>Advanced: requeue many rows by filters (not checkboxes)</summary>
+      <summary>Requeue or export filtered jobs</summary>
       <div class="jobs-advanced-body">
-        <p class="muted" style="margin-top:0;">Applies to all jobs matching the current filters, not just selected rows. Server caps batch size.</p>
+        <p class="muted" style="margin-top:0;">Requeue affects all matching jobs, including those on other pages.</p>
         <div id="jobs-bulk-panel"
              data-source="{html.escape(source)}"
              data-status="{html.escape(status)}"
@@ -2700,7 +2694,7 @@ def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, t
             <label><input type="checkbox" class="jobs-bulk-status" value="blocked_verified" /> Blocked verified</label>
           </div>
           <div class="actions" style="flex-wrap:wrap;">
-            <button type="button" class="pill secondary" id="jobs-bulk-dry-run">Count only (dry run)</button>
+            <button type="button" class="pill secondary" id="jobs-bulk-dry-run">Count matches</button>
             <button type="button" class="pill active" id="jobs-bulk-run">Requeue matching rows</button>
             <span class="muted" id="jobs-bulk-result"></span>
           </div>
@@ -2708,7 +2702,7 @@ def render_jobs_bulk_panel(*, source, status, limit, page, q, sort, direction, t
         <p class="muted" style="margin-bottom:0;">
           <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=csv&amp;{exp_csv}">Download CSV</a>
           <a class="pill" data-no-app-nav="true" href="/api/jobs/export?format=json&amp;{exp_csv}">Download JSON</a>
-          <span class="muted"> · Keyboard: <kbd>j</kbd> / <kbd>k</kbd> move, <kbd>Enter</kbd> opens row</span>
+          <span class="muted"> · Keys: <kbd>j</kbd> / <kbd>k</kbd> move, <kbd>Enter</kbd> opens row</span>
         </p>
       </div>
     </details>
@@ -2927,16 +2921,16 @@ def render_ops_console(*, summary, last_updated: int | None = None):
       <p class="muted">Reconnect or wait for the rate limit to end before retrying. Requeue clears retry timers and failure artifacts.</p>
       <p>Sign-in expired: <strong>{auth_n}</strong> · Rate limited: <strong>{rate_n}</strong></p>
       <div class="actions" style="flex-wrap: wrap; gap: 10px;">
-        <button type="button" class="pill active ops-requeue-btn" data-source="linkedin" data-codes="auth_expired,rate_limited">LinkedIn : both codes</button>
-        <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="auth_expired">LinkedIn : auth_expired only</button>
-        <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="rate_limited">LinkedIn : rate_limited only</button>
-        <button type="button" class="pill ops-requeue-btn" data-source="indeed" data-codes="rate_limited">Indeed : rate_limited</button>
-        <button type="button" class="pill ops-requeue-btn" data-source="all" data-codes="auth_expired,rate_limited">All sources : both codes</button>
+        <button type="button" class="pill active ops-requeue-btn" data-source="linkedin" data-codes="auth_expired,rate_limited">Retry LinkedIn</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="auth_expired">LinkedIn sign-in expired</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="linkedin" data-codes="rate_limited">LinkedIn rate limit</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="indeed" data-codes="rate_limited">Indeed rate limit</button>
+        <button type="button" class="pill ops-requeue-btn" data-source="all" data-codes="auth_expired,rate_limited">Retry all sources</button>
       </div>
     </div>
-    <div class="panel">
-      <h2>Retry by error</h2>
-      <form method="post" action="/ops/requeue-errors" class="stack" style="gap: 12px;">
+    <details class="panel">
+      <summary>Choose retry criteria</summary>
+      <form method="post" action="/legacy/ops/requeue-errors" class="stack" style="gap: 12px;">
         <label>Source
           <select name="source">
             <option value="linkedin" selected>linkedin</option>
@@ -2951,12 +2945,12 @@ def render_ops_console(*, summary, last_updated: int | None = None):
         </div>
         <button type="submit" class="pill active">Requeue matching rows</button>
       </form>
-    </div>
+    </details>
     <div class="panel">
-      <h2>Stale processing reset</h2>
+      <h2>Interrupted jobs</h2>
       <p class="muted">Returns interrupted jobs to the queue.</p>
       <div class="actions" style="flex-wrap:wrap;">
-        <button type="button" class="pill active" id="ops-stale-reset">Requeue stale processing</button>
+        <button type="button" class="pill active" id="ops-stale-reset">Requeue interrupted jobs</button>
         <span class="muted" id="ops-stale-result"></span>
       </div>
     </div>
@@ -5289,12 +5283,12 @@ def api_attempt_llm(attempt_id: int, _auth: str = Depends(require_auth)):
 
     body = f"""
     <section class="hero">
-      <h1>LLM I/O - Attempt {attempt_id}</h1>
+      <h1>Model log for attempt {attempt_id}</h1>
       <p>Job {job_id} &middot; {html.escape(str(attempt.get("created_at") or ""))}</p>
     </section>
     <section class="stack">
       <div class="panel">
-        <h2>Enrichment metadata</h2>
+        <h2>Run details</h2>
         <div class="grid">{meta_rows if meta_rows else "<p>No enrichment metadata found.</p>"}</div>
         <div class="actions" style="margin-top:12px;">
           <a class="pill" href="{html.escape(back_link)}" data-app-nav="true">Back to job</a>
@@ -5305,7 +5299,7 @@ def api_attempt_llm(attempt_id: int, _auth: str = Depends(require_auth)):
         {prompt_block}
       </div>
       <div class="panel">
-        <h2>Raw response from Ollama</h2>
+        <h2>Model response</h2>
         {response_block}
       </div>
     </section>
@@ -5580,13 +5574,15 @@ def jobs_page(
     <section class="hero">
       <h1>Jobs</h1>
     </section>
-    <section class="cards">{render_summary_cards(summary)}</section>
+    <details class="panel"><summary>Queue totals</summary><section class="cards">{render_summary_cards(summary)}</section></details>
     {render_auth_status(summary) if source in ("all", "linkedin") else ""}
     {render_search_bar(source=source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}
+    <details class="panel"><summary>Filter shortcuts</summary>
     <p class="muted" style="margin:0 0 8px;">Source</p>
     <div class="toolbar">{render_source_toolbar(source, status=status, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
     <p class="muted" style="margin:12px 0 8px;">Enrichment status</p>
     <div class="toolbar">{render_status_toolbar(status, source=source, limit=safe_limit, q=q, sort=sort, direction=direction, tag=tag_display)}</div>
+    </details>
     {render_jobs_bulk_panel(source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, tag=tag_display)}
     {render_jobs_selection_bar()}
     {render_jobs_table(rows, source=source, status=status, limit=safe_limit, page=safe_page, q=q, sort=sort, direction=direction, return_to=return_to, tag=tag_display)}
@@ -5595,7 +5591,7 @@ def jobs_page(
     return HTMLResponse(render_layout("Hunt jobs", body, current_path="/jobs"))
 
 
-@app.get("/legacy/jobs/{job_id}", response_class=HTMLResponse)
+@app.get("/legacy/jobs/{job_id:int}", response_class=HTMLResponse)
 def job_detail(
     request: Request,
     job_id: int,
@@ -5614,6 +5610,10 @@ def job_detail(
         safe_return_to = normalize_return_to(request.headers.get("referer"))
     requeue_action = add_return_to(f"/jobs/{row['id']}/requeue", safe_return_to)
     back_link = safe_return_to or "/jobs"
+    error_panel = (
+        f'<div class="panel"><h2>Enrichment error</h2><pre>{format_text(row["last_enrichment_error"])}</pre></div>'
+        if row.get("last_enrichment_error") else ""
+    )
     body = f"""
     <section class="hero">
       <h1>{format_text(row["title"])}</h1>
@@ -5624,7 +5624,7 @@ def job_detail(
     </section>
     <section class="stack">
       <div class="panel">
-        <h2>Job metadata</h2>
+        <details><summary>Job details</summary>
         <div class="grid">
           <div class="field"><div class="label">ID</div><div class="value">{row["id"]}</div></div>
           <div class="field"><div class="label">Source</div><div class="value">{format_text(row["source"])}</div></div>
@@ -5638,6 +5638,7 @@ def job_detail(
           <div class="field"><div class="label">Next retry</div><div class="value mono">{format_text(row.get("next_enrichment_retry_at"))}</div></div>
           <div class="field"><div class="label">Application status</div><div class="value">{format_text(row["status"])}</div></div>
         </div>
+        </details>
         <div class="actions">
           <a class="pill" href="{html.escape(back_link)}" data-app-nav="true">Back to list</a>
           <a class="pill active" href="{html.escape(row["job_url"])}" target="_blank" rel="noreferrer">Open listing</a>
@@ -5645,8 +5646,13 @@ def job_detail(
           {f'<form method="post" action="{html.escape(requeue_action)}" data-async-requeue="true"><button type="submit">Requeue enrichment</button></form>' if row.get("source") in {"linkedin", "indeed"} else '<span class="pill">This source is visible here, but does not have a worker yet</span>'}
         </div>
       </div>
+      {error_panel}
       <div class="panel">
-        <h2>Operator</h2>
+        <h2>Description</h2>
+        <pre>{format_text(description)}</pre>
+      </div>
+      <div class="panel">
+        <h2>Notes and priority</h2>
         <div class="field" style="margin-bottom: 10px;">
           <div class="label">Priority flag</div>
           <div class="value">{format_text(row.get("priority"))}</div>
@@ -5660,14 +5666,10 @@ def job_detail(
           <button type="submit" class="pill active">Save notes and tag</button>
         </form>
         <div class="actions" style="margin-top: 14px;">
-          <button type="button" class="pill active" data-job-priority-set="1" data-job-id="{row["id"]}">Flag for queue (shows in Jobs list)</button>
+          <button type="button" class="pill active" data-job-priority-set="1" data-job-id="{row["id"]}">Flag for queue</button>
           <button type="button" class="pill secondary" data-job-priority-set="0" data-job-id="{row["id"]}">Remove queue flag</button>
           <a class="pill" href="/jobs/compare?a={row["id"]}" data-app-nav="true">Compare with another job</a>
         </div>
-      </div>
-      <div class="panel">
-        <h2>Last enrichment error</h2>
-        <pre>{format_text(row.get("last_enrichment_error"))}</pre>
       </div>
       <div class="panel">
         <h2>Resume generation</h2>
@@ -5700,10 +5702,6 @@ def job_detail(
           {render_artifact_links(row)}
         </div>
       </div>
-      <div class="panel">
-        <h2>Description</h2>
-        <pre>{format_text(description)}</pre>
-      </div>
     </section>
     """
     return HTMLResponse(render_layout(f"Hunt job {job_id}", body, current_path=f"/jobs/{job_id}"))
@@ -5720,11 +5718,11 @@ def jobs_compare(
         body = f"""
     <section class="hero">
       <h1>Compare jobs</h1>
-      <p>Enter two job IDs from the jobs table.</p>
+
     </section>
-    <form class="panel" method="get" action="/jobs/compare" style="display:grid; gap:14px; max-width:420px;">
-      <label>Job A <input name="a" type="number" min="1" required value="{html.escape(a_val)}" style="width:100%; box-sizing:border-box; padding:10px; border-radius:12px; border:1px solid var(--line);" /></label>
-      <label>Job B <input name="b" type="number" min="1" required style="width:100%; box-sizing:border-box; padding:10px; border-radius:12px; border:1px solid var(--line);" /></label>
+    <form class="panel" method="get" action="/legacy/jobs/compare" style="display:grid; gap:14px; max-width:420px;">
+      <label>First job ID <input name="a" type="number" min="1" required value="{html.escape(a_val)}" style="width:100%; box-sizing:border-box; padding:10px; border-radius:12px; border:1px solid var(--line);" /></label>
+      <label>Second job ID <input name="b" type="number" min="1" required style="width:100%; box-sizing:border-box; padding:10px; border-radius:12px; border:1px solid var(--line);" /></label>
       <button type="submit" class="pill active">Compare</button>
     </form>
     """

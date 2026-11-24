@@ -419,7 +419,6 @@ export function OpsPage() {
                   </ul>
                 </details>
               )}
-              <p className={styles.coverageNote}>Partial or failed checks may miss jobs.</p>
               <div className={styles.formGrid}>
                 <label className={styles.field}>
                   Find a source
@@ -682,7 +681,7 @@ export function OpsPage() {
         <div className={styles.panel}>
           <h2 className={styles.panelTitle}>Expired sessions and rate limits</h2>
           <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
-            Requeue after reconnecting or waiting out the rate limit. Retry timers are cleared.
+            Reconnect or wait for the rate limit first. Requeueing clears retry timers.
           </p>
           <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
             Failed jobs: <strong>Expired session</strong> {authN} · <strong>Rate limited</strong>{' '}
@@ -708,9 +707,6 @@ export function OpsPage() {
         {/* Stale processing */}
         <div className={styles.panel}>
           <h2 className={styles.panelTitle}>Interrupted jobs</h2>
-          <p className="muted" style={{ fontSize: '0.88rem', marginBottom: 8 }}>
-            Requeue jobs left processing after an interruption.
-          </p>
           <p style={{ fontSize: '0.88rem', marginBottom: 14 }}>
             <strong>{staleN}</strong> jobs stuck in processing
           </p>

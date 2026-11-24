@@ -280,7 +280,6 @@ function InlineField({
           <button className={styles.actionBtn} disabled={saving} onClick={cancel}>
             Cancel edit
           </button>
-          <small>Drafts stay with this job during this session.</small>
         </div>
       )}
     </div>
@@ -582,11 +581,7 @@ function ApplicationActions({ job }: { job: JobDetail }) {
         {downloading ? 'Preparing download…' : 'Download for local C3'}
       </button>
       {downloadMessage && <p role={downloadFailed ? 'alert' : 'status'}>{downloadMessage}</p>}
-      <p>
-        {browserConnection
-          ? 'Adds paused. Choose when to fill in the local workspace.'
-          : 'Stops before submission.'}
-      </p>
+      {browserConnection && !pageOnly && !blocked && <p>Jobs arrive paused in Applications.</p>}
     </div>
   )
 }
@@ -921,6 +916,7 @@ function JobDetail({ jobId }: { jobId: number }) {
               adjacent?.prev_id != null && navigate(`/jobs/${adjacent.prev_id}${detailSearch}`)
             }
             disabled={navigation.isError || adjacent?.prev_id == null}
+            aria-label="Previous job"
             title="Previous job"
           >
             ‹
@@ -931,6 +927,7 @@ function JobDetail({ jobId }: { jobId: number }) {
               adjacent?.next_id != null && navigate(`/jobs/${adjacent.next_id}${detailSearch}`)
             }
             disabled={navigation.isError || adjacent?.next_id == null}
+            aria-label="Next job"
             title="Next job"
           >
             ›
@@ -950,7 +947,7 @@ function JobDetail({ jobId }: { jobId: number }) {
               className={styles.extBtn}
               onClick={logOpenApplyPage}
             >
-              Apply ↗
+              Employer site ↗
             </a>
           )}
         </div>
@@ -961,8 +958,11 @@ function JobDetail({ jobId }: { jobId: number }) {
 
       {/* Two-column body */}
       <div className={styles.body}>
-        {/* Left: fields + description */}
         <div className={styles.col}>
+          <section className={styles.panel}>
+            <h2 className={styles.panelTitle}>Application</h2>
+            <ApplicationActions key={job.id} job={job} />
+          </section>
           <div className={styles.panel}>
             <h2 className={styles.panelTitle}>Job fields</h2>
             <div className={styles.fieldList}>
@@ -1059,7 +1059,6 @@ function JobDetail({ jobId }: { jobId: number }) {
           </div>
         </div>
 
-        {/* Right: enrichment + resume */}
         <div className={styles.col}>
           <div className={styles.panel}>
             <div className={styles.panelTitleRow}>
@@ -1081,7 +1080,6 @@ function JobDetail({ jobId }: { jobId: number }) {
               )}
             </div>
             <div className={styles.panelActions}>
-              <ApplicationActions key={job.id} job={job} />
               <button
                 className={styles.actionBtn}
                 onClick={handleRequeue}

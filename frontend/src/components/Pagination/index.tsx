@@ -29,6 +29,8 @@ export function Pagination({ page, total, limit, onChange }: Props) {
     setJumpVal('')
   }
 
+  if (totalPages === 1) return null
+
   return (
     <div className={styles.wrap}>
       <span className={styles.info}>

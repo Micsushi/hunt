@@ -26,8 +26,8 @@ function LocalApplications() {
               : 'Open Hunt C3 and connect to the local app.'}
       </p>
       <p>
-        In the Hunt C3 extension, choose <strong>Open workspace</strong> to review your
-        applications. <Link to="/jobs">Send selected jobs</Link> from Hunt; they arrive paused.
+        Review drafts using <strong>Open workspace</strong> in the extension.{' '}
+        <Link to="/jobs">Choose jobs to send</Link>.
       </p>
       <button
         className={styles.retryButton}
@@ -62,7 +62,7 @@ function ServerApplications() {
       <section className={styles.unavailable}>
         <h1>Applications</h1>
         <p role={connection.isFetching ? 'status' : 'alert'}>
-          {connection.isFetching ? 'Connecting to C3…' : 'Application workspace unavailable here.'}
+          {connection.isFetching ? 'Connecting to C3…' : 'Application workspace unavailable.'}
         </p>
         <p>
           {isLocalHost ? (

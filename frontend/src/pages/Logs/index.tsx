@@ -93,8 +93,8 @@ export function LogsPage() {
       {error && (
         <p className={styles.error} role="alert">
           {data
-            ? 'Could not refresh logs. Showing the last loaded results. Retry logs to check current progress.'
-            : 'Failed to load logs. Retry logs to check progress.'}
+            ? 'Could not refresh logs. Showing the last loaded results. Retry for current events.'
+            : 'Could not load logs.'}
         </p>
       )}
       {!data && !error && <p role="status">Loading…</p>}
@@ -123,10 +123,11 @@ export function LogsPage() {
           </div>
 
           <div className={styles.controls}>
-            <div className={styles.tabs}>
+            <div className={styles.tabs} role="group" aria-label="Service">
               {SERVICE_TABS.map((t) => (
                 <button
                   key={t.key}
+                  aria-pressed={tab === t.key}
                   className={`${styles.tab} ${tab === t.key ? styles.tabActive : ''}`}
                   onClick={() => setTab(t.key)}
                 >
@@ -144,10 +145,11 @@ export function LogsPage() {
           </div>
 
           <div className={styles.controls}>
-            <div className={styles.tabs}>
+            <div className={styles.tabs} role="group" aria-label="Log level">
               {LEVELS.map((level) => (
                 <button
                   key={level}
+                  aria-pressed={levels.includes(level)}
                   className={`${styles.tab} ${levels.includes(level) ? styles.tabActive : ''}`}
                   onClick={() => toggleLevel(level)}
                 >
@@ -155,10 +157,11 @@ export function LogsPage() {
                 </button>
               ))}
             </div>
-            <div className={styles.tabs}>
+            <div className={styles.tabs} role="group" aria-label="Time window">
               {TIME_WINDOWS.map((w) => (
                 <button
                   key={w.key}
+                  aria-pressed={since === w.key}
                   className={`${styles.tab} ${since === w.key ? styles.tabActive : ''}`}
                   onClick={() => {
                     setSince(w.key)

@@ -152,3 +152,15 @@
   border-color: var(--accent);
   color: var(--accent-ink);
 }
+
+.displayOptions > summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.displayOptions[open] > div {
+  margin-top: 10px;
+}

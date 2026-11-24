@@ -233,6 +233,17 @@ details.panel > .panel {
   font-size: 0.82rem;
 }
 
+.runtimeDetails {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+}
+
+.runtimeDetails > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-weight: 600;
+}
+
 .configPath {
   font-family: var(--font-mono);
   font-size: 0.78rem;

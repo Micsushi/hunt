@@ -48,11 +48,10 @@ export function ResumeCheck({
           disabled={!resume || check.isPending}
           onClick={() => resume && check.mutate({ resume, jobDetails })}
         >
-          {check.isPending ? 'Checking resume…' : 'Check resume'}
+          {check.isPending ? 'Checking resume…' : 'Check resume locally'}
         </button>
         {children}
       </div>
-      <p className={styles.workflowDesc}>Resume checks run locally.</p>
       <div className={styles.checkResults} aria-live="polite" aria-busy={check.isPending}>
         {current && check.error && <p role="alert">{check.error.message}</p>}
         {report && (

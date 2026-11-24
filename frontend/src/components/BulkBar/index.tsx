@@ -255,7 +255,7 @@ export function BulkBar({ disabled = false }: { disabled?: boolean }) {
       </button>
       {loading && applicationBatch.length > 0 && (
         <p className={styles.result} role="status">
-          Sending jobs {applicationBatch.map((id) => `#${id}`).join(', ')}. Stops before submission.
+          Sending jobs {applicationBatch.map((id) => `#${id}`).join(', ')}…
         </p>
       )}
       {result && (

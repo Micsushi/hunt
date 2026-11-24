@@ -39,7 +39,7 @@ export function LoginPage({ onLogin, loading }: Props) {
   }
 
   return (
-    <div className={styles.shell}>
+    <main className={styles.shell}>
       <div className={styles.card}>
         <div className={styles.header}>
           <h1 className={styles.title}>Hunt</h1>
@@ -78,6 +78,6 @@ export function LoginPage({ onLogin, loading }: Props) {
           </button>
         </form>
       </div>
-    </div>
+    </main>
   )
 }

@@ -523,17 +523,13 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
         </div>
       )}
       {version.dirty && (
-        <p className={styles.meta}>
-          PDF opens the last compiled version. Compile to include saved edits.
-        </p>
+        <p className={styles.meta}>Compile to include your saved edits in the PDF.</p>
       )}
       {data.source.import_warnings.length ? (
         <div className={styles.warning}>{data.source.import_warnings.join(' ')}</div>
       ) : null}
       {data.llm?.cloud ? (
-        <div className={styles.warning}>
-          Cloud provider active: {data.llm.provider}. Resume text may leave this machine.
-        </div>
+        <div className={styles.warning}>Resume text may be sent to {data.llm.provider}.</div>
       ) : null}
       <div className={styles.layout}>
         <ResumeDiffDocument
@@ -544,7 +540,7 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
           onEdit={startEdit}
         />
         <aside className={styles.inspector}>
-          <h2>Inspector</h2>
+          <h2>Review changes</h2>
           {selected ? (
             <div className={styles.smallStack}>
               <div className={styles.meta}>{selected.block.label}</div>
@@ -557,16 +553,19 @@ function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                 </button>
               ) : null}
               <button className={styles.button} onClick={() => startEdit(selected.block)}>
-                Edit block
+                Edit text
               </button>
             </div>
           ) : (
-            <div className={styles.meta}>Select resume text to review or edit.</div>
+            <div className={styles.meta}>Select text in the resume.</div>
           )}
           {editingBlockId ? (
             <div className={styles.smallStack}>
               <textarea
                 className={styles.textarea}
+                aria-label={
+                  blocks.find((block) => block.blockId === editingBlockId)?.label ?? 'Resume text'
+                }
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
               />

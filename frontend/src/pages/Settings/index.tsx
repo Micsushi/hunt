@@ -175,24 +175,22 @@ function DiscoveryFilters({
         <h2 className={styles.panelTitle}>Discovery filters</h2>
       </div>
       <label className={styles.field}>
-        Watchlist - priority companies (one per line)
-        <span className={styles.fieldHint}>
-          Matching companies are prioritized and trigger a Discord alert.
-        </span>
+        Priority companies (one per line)
+        <span className={styles.fieldHint}>Matches trigger a Discord alert.</span>
         <textarea
           className={styles.textarea}
           value={watchlist}
           onChange={(e) => setWatchlist(e.target.value)}
-          rows={10}
+          rows={4}
         />
       </label>
       <label className={styles.field}>
-        Title blacklist - phrases to exclude (one per line)
+        Excluded title phrases (one per line)
         <textarea
           className={styles.textarea}
           value={blacklist}
           onChange={(e) => setBlacklist(e.target.value)}
-          rows={10}
+          rows={4}
         />
       </label>
       {error && (
@@ -314,8 +312,8 @@ function SearchConfig({
         <fieldset className={styles.experienceFieldset}>
           <legend>Career levels</legend>
           <p className={styles.fieldHint}>
-            Choose levels to require in job titles. Leave all unchecked for any level; senior roles
-            also require the option below.
+            Unchecked allows any level. Senior roles also require “Include senior and experienced
+            roles”.
           </p>
           {(
             [
@@ -345,7 +343,7 @@ function SearchConfig({
       <label className={styles.field}>
         Eligible countries (one per line)
         <span className={styles.fieldHint}>
-          Leave empty to include all countries. Regional sources still cover their own markets.
+          Blank includes all countries available from each source.
         </span>
         <textarea
           className={styles.textarea}
@@ -365,8 +363,7 @@ function SearchConfig({
       <label className={styles.field}>
         Employment types (one per line)
         <span className={styles.fieldHint}>
-          Leave empty for all types. Examples: full time, part time, contract. Jobs with unknown
-          types need checking when this filter is set.
+          Blank includes all types. Unknown types need review when filtered.
         </span>
         <textarea
           className={styles.textarea}
@@ -938,12 +935,11 @@ function C2ProviderRuntimeSettings() {
             Retry runtime status
           </button>
         )}
-        <p>Blank overrides use service defaults.</p>
       </div>
       <fieldset disabled={!settings} style={{ border: 0, padding: 0, minWidth: 0 }}>
         <div className={styles.gridTwo}>
           <label className={styles.field}>
-            LLM provider
+            Model provider
             <select
               className={styles.input}
               value={
@@ -965,7 +961,7 @@ function C2ProviderRuntimeSettings() {
             </select>
           </label>
           <label className={styles.field}>
-            Provider model override
+            Model override
             <input
               className={styles.input}
               value={
@@ -996,126 +992,128 @@ function C2ProviderRuntimeSettings() {
             </select>
           </label>
         </div>
-        <div className={styles.notice}>Saved API keys are hidden.</div>
-        <div className={styles.gridTwo}>
-          <label className={styles.field}>
-            OpenAI API key {openaiStored ? '(saved)' : ''}
-            <input
-              className={styles.input}
-              type="password"
-              value={openaiKey}
-              onChange={(e) => setOpenaiKey(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            OpenRouter API key {openrouterStored ? '(saved)' : ''}
-            <input
-              className={styles.input}
-              type="password"
-              value={openrouterKey}
-              onChange={(e) => setOpenrouterKey(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Anthropic API key {anthropicStored ? '(saved)' : ''}
-            <input
-              className={styles.input}
-              type="password"
-              value={anthropicKey}
-              onChange={(e) => setAnthropicKey(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Gemini API key {geminiStored ? '(saved)' : ''}
-            <input
-              className={styles.input}
-              type="password"
-              value={geminiKey}
-              onChange={(e) => setGeminiKey(e.target.value)}
-            />
-          </label>
-        </div>
-        <div className={styles.gridTwo}>
-          <label className={styles.field}>
-            Ollama host
-            <input
-              className={styles.input}
-              value={ollamaHost}
-              placeholder={runtime.data?.values.ollama_host || 'Service environment/default'}
-              onChange={(e) => setOllamaHost(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Ollama model
-            <input
-              className={styles.input}
-              value={ollamaModel}
-              placeholder={runtime.data?.values.ollama_model || 'Service environment/default'}
-              onChange={(e) => setOllamaModel(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Ollama timeout seconds
-            <input
-              type="number"
-              className={styles.input}
-              value={ollamaTimeoutSec}
-              placeholder={runtime.data?.values.ollama_timeout_sec || 'Service environment/default'}
-              min={1}
-              onChange={(e) => setOllamaTimeoutSec(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Ollama keep alive
-            <input
-              className={styles.input}
-              value={ollamaKeepAlive}
-              placeholder={runtime.data?.values.ollama_keep_alive || 'Service environment/default'}
-              onChange={(e) => setOllamaKeepAlive(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Bullet rewrite parallelism
-            <input
-              type="number"
-              className={styles.input}
-              value={rewriteParallelism}
-              placeholder={
-                runtime.data?.values.bullet_rewrite_parallelism || 'Service environment/default'
-              }
-              min={1}
-              onChange={(e) => setRewriteParallelism(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Rewrite minimum available memory MB
-            <input
-              type="number"
-              className={styles.input}
-              value={rewriteMinAvailableMb}
-              placeholder={
-                runtime.data?.values.bullet_rewrite_min_available_mb ||
-                'Service environment/default'
-              }
-              min={0}
-              onChange={(e) => setRewriteMinAvailableMb(e.target.value)}
-            />
-          </label>
-          <label className={styles.field}>
-            Rewrite max memory percent
-            <input
-              type="number"
-              className={styles.input}
-              value={rewriteMaxMemoryPct}
-              placeholder={
-                runtime.data?.values.bullet_rewrite_max_memory_pct || 'Service environment/default'
-              }
-              min={1}
-              max={100}
-              onChange={(e) => setRewriteMaxMemoryPct(e.target.value)}
-            />
-          </label>
-        </div>
+        <details className={styles.runtimeDetails}>
+          <summary>Provider API keys</summary>
+          <div className={styles.gridTwo}>
+            <label className={styles.field}>
+              OpenAI API key {openaiStored ? '(saved)' : ''}
+              <input
+                className={styles.input}
+                type="password"
+                value={openaiKey}
+                onChange={(e) => setOpenaiKey(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              OpenRouter API key {openrouterStored ? '(saved)' : ''}
+              <input
+                className={styles.input}
+                type="password"
+                value={openrouterKey}
+                onChange={(e) => setOpenrouterKey(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Anthropic API key {anthropicStored ? '(saved)' : ''}
+              <input
+                className={styles.input}
+                type="password"
+                value={anthropicKey}
+                onChange={(e) => setAnthropicKey(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Gemini API key {geminiStored ? '(saved)' : ''}
+              <input
+                className={styles.input}
+                type="password"
+                value={geminiKey}
+                onChange={(e) => setGeminiKey(e.target.value)}
+              />
+            </label>
+          </div>
+        </details>
+        <details className={styles.runtimeDetails}>
+          <summary>Ollama and performance settings</summary>
+          <div className={styles.gridTwo}>
+            <label className={styles.field}>
+              Ollama host
+              <input
+                className={styles.input}
+                value={ollamaHost}
+                placeholder={runtime.data?.values.ollama_host || 'Service default'}
+                onChange={(e) => setOllamaHost(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Ollama model
+              <input
+                className={styles.input}
+                value={ollamaModel}
+                placeholder={runtime.data?.values.ollama_model || 'Service default'}
+                onChange={(e) => setOllamaModel(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Ollama timeout seconds
+              <input
+                type="number"
+                className={styles.input}
+                value={ollamaTimeoutSec}
+                placeholder={runtime.data?.values.ollama_timeout_sec || 'Service default'}
+                min={1}
+                onChange={(e) => setOllamaTimeoutSec(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Ollama keep alive
+              <input
+                className={styles.input}
+                value={ollamaKeepAlive}
+                placeholder={runtime.data?.values.ollama_keep_alive || 'Service default'}
+                onChange={(e) => setOllamaKeepAlive(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Bullet rewrite parallelism
+              <input
+                type="number"
+                className={styles.input}
+                value={rewriteParallelism}
+                placeholder={runtime.data?.values.bullet_rewrite_parallelism || 'Service default'}
+                min={1}
+                onChange={(e) => setRewriteParallelism(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Rewrite minimum available memory MB
+              <input
+                type="number"
+                className={styles.input}
+                value={rewriteMinAvailableMb}
+                placeholder={
+                  runtime.data?.values.bullet_rewrite_min_available_mb || 'Service default'
+                }
+                min={0}
+                onChange={(e) => setRewriteMinAvailableMb(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              Rewrite max memory percent
+              <input
+                type="number"
+                className={styles.input}
+                value={rewriteMaxMemoryPct}
+                placeholder={
+                  runtime.data?.values.bullet_rewrite_max_memory_pct || 'Service default'
+                }
+                min={1}
+                max={100}
+                onChange={(e) => setRewriteMaxMemoryPct(e.target.value)}
+              />
+            </label>
+          </div>
+        </details>
 
         {mutation.error && (
           <p className={styles.errorMsg} role="alert">
@@ -2033,10 +2031,7 @@ export function SettingsPage() {
     }
     return (
       <>
-        <div className={styles.notice}>
-          Saved changes take effect after restarting C1 and its scheduler. The current scan keeps
-          its existing settings.
-        </div>
+        <div className={styles.notice}>Restart Hunter and its scheduler to use saved changes.</div>
         <DiscoveryFilters
           error={errorSection === 'filters' ? saveError : null}
           onReload={() => void reloadConfig()}

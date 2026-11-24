@@ -73,12 +73,12 @@ function ServiceStrip() {
   })
 
   const items = [
-    { key: 'db', label: 'DB', ok: data?.db?.status === 'ok', path: '/logs' },
-    { key: 'c1', label: 'C1 Hunter', ok: data?.components?.c1?.status === 'ok', path: '/ops' },
+    { key: 'db', label: 'Database', status: data?.db?.status, path: '/logs' },
+    { key: 'c1', label: 'Hunter', status: data?.components?.c1?.status, path: '/ops' },
     {
       key: 'c2',
-      label: 'C2 Fletcher',
-      ok: data?.components?.c2?.status === 'ok',
+      label: 'Fletcher',
+      status: data?.components?.c2?.status,
       path: '/fletcher',
     },
   ]
@@ -86,7 +86,7 @@ function ServiceStrip() {
   return (
     <div className={styles.serviceStrip}>
       {items.map((item) => {
-        const state = isError || !data ? 'unknown' : item.ok ? 'ok' : 'error'
+        const state = isError || !item.status ? 'unknown' : item.status === 'ok' ? 'ok' : 'error'
         return (
           <button
             key={item.key}
@@ -96,6 +96,7 @@ function ServiceStrip() {
           >
             <span className={`${styles.serviceDot} ${styles[`dot_${state}`]}`} />
             {item.label}
+            {state === 'error' ? ' needs attention' : state === 'unknown' ? ' unknown' : ''}
           </button>
         )
       })}
@@ -149,10 +150,9 @@ function SearchCoverage({ event }: { event?: { value: string } | null }) {
       interrupted,
       scraped_total: leads,
     } = recorded?.details ?? {}
-    if (interrupted)
-      message = 'The last C1 search stopped before completing. Saved jobs have been kept.'
+    if (interrupted) message = 'Search interrupted. Saved jobs are available.'
     else if (recorded?.code === 'scrape_failed')
-      message = 'The last recorded C1 search failed. Saved jobs have been kept.'
+      message = 'Search failed. Saved jobs are available.'
     else if (
       recorded?.code === 'scrape_finished' &&
       Number.isInteger(total) &&
@@ -163,14 +163,14 @@ function SearchCoverage({ event }: { event?: { value: string } | null }) {
     ) {
       message =
         failed === total
-          ? `The last recorded C1 search was unavailable: all ${total} queries failed.`
+          ? `All ${total} search queries failed.`
           : failed > 0
-            ? `The last recorded C1 search had partial coverage: ${failed} of ${total} queries failed.`
+            ? `Partial coverage. ${failed} of ${total} queries failed.`
             : partial > 0
-              ? `The last recorded C1 search has incomplete coverage for ${partial} of ${total} queries.`
+              ? `Incomplete coverage for ${partial} of ${total} queries.`
               : leads === 0
-                ? `The last recorded C1 search returned no matching leads from ${total} configured queries.`
-                : `The last recorded C1 search completed ${total} configured queries without reported failures.`
+                ? `No matching leads from ${total} queries.`
+                : `All ${total} queries completed.`
     }
   } catch {
     /* Older or malformed records do not establish coverage. */
@@ -178,7 +178,7 @@ function SearchCoverage({ event }: { event?: { value: string } | null }) {
   return (
     <div className={styles.panelFeedback}>
       <p role="status">{message}</p>
-      <Link to="/ops">Check source coverage</Link>
+      <Link to="/ops">View source checks</Link>
     </div>
   )
 }
@@ -519,7 +519,7 @@ export function HomePage() {
               onClick={() => navigate('/jobs?status=all')}
             />
             <Card
-              label="Pending enrich"
+              label="Awaiting enrichment"
               value={summary.pending_count}
               onClick={() => navigate('/jobs?status=pending')}
               accent={summary.pending_count > 0}
@@ -548,7 +548,7 @@ export function HomePage() {
               warning={summary.blocked_count > 0}
             />
             <Card
-              label="LinkedIn auth"
+              label="LinkedIn access"
               value={authOk ? 'Ready' : authAvailable === false ? 'Login needed' : 'Unknown'}
               onClick={() => navigate('/logs')}
               danger={authAvailable === false}

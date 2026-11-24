@@ -168,57 +168,62 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
         </div>
 
         <div className={styles.filterGroup}>
-          <label className={styles.filterLabel} htmlFor="jobs-sort">
-            Sort by
-          </label>
-          <select
-            id="jobs-sort"
-            className={styles.select}
-            value={query.sort ?? 'date_scraped'}
-            onChange={(e) => onChange({ sort: e.target.value as SortField, page: 1 })}
-            aria-label="Sort by"
-          >
-            {SORT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel}>Order</label>
-          <button
-            className={styles.dirBtn}
-            onClick={() =>
-              onChange({ direction: query.direction === 'asc' ? 'desc' : 'asc', page: 1 })
-            }
-            title={`Sort direction: ${query.direction === 'asc' ? 'ascending' : 'descending'}`}
-          >
-            {query.direction === 'asc' ? '↑ Asc' : '↓ Desc'}
-          </button>
-        </div>
-
-        <div className={styles.filterGroup}>
           <button className={styles.resetBtn} onClick={reset} aria-label="Reset job filters">
             Reset
           </button>
         </div>
       </div>
 
-      {/* Row count selector */}
-      <div className={styles.limitRow}>
-        <span className={styles.filterLabel}>Rows per page</span>
-        {[25, 50, 100].map((n) => (
-          <button
-            key={n}
-            className={`${styles.limitBtn} ${(query.limit ?? 50) === n ? styles.active : ''}`}
-            onClick={() => onChange({ limit: n, page: 1 })}
-          >
-            {n}
-          </button>
-        ))}
-      </div>
+      <details className={styles.displayOptions}>
+        <summary>Sort and display</summary>
+        <div className={styles.filterRow}>
+          <div className={styles.filterGroup}>
+            <label className={styles.filterLabel} htmlFor="jobs-sort">
+              Sort by
+            </label>
+            <select
+              id="jobs-sort"
+              className={styles.select}
+              value={query.sort ?? 'date_scraped'}
+              onChange={(e) => onChange({ sort: e.target.value as SortField, page: 1 })}
+              aria-label="Sort by"
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.filterGroup}>
+            <span className={styles.filterLabel}>Order</span>
+            <button
+              className={styles.dirBtn}
+              onClick={() =>
+                onChange({ direction: query.direction === 'asc' ? 'desc' : 'asc', page: 1 })
+              }
+              aria-label={`Sort direction: ${query.direction === 'asc' ? 'ascending' : 'descending'}`}
+              title={`Sort direction: ${query.direction === 'asc' ? 'ascending' : 'descending'}`}
+            >
+              {query.direction === 'asc' ? '↑ Asc' : '↓ Desc'}
+            </button>
+          </div>
+        </div>
+        <div className={styles.limitRow}>
+          <span className={styles.filterLabel}>Rows per page</span>
+          {[25, 50, 100].map((n) => (
+            <button
+              key={n}
+              className={`${styles.limitBtn} ${(query.limit ?? 50) === n ? styles.active : ''}`}
+              aria-pressed={(query.limit ?? 50) === n}
+              onClick={() => onChange({ limit: n, page: 1 })}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </details>
     </div>
   )
 }
