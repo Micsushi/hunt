@@ -4,7 +4,7 @@ import { bambooResumeControl } from './page-adapters/bamboo-resume.js';
 import { annotateQuestionContext } from './question-context.js';
 import { proveJobviteResumeInput } from './jobvite-resume.js';
 import { preparePageViewport, viewportOwnership, viewportUnavailable, viewportCleanupPending } from './page-viewport.js';
-import { supportsCurrentPage } from './current-page-url.js';
+import { supportsCurrentPage } from './website-handoff.js';
 
 // These declarations are injected into the exact isolated execution context bound below.
 const observeCurrentDocument = `(${observePageSource})()`;

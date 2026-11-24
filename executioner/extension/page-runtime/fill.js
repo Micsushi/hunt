@@ -541,7 +541,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       const rows=new Map();
       for (const f of collectFields()) {
         if (registration && f.region!==registrationRegion || !registration && passwordRegions.has(f.region)) continue;
-        if (profileOnly(f.region) && (!allowProfileForms || !knownProfileControl(f.element) || !profileLabel(f.label))) continue;
+        if (profileOnly(f.region) && (!allowProfileForms ||
+            !(knownProfileControl(f.element) && profileLabel(f.label) || dialComposite(f.element)))) continue;
         if (scope!=='page' && !applicationRegions.includes(f.region)) continue;
         const row=observe(f.element,f.label); rows.set(row.fieldId,row);
       }
@@ -559,7 +560,9 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       }
       state.fabricOptions??=new WeakMap();state.committedChoices??=new WeakMap();
       for(const field of fields) {
-        if (profileOnly(field.region)) continue;
+        // A displayed dial prefix is only evidence after reading the committed
+        // country. Keep this inspection separate from permission to write it.
+        if (profileOnly(field.region) && (!allowProfileForms || !dialComposite(field.element))) continue;
         if(isRequired(field.element) && (scope==='page' || applicationRegions.includes(field.region)) && !screeningFields.read(field.element) && !semanticChoiceButton(field.element) && !sharedChoice(field.element) && field.element.getAttribute('role')==='combobox' && field.element.value) {
           try {const proof=await inspectCommittedChoice(field.element);if(proof)state.committedChoices.set(field.element,proof);else state.committedChoices.delete(field.element);}
           catch {state.committedChoices.delete(field.element);addSkip(field.label, 'custom_menu_inspection_unconfirmed', 'field_recognition', 'read_menu');}

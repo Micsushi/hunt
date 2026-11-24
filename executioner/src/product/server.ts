@@ -6,7 +6,7 @@ import { basename, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { applicationTarget, canonicalPostingKey } from './target.ts';
-import { supportsCurrentPage } from '../../extension/current-page-url.js';
+import { supportsCurrentPage } from '../../extension/website-handoff.js';
 import { ExtensionBridge } from "./extension-bridge.ts";
 import { ApplicationQueue } from "./queue.ts";
 import { currentPageOwner, inspectHandoffBundle, selectableQueueResume } from './handoff.ts';

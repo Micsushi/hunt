@@ -90,7 +90,7 @@ test('unfamiliar applications stay on the current page and old selected inputs r
       assert.equal((await post('/browser/page',{operation:'fill',tabId:17,expectedUrl:address,documentId:'local-document'})).status,200);
       assert.equal((await post('/jobs',{jobs:[{url:address}]})).status,400);
     }
-    for (const address of [app.origin,'http://localhost:47831/','http://forms.example/profile','chrome://settings/','https://owner@forms.example/profile']) {
+    for (const address of [app.origin,'http://localhost:47831/','http://forms.example/profile','chrome://settings/','https://fixture@forms.example.invalid/profile']) {
       assert.equal((await post('/browser/page',{operation:'fill',tabId:17,expectedUrl:address,documentId:'local-document'})).status,400);
     }
     assert.equal(legacyFills,6);

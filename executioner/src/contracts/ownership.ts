@@ -563,10 +563,8 @@ export const productBoundary = {
     workflow: [
       "extension/page-runtime/serialize.js",
       "extension/background.js",
-      "extension/current-page-url.js",
       "extension/page-actions.js",
       "extension/popup.js",
-      "extension/resume-preview.js",
       "extension/website-handoff.js",
       "src/product/application-contract.ts",
       "src/product/application-wait.ts",
