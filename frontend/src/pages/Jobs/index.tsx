@@ -108,7 +108,8 @@ const COL_TIPS: Record<string, string> = {
   Company: 'Employer name',
   Posted: 'Employer posting date',
   Links: 'View listing or apply page',
-  Status: 'Fit and application readiness',
+  Tier: 'Priority from P1 to P5',
+  Status: 'Fit and application status',
   Enrichment: 'Description and direct application link',
   Added: 'When this job was scraped',
 }
@@ -117,82 +118,42 @@ const COL_SORT_KEYS: Record<string, SortField | undefined> = {
   Posted: 'date_posted',
   Company: 'company',
   Title: 'title',
+  Tier: 'fit_tier',
+  Status: 'review_status',
+  Enrichment: 'enrichment_details',
   Added: 'date_scraped',
-}
-
-type LocalSort = { field: string; dir: 'asc' | 'desc' }
-
-function compareJobs(a: Job, b: Job, field: string, dir: 'asc' | 'desc'): number {
-  let av: string | number | null = null
-  let bv: string | number | null = null
-
-  if (field === 'id') {
-    av = a.id
-    bv = b.id
-  } else if (field === 'company') {
-    av = a.company ?? ''
-    bv = b.company ?? ''
-  } else if (field === 'title') {
-    av = a.title ?? ''
-    bv = b.title ?? ''
-  } else if (field === 'enrichment_status') {
-    av = a.enrichment_status ?? ''
-    bv = b.enrichment_status ?? ''
-  } else if (field === 'apply_type') {
-    av = a.apply_type ?? ''
-    bv = b.apply_type ?? ''
-  } else if (field === 'date_posted') {
-    av = a.date_posted || a.date_scraped
-    bv = b.date_posted || b.date_scraped
-  } else if (field === 'date_scraped') {
-    av = a.date_scraped ?? ''
-    bv = b.date_scraped ?? ''
-  }
-
-  let cmp: number
-  if (typeof av === 'number' && typeof bv === 'number') {
-    cmp = av - bv
-  } else {
-    cmp = String(av ?? '').localeCompare(String(bv ?? ''))
-  }
-  return dir === 'asc' ? cmp : -cmp
 }
 
 function Th({
   label,
   sortKey,
-  localSort,
-  onLocalSort,
+  sort,
+  direction,
+  onSort,
 }: {
   label: string
   sortKey?: SortField
-  localSort: LocalSort | null
-  onLocalSort: (s: LocalSort) => void
+  sort?: SortField
+  direction?: SortDirection
+  onSort: (sort: SortField, direction: SortDirection) => void
 }) {
-  const active = sortKey && localSort?.field === sortKey
-  const nextDir = active && localSort?.dir === 'asc' ? 'desc' : 'asc'
+  const active = Boolean(sortKey && sort === sortKey)
+  const nextDirection = active && direction === 'asc' ? 'desc' : 'asc'
   return (
     <th
+      scope="col"
       className={sortKey ? styles.sortable : ''}
       title={COL_TIPS[label] ?? label}
-      aria-sort={
-        sortKey
-          ? active
-            ? localSort?.dir === 'asc'
-              ? 'ascending'
-              : 'descending'
-            : 'none'
-          : undefined
-      }
+      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : undefined}
     >
       {sortKey ? (
         <button
           type="button"
           className={styles.sortButton}
-          onClick={() => onLocalSort({ field: sortKey, dir: nextDir })}
+          onClick={() => onSort(sortKey, nextDirection)}
         >
           {label}
-          {active && <span aria-hidden="true">{localSort?.dir === 'asc' ? ' ↑' : ' ↓'}</span>}
+          {active && <span aria-hidden="true">{direction === 'asc' ? ' ↑' : ' ↓'}</span>}
         </button>
       ) : (
         label
@@ -294,7 +255,6 @@ export function JobsPage() {
   }
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
-  const [localSort, setLocalSort] = useState<LocalSort | null>(null)
   const detailSearch = useMemo(() => {
     const value = queryToParams(query).toString()
     return value ? `?${value}` : ''
@@ -308,7 +268,6 @@ export function JobsPage() {
     sessionStorage.setItem(REVIEW_QUERY_STORAGE_KEY, nextParams.toString())
     setSelectionQuery(nextParams.toString())
     setFocusIdx(-1) // eslint-disable-line react-hooks/set-state-in-effect
-    setLocalSort(null) // reset page-local sort when filters change
   }, [query]) // eslint-disable-line
 
   useEffect(() => {
@@ -329,11 +288,9 @@ export function JobsPage() {
     if ((query.page ?? 1) > lastPage) setQuery({ ...query, page: lastPage })
   }
 
-  // Client-side sorted display jobs (only sorts current page)
-  const displayJobs = useMemo(() => {
-    if (!localSort) return jobs
-    return [...jobs].sort((a, b) => compareJobs(a, b, localSort.field, localSort.dir))
-  }, [jobs, localSort])
+  function sortJobs(sort: SortField, direction: SortDirection) {
+    updateQuery({ sort, direction, page: 1 })
+  }
 
   // Keyboard j/k/Enter navigation
   useEffect(() => {
@@ -694,14 +651,20 @@ export function JobsPage() {
               </th>
               <th className={styles.mobileHead} colSpan={columns.length}>
                 <select
-                  aria-label="Sort this page"
-                  value={localSort ? `${localSort.field}:${localSort.dir}` : ''}
+                  aria-label="Sort jobs"
+                  value={
+                    columns.some((label) => COL_SORT_KEYS[label] === query.sort)
+                      ? `${query.sort}:${query.direction}`
+                      : ''
+                  }
                   onChange={(event) => {
                     const [field, dir] = event.target.value.split(':')
-                    setLocalSort(field ? { field, dir: dir === 'desc' ? 'desc' : 'asc' } : null)
+                    sortJobs(field as SortField, dir === 'desc' ? 'desc' : 'asc')
                   }}
                 >
-                  <option value="">Sort this page</option>
+                  <option value="" disabled>
+                    Sort jobs
+                  </option>
                   {columns
                     .filter((label) => COL_SORT_KEYS[label])
                     .map((label) => {
@@ -720,8 +683,9 @@ export function JobsPage() {
                   key={label}
                   label={label}
                   sortKey={COL_SORT_KEYS[label]}
-                  localSort={localSort}
-                  onLocalSort={setLocalSort}
+                  sort={query.sort}
+                  direction={query.direction}
+                  onSort={sortJobs}
                 />
               ))}
             </tr>
@@ -736,7 +700,7 @@ export function JobsPage() {
                   Loading…
                 </td>
               </tr>
-            ) : displayJobs.length === 0 ? (
+            ) : jobs.length === 0 ? (
               <tr>
                 <td
                   colSpan={columns.length + 1}
@@ -750,7 +714,7 @@ export function JobsPage() {
                 </td>
               </tr>
             ) : (
-              displayJobs.map((j, i) => renderJob(j, i))
+              jobs.map((j, i) => renderJob(j, i))
             )}
           </tbody>
         </table>

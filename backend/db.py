@@ -16,7 +16,16 @@ from hunter import db as hunter_db
 from hunter.config import ENRICHMENT_MAX_ATTEMPTS, ENRICHMENT_STALE_PROCESSING_MINUTES
 from hunter.enrichment_policy import format_sqlite_timestamp, utc_now
 from hunter.fit_tags import TIER_SQL
-from hunter.personal_fit import view_filter
+from hunter.personal_fit import (
+    ADVANCEABLE,
+    FIT,
+    POSTED_DATE,
+    UNTAGGED,
+    VERIFIED_APPLY,
+    date_window,
+    owner_day,
+    view_filter,
+)
 
 TERMINAL_ENRICHMENT_STATUSES = (
     "failed",
@@ -385,6 +394,67 @@ def _review_jobs_filter_sql_and_params(
     return "".join(parts) + view_sql, params + view_params
 
 
+def _review_jobs_order_sql(sort, direction, status):
+    direction = "ASC" if str(direction).lower() == "asc" else "DESC"
+    posted = "coalesce(nullif(date_posted, ''), date_scraped)"
+    latest_first = f"{posted} DESC, id DESC"
+    if sort == "fit_tier":
+        tier_group = f"CASE WHEN ({TIER_SQL}) IS NULL THEN 2 WHEN ({TIER_SQL}) = 'outside_scope' THEN 1 ELSE 0 END"
+        return f" ORDER BY {tier_group}, ({TIER_SQL}) {direction}, {latest_first}"
+    if sort == "review_status":
+        cutoff, today = date_window(owner_day())
+        status_label = f"""CASE
+            WHEN lower(trim(coalesce(status, ''))) = 'applied' THEN 'Applied'
+            WHEN lower(trim(coalesce(status, ''))) IN ('canceled', 'cancelled') THEN 'Canceled'
+            WHEN last_enrichment_error = 'job_removed' THEN 'Posting closed'
+            WHEN apply_type = 'easy_apply' THEN 'Easy Apply only'
+            WHEN {UNTAGGED} AND ({ADVANCEABLE}) AND {POSTED_DATE} BETWEEN '{cutoff}' AND '{today}'
+                 AND ({FIT}) IN ('yes', 'no', 'deferred') THEN 'Awaiting tier review'
+            WHEN ({FIT}) = 'no' THEN 'Does not match'
+            WHEN NOT ({ADVANCEABLE}) THEN 'Excluded by job filters'
+            WHEN ({FIT}) = 'deferred' THEN 'Fit needs more information'
+            WHEN coalesce(({FIT}), '') != 'yes' THEN 'Awaiting agent review'
+            WHEN discovery_suppressed_reason = 'geography_unverified' THEN 'Location needs checking'
+            ELSE 'Confirmed'
+        END"""
+        return f" ORDER BY {status_label} {direction}, {latest_first}"
+    if sort == "enrichment_details":
+        has_description = "trim(coalesce(description, '')) != ''"
+        details_label = f"""CASE
+            WHEN enrichment_status = 'processing' THEN 'Checking'
+            WHEN ({VERIFIED_APPLY}) AND ({has_description}) THEN 'Complete'
+            WHEN ({VERIFIED_APPLY}) THEN 'No description'
+            WHEN ({has_description}) THEN 'Link check'
+            ELSE 'Both needed'
+        END"""
+        return f" ORDER BY {details_label} {direction}, {latest_first}"
+    columns = {
+        "id": "id",
+        "source": "source",
+        "company": "lower(coalesce(company, ''))",
+        "title": "lower(coalesce(title, ''))",
+        "enrichment_status": "enrichment_status",
+        "apply_type": "apply_type",
+        "enrichment_attempts": "coalesce(enrichment_attempts, 0)",
+        "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
+        "last_enrichment_error": "coalesce(last_enrichment_error, '')",
+        "date_scraped": "date_scraped",
+        "date_posted": posted,
+        "enriched_at": "coalesce(enriched_at, '')",
+    }
+    column = columns.get(sort, "date_scraped")
+    if status == "ready":
+        return f"""
+            ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
+                     CASE WHEN enrichment_status = 'pending' THEN {column} END {direction},
+                     CASE WHEN enrichment_status != 'pending' THEN {column} END {direction},
+                     CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
+                     CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
+                     id DESC
+        """
+    return f" ORDER BY {column} {direction}, id DESC"
+
+
 def list_jobs_for_review(
     *,
     status="all",
@@ -437,40 +507,7 @@ def list_jobs_for_review(
 
         params = list(filter_params)
 
-        safe_direction = "ASC" if str(direction).lower() == "asc" else "DESC"
-        sortable_columns = {
-            "id": "id",
-            "source": "source",
-            "company": "company",
-            "title": "title",
-            "enrichment_status": "enrichment_status",
-            "apply_type": "apply_type",
-            "enrichment_attempts": "coalesce(enrichment_attempts, 0)",
-            "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
-            "last_enrichment_error": "coalesce(last_enrichment_error, '')",
-            "date_scraped": "date_scraped",
-            "date_posted": "coalesce(nullif(date_posted, ''), date_scraped)",
-            "enriched_at": "coalesce(enriched_at, '')",
-        }
-        safe_sort_sql = sortable_columns.get(sort, "date_scraped")
-
-        if status == "ready":
-            base_select += f"""
-            ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
-                     CASE
-                       WHEN enrichment_status = 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
-                     END {safe_direction},
-                     CASE
-                       WHEN enrichment_status != 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
-                     END {safe_direction},
-                     CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
-                     CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
-                     id DESC
-            """
-        elif sort == "fit_tier":
-            base_select += f" ORDER BY {TIER_SQL} {safe_direction} NULLS LAST, coalesce(nullif(date_posted, ''), date_scraped) DESC, id DESC"
-        else:
-            base_select += f" ORDER BY {safe_sort_sql} {safe_direction}, id DESC"
+        base_select += _review_jobs_order_sql(sort, direction, status)
 
         base_select += " LIMIT ? OFFSET ?"
         params.extend([limit, max(0, offset)])
@@ -515,40 +552,9 @@ def list_job_ids_for_review(
     try:
         cursor = conn.cursor()
         params = list(filter_params)
-        safe_direction = "ASC" if str(direction).lower() == "asc" else "DESC"
-        sortable_columns = {
-            "id": "id",
-            "source": "source",
-            "company": "company",
-            "title": "title",
-            "enrichment_status": "enrichment_status",
-            "apply_type": "apply_type",
-            "enrichment_attempts": "coalesce(enrichment_attempts, 0)",
-            "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
-            "last_enrichment_error": "coalesce(last_enrichment_error, '')",
-            "date_scraped": "date_scraped",
-            "date_posted": "coalesce(nullif(date_posted, ''), date_scraped)",
-            "enriched_at": "coalesce(enriched_at, '')",
-        }
-        safe_sort_sql = sortable_columns.get(sort, "date_scraped")
-        sql = "SELECT id FROM jobs WHERE 1=1" + frag
-        if status == "ready":
-            sql += f"""
-            ORDER BY CASE enrichment_status WHEN 'pending' THEN 0 ELSE 1 END,
-                     CASE
-                       WHEN enrichment_status = 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
-                     END {safe_direction},
-                     CASE
-                       WHEN enrichment_status != 'pending' AND {safe_sort_sql} IS NOT NULL THEN {safe_sort_sql}
-                     END {safe_direction},
-                     CASE WHEN enrichment_status = 'pending' THEN date_scraped END DESC,
-                     CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
-                     id DESC
-            """
-        elif sort == "fit_tier":
-            sql += f" ORDER BY {TIER_SQL} {safe_direction} NULLS LAST, coalesce(nullif(date_posted, ''), date_scraped) DESC, id DESC"
-        else:
-            sql += f" ORDER BY {safe_sort_sql} {safe_direction}, id DESC"
+        sql = (
+            "SELECT id FROM jobs WHERE 1=1" + frag + _review_jobs_order_sql(sort, direction, status)
+        )
         return [int(row[0]) for row in cursor.execute(sql, tuple(params)).fetchall()]
     finally:
         conn.close()

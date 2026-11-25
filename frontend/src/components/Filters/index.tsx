@@ -41,6 +41,8 @@ const SOURCE_OPTIONS = [
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'fit_tier', label: 'Fit tier' },
+  { value: 'review_status', label: 'Status' },
+  { value: 'enrichment_details', label: 'Enrichment details' },
   { value: 'date_posted', label: 'Posting date' },
   { value: 'date_scraped', label: 'Date added' },
   { value: 'company', label: 'Company' },

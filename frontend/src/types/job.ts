@@ -135,6 +135,8 @@ export type SortField =
   | 'date_scraped'
   | 'date_posted'
   | 'fit_tier'
+  | 'review_status'
+  | 'enrichment_details'
   | 'company'
   | 'title'
   | 'enrichment_status'

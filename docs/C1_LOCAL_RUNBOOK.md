@@ -675,6 +675,10 @@ junior or otherwise unsuitable stay in All jobs. Ambiguous roles can wait for
 more information. Use **Fit tier**, **Role type**, and **Seniority** to narrow
 the list.
 
+Select a column heading to sort the filtered list. Select it again to reverse
+the order. The same order applies across pages and exports. On a narrow screen,
+use **Sort jobs** above the results.
+
 **Posting date** defaults to **Past 2 weeks** in My matches. It uses the date
 the employer published the job. Select **Any date** to include jobs with an
 unknown posting date. **Per company** defaults to two and can be adjusted or

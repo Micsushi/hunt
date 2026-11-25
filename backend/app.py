@@ -5232,8 +5232,7 @@ def api_job_adjacent(
     if status_filter is None:
         row = get_job_by_id(job_id)
         status_filter = (row or {}).get("enrichment_status") or "all"
-    if status_filter not in STATUS_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status_filter}")
+    validate_job_status_filter(status_filter, view)
     ids = list_job_ids_for_review(
         status=status_filter,
         query=q,
