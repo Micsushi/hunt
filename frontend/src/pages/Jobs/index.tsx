@@ -559,7 +559,7 @@ export function JobsPage() {
           {isLoading
             ? 'Loading jobs…'
             : isPlaceholderData
-              ? 'Showing previous results while loading this view…'
+              ? 'Updating…'
               : isError && !data
                 ? ''
                 : `${jobs.length} of ${total} jobs`}

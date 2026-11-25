@@ -22,8 +22,21 @@
   max-width: 100%;
 }
 
+.searchAndReset {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
 .filterGroupSearch {
-  flex: 2 1 220px;
+  flex: 1;
+  min-width: 0;
+}
+
+.criteriaRow > .filterGroup {
+  flex: 1 1 auto;
 }
 
 .filterLabel {
@@ -42,6 +55,7 @@
 
 .searchInput {
   width: 100%;
+  min-width: 0;
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -169,16 +183,20 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
-  .filterGroupSearch {
+  .searchAndReset {
     grid-column: 1 / -1;
+    gap: 10px;
   }
   .filterRow .select {
     width: 100%;
   }
-  .resetBtn {
-    width: fit-content;
-  }
   .limitRow {
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 380px) {
+  .filterRow .select {
+    padding-inline: 6px;
   }
 }
