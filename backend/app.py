@@ -140,6 +140,12 @@ def validate_job_source_filter(source: str) -> None:
         raise HTTPException(status_code=400, detail=f"Unsupported source filter: {source}")
 
 
+def validate_job_status_filter(status: str, view: str) -> None:
+    if status in STATUS_OPTIONS or (view == "history" and status in {"applied", "canceled"}):
+        return
+    raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+
+
 def _raise_integrity_conflict(exc: BaseException) -> None:
     raise HTTPException(
         status_code=409,
@@ -3422,8 +3428,7 @@ def api_jobs_count(
 ):
     """Return total row count for current filter - used for pagination."""
     validate_job_source_filter(source)
-    if status not in STATUS_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    validate_job_status_filter(status, view)
     source_filter = None if source == "all" else source
     tag_clean = (tag or "").strip() or None
     category_clean = (category or "").strip() or None
@@ -5085,8 +5090,7 @@ def api_jobs(
     _auth: str = Depends(require_auth),
 ):
     validate_job_source_filter(source)
-    if status not in STATUS_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    validate_job_status_filter(status, view)
     safe_limit = max(1, min(limit, 250))
     safe_page = max(1, page)
     tag_clean = (tag or "").strip() or None
@@ -5147,8 +5151,7 @@ def api_jobs_export(
     if export_format not in ("csv", "json"):
         raise HTTPException(status_code=400, detail="format must be csv or json.")
     validate_job_source_filter(source)
-    if status not in STATUS_OPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported status filter: {status}")
+    validate_job_status_filter(status, view)
     safe_limit = max(1, min(limit, 5000))
     safe_page = max(1, page)
     tag_clean = (tag or "").strip() or None
