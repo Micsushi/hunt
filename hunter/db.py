@@ -226,7 +226,10 @@ INSERT_COLUMNS = (
 )
 
 _UNSET = object()
-ENRICHMENT_SOURCE_PRIORITY = ("linkedin", "indeed")
+ENRICHMENT_SOURCE_PRIORITY = ("indeed", "linkedin")
+LINKEDIN_FIT_ENRICHMENT_PRIORITY = (
+    "CASE WHEN source = 'linkedin' AND personal_fit = 'yes' THEN 0 ELSE 1 END,"
+)
 PUBLIC_EMPLOYER_SCOPE_SQL = """source NOT IN ('linkedin', 'indeed')
     AND ats_type IN ('workday', 'greenhouse', 'lever', 'ashby', 'smartrecruiters', 'bamboohr', 'workable')
     AND status = 'new' AND coalesce(apply_type, '') != 'easy_apply'"""
@@ -788,9 +791,9 @@ def _backfill_linkedin_derived_fields(conn):
                 new_apply_type = "external_apply"
 
         if new_apply_type == "external_apply" and new_auto_apply_eligible is None:
-            new_auto_apply_eligible = 1
+            new_auto_apply_eligible = True
         elif new_apply_type == "easy_apply" and new_auto_apply_eligible is None:
-            new_auto_apply_eligible = 0
+            new_auto_apply_eligible = False
 
         if (
             normalized_apply_url != current_apply_url
@@ -924,7 +927,8 @@ def requeue_linkedin_rows_for_refresh(*, limit=None):
 READY_ENRICHMENT_SQL = """(enrichment_status = 'pending' OR (
     enrichment_status = 'failed' AND next_enrichment_retry_at IS NOT NULL
     AND next_enrichment_retry_at <= CURRENT_TIMESTAMP
-    AND coalesce(enrichment_attempts, 0) < ?)) """
+    AND coalesce(enrichment_attempts, 0) < ?))
+    AND coalesce(discovery_suppressed_reason, '') != 'duplicate_canonical_job' """
 
 
 def _count_jobs(conditions, params):
@@ -1062,7 +1066,11 @@ def claim_job_for_enrichment(job_id=None, force=False, *, sources=None):
         return None
     source_filter, params = _build_source_filter_sql(sources)
     return _claim_enrichment(
-        job_id, force, source_filter, params, _build_source_priority_sql(sources) + ","
+        job_id,
+        force,
+        source_filter,
+        params,
+        _build_source_priority_sql(sources) + "," + LINKEDIN_FIT_ENRICHMENT_PRIORITY,
     )
 
 
@@ -1078,7 +1086,7 @@ def claim_linkedin_job_for_hiring_cafe_fallback(job_id=None, force=False):
         if job_id is not None and force
         else _hiring_cafe_fallback_needed_sql()
     )
-    return _claim_enrichment(job_id, force, source_filter, [])
+    return _claim_enrichment(job_id, force, source_filter, [], LINKEDIN_FIT_ENRICHMENT_PRIORITY)
 
 
 def _public_employer_ready_conditions():
@@ -1621,7 +1629,9 @@ def _enforce_employer_month_cap(cursor, normalized_company):
         """
         SELECT id, status, priority_tier, fit_score, viability_score, date_posted,
                discovery_suppressed_reason, canonical_job_key, enrichment_status,
-               auto_apply_eligible, last_enrichment_error
+               auto_apply_eligible, last_enrichment_error, source,
+               CASE WHEN enrichment_status IN ('done', 'done_verified')
+                    THEN trim(coalesce(description, '')) != '' ELSE FALSE END AS has_description
         FROM jobs
         WHERE normalized_company = ?
         """,
@@ -1646,6 +1656,8 @@ def _enforce_employer_month_cap(cursor, normalized_company):
                 row["enrichment_status"] in {"done", "done_verified"}
                 and bool(row["auto_apply_eligible"]),
                 row["enrichment_status"] in {"done", "done_verified"},
+                bool(row["has_description"]),
+                bool(row["has_description"]) and row["source"] != "linkedin",
                 -int(row["id"]),
             ),
         )
@@ -1904,11 +1916,19 @@ def add_job(job_data, *, connection=None):
         existing = dict(existing_row)
         updates = {}
 
-        # A later board observation gives a blocked public lead a supported worker.
+        # Keep the earlier source when a known LinkedIn copy already has external details.
+        linkedin_copy_with_details = (
+            job_data.get("source") == "linkedin"
+            and not _is_blank(existing.get("description"))
+            and normalize_apply_url(existing.get("apply_url"))
+            and not looks_like_linkedin_url(existing["apply_url"])
+        )
+        # A later board observation can give an incomplete public lead a supported worker.
         if (
             existing.get("source") not in {"linkedin", "indeed"}
             and job_data.get("source") in {"linkedin", "indeed"}
             and existing.get("enrichment_status") not in {"done", "done_verified"}
+            and not linkedin_copy_with_details
         ):
             updates.update(
                 source=job_data["source"],

@@ -766,9 +766,21 @@ immediately. Discovery, authentication, and enrichment report status in Hunt.
 The Server2 deployment wrapper passes a 60-minute interval for C1. When
 deploying directly, set `RUN_INTERVAL_SECONDS=3600` or the equivalent Ansible
 override `scraper_interval_minutes=60`. Check the next C1 cycle in Ops.
-The hourly pass runs LinkedIn, Indeed via JobSpy, public
-boards and configured direct employer catalogs, including sites inherited
-from the bundled catalogs and the tracker import. Source rate limits and
+The hourly pass saves results from Indeed, public boards, and configured
+employer catalogs before it searches LinkedIn. Matching requisition IDs or
+URLs share a job identity. A LinkedIn listing may have only its LinkedIn ID
+until the employer's Apply destination is resolved. If that reveals a
+duplicate, Hunt keeps one active result and prefers a complete non-LinkedIn
+copy when both are complete.
+
+Enrichment checks public employer postings and Indeed before LinkedIn. When
+LinkedIn work is ready, a 25-job batch reserves up to five jobs and caps the
+LinkedIn portion at five. An account rate-limit response stops the batch and
+pauses LinkedIn enrichment on that account for one day. The worker opens the
+saved listing and reads its description and external Apply destination.
+When the saved session expires, the fallback can save a publicly visible
+description even if it cannot verify an external link. Refresh the saved
+C1 session for direct LinkedIn Apply-link capture. Source rate limits and
 retry delays still apply. Switch off the former spreadsheet automation after
 the live Hunt review and digest are verified.
 

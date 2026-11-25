@@ -212,7 +212,7 @@ def test_company_details_stop_network_requests_after_rate_limit():
     assert health["status"] == "partial" and health["error"] == "http_429"
 
 
-def test_slow_board_does_not_hold_public_or_company_results(monkeypatch):
+def test_public_and_company_results_run_with_indeed_before_linkedin(monkeypatch):
     from threading import Event
 
     board_started, public_saved, company_saved = Event(), Event(), Event()
@@ -220,19 +220,27 @@ def test_slow_board_does_not_hold_public_or_company_results(monkeypatch):
     monkeypatch.setattr(scraper, "C1Logger", Mock())
     monkeypatch.setattr(scraper, "SEARCH_TERMS", {"engineering": ["software engineer"]})
     monkeypatch.setattr(scraper, "LOCATIONS", ["Canada"])
-    monkeypatch.setattr(scraper, "SITES", ["linkedin"])
+    monkeypatch.setattr(scraper, "SITES", ["linkedin", "indeed"])
     monkeypatch.setattr(scraper, "MAX_WORKERS", 1)
     saved = []
     monkeypatch.setattr(
         scraper, "add_job", lambda job: (saved.append(job) or "inserted", len(saved))
     )
 
-    def slow_board(*args):
+    def discover_board(site, *args):
+        if site == "linkedin":
+            assert {job["title"] for job in saved} == {
+                "Indeed result",
+                "Public result",
+                "Company result",
+            }
+            return [{"title": "LinkedIn result"}]
+        assert site == "indeed"
         board_started.set()
         assert public_saved.wait(3), "Public sources were queued behind the board"
         assert company_saved.wait(3), "Companies were queued behind the board"
         assert len(saved) == 2
-        return [{"title": "Board result"}]
+        return [{"title": "Indeed result"}]
 
     def public(hours_old, callback, **kwargs):
         assert board_started.wait(3)
@@ -244,11 +252,11 @@ def test_slow_board_does_not_hold_public_or_company_results(monkeypatch):
         on_result([{"title": "Company result"}])
         company_saved.set()
 
-    monkeypatch.setattr(scraper, "_scrape_jobspy_task", slow_board)
+    monkeypatch.setattr(scraper, "_scrape_jobspy_task", discover_board)
     monkeypatch.setattr(scraper, "_discover_public_sources", public)
     monkeypatch.setattr(scraper, "_discover_company_queue", companies)
     summary = scraper.scrape(
         include_public_sources=True, include_company_queue=True, enrich_pending=False
     )
-    assert summary["inserted"] == summary["scraped_total"] == 3
+    assert summary["inserted"] == summary["scraped_total"] == 4
     assert summary["skipped"] == 0

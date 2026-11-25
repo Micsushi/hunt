@@ -652,9 +652,15 @@ def run_pending_job_enrichment(
     browser_channel=None,
     ui_verify_blocked=False,
 ):
-    from hunter.db import count_ready_public_employer_jobs
+    from hunter.db import (
+        count_ready_linkedin_jobs_for_hiring_cafe_fallback,
+        count_ready_public_employer_jobs,
+        is_linkedin_auth_available,
+    )
 
     ready_count = count_ready_jobs_for_enrichment() + count_ready_public_employer_jobs()
+    if not is_linkedin_auth_available():
+        ready_count += count_ready_linkedin_jobs_for_hiring_cafe_fallback()
     if ready_count == 0:
         print("[scrape] No supported rows are ready for enrichment after discovery.")
         return 0
@@ -804,7 +810,7 @@ def scrape(
 
         board_health = []
 
-        def discover_boards():
+        def discover_boards(board_tasks):
             def discover(task):
                 key = "board:" + repr(task)
                 if not run.start(key):
@@ -814,13 +820,17 @@ def scrape(
                 run.saved(key, len(jobs))
 
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                for result in executor.map(discover, tasks):
+                for result in executor.map(discover, board_tasks):
                     pass
 
         try:
-            # Keep source-family limits and LinkedIn pacing, but don't queue companies behind boards.
+            # Persist the other sources before LinkedIn can claim the same requisition.
             with ThreadPoolExecutor(max_workers=3) as families:
-                futures = [families.submit(discover_boards)]
+                futures = [
+                    families.submit(
+                        discover_boards, [task for task in tasks if task[0] != "linkedin"]
+                    )
+                ]
                 if include_public_sources:
                     futures.append(
                         families.submit(
@@ -844,6 +854,10 @@ def scrape(
                     )
                 for future in as_completed(futures):
                     future.result()
+
+            linkedin_tasks = [task for task in tasks if task[0] == "linkedin"]
+            if linkedin_tasks and not run.stopped():
+                discover_boards(linkedin_tasks)
 
             skipped = scraped_total - inserted - refreshed
             print(

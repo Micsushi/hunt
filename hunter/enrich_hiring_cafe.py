@@ -16,6 +16,7 @@ from hunter.db import (  # noqa: E402
     mark_job_enrichment_succeeded,
     set_hiring_cafe_cooldown_until,
 )
+from hunter.discovery_linkedin import fetch_public_linkedin_description
 from hunter.enrichment_policy import (
     compute_retry_after,
     format_sqlite_timestamp,
@@ -182,6 +183,8 @@ def enrich_linkedin_job_with_hiring_cafe(
     score, candidate, apply_url = selected
     description = _normalize_text(candidate.description)
     if not _is_usable_description(description):
+        description = _normalize_text(job.get("description"))
+    if not _is_usable_description(description):
         try:
             description = hiring_cafe.html_to_text(fetch_description_html_fn(candidate.source_id))
         except requests.HTTPError as exc:
@@ -246,6 +249,15 @@ def _process_claimed_job(claimed_job):
         f"[hiring-cafe] Claimed LinkedIn fallback job id={claimed_job['id']} "
         f"company={claimed_job.get('company')} title={claimed_job.get('title')}"
     )
+    public_description = None
+    if not _normalize_text(claimed_job.get("description")):
+        try:
+            public_description = fetch_public_linkedin_description(claimed_job["job_url"])
+        except (OSError, ValueError) as exc:
+            print(f"[hiring-cafe] LinkedIn public description unavailable: {type(exc).__name__}.")
+    if public_description:
+        claimed_job = {**claimed_job, "description": public_description}
+
     try:
         result = enrich_linkedin_job_with_hiring_cafe(claimed_job)
         mark_job_enrichment_succeeded(
@@ -288,12 +300,14 @@ def _process_claimed_job(claimed_job):
                 error_code=error_code,
                 error_message=error_message,
             )
+        partial = {"description": public_description} if public_description else {}
         mark_job_enrichment_failed(
             claimed_job["id"],
             error_message,
             enrichment_status=_get_failure_enrichment_status(error_code),
             next_enrichment_retry_at=next_retry_at,
             source=SOURCE,
+            **partial,
         )
         elapsed_seconds = time.monotonic() - started_at
         print("[hiring-cafe] Failed")

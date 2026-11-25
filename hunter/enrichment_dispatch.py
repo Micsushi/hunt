@@ -36,9 +36,10 @@ from hunter.linkedin_session import (
     attempt_auto_relogin,
     block_account_for_days,
     get_active_account_index,
-    rotate_linkedin_account,
+    is_account_blocked,
 )
 
+LINKEDIN_BATCH_LIMIT = 5
 RATE_LIMIT_BLOCK_DAYS = 1
 HIGH_FAILURE_ALERT_RUNTIME_KEY = "hunt_last_high_failure_alert"
 
@@ -290,11 +291,20 @@ def run_enrichment_round(
         "by_source": {},
     }
 
-    if remaining > 0 and count_ready_public_employer_jobs():
+    linkedin_paused = is_account_blocked(get_active_account_index())
+    linkedin_ready = 0
+    if limit > 1 and not linkedin_paused:
+        linkedin_ready = count_ready_jobs_for_enrichment(sources=("linkedin",))
+        if not linkedin_ready and not get_linkedin_auth_state()["available"]:
+            linkedin_ready = count_ready_linkedin_jobs_for_hiring_cafe_fallback()
+    # Large public and Indeed queues can otherwise use the whole batch every hour.
+    linkedin_reserve = min(LINKEDIN_BATCH_LIMIT, max(1, limit // 5), linkedin_ready)
+    public_limit = remaining - linkedin_reserve
+    if public_limit > 0 and count_ready_public_employer_jobs():
         from hunter.verify_public import process_public_verification_batch
 
         started = monotonic()
-        public = process_public_verification_batch(limit=remaining)
+        public = process_public_verification_batch(limit=public_limit)
         public_summary = {
             **public,
             "ui_verified": 0,
@@ -312,6 +322,9 @@ def run_enrichment_round(
             continue
 
         requires_li = _REQUIRES_LINKEDIN_SESSION[source]
+        if requires_li and linkedin_paused:
+            print("[enrich] LinkedIn enrichment paused during the account cooldown.")
+            continue
         ready_count = count_ready_jobs_for_enrichment(sources=(source,))
         use_hiring_cafe_fallback = False
         if source == "linkedin" and ready_count <= 0:
@@ -322,7 +335,12 @@ def run_enrichment_round(
         if ready_count <= 0:
             continue
 
-        source_limit = min(remaining, ready_count)
+        source_budget = (
+            min(LINKEDIN_BATCH_LIMIT, remaining) if requires_li else remaining - linkedin_reserve
+        )
+        source_limit = min(source_budget, ready_count)
+        if source_limit <= 0:
+            continue
         if use_hiring_cafe_fallback:
             print(
                 f"[enrich] Dispatching up to {source_limit} LinkedIn row(s) through HiringCafe fallback."
@@ -343,7 +361,7 @@ def run_enrichment_round(
             ):
                 fallback_count = count_ready_linkedin_jobs_for_hiring_cafe_fallback()
                 if fallback_count > 0:
-                    fallback_limit = min(remaining, fallback_count)
+                    fallback_limit = min(source_budget, fallback_count)
                     print(
                         "[enrich] LinkedIn auth unavailable; "
                         f"using HiringCafe fallback for up to {fallback_limit} row(s)."
@@ -400,13 +418,6 @@ def run_enrichment_round(
                     f"[enrich] Account {blocked_index} rate-limited; "
                     f"blocked for {RATE_LIMIT_BLOCK_DAYS} day(s)."
                 )
-                rotation = rotate_linkedin_account(
-                    browser_channel=browser_channel,
-                    headless=headless,
-                    slow_mo=slow_mo,
-                    timeout_ms=timeout_ms,
-                )
-                print(f"[enrich] {rotation['message']}")
             break
 
     if aggregate["attempted"]:

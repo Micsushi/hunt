@@ -3,7 +3,7 @@
 import re
 import time
 from threading import Lock
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -11,6 +11,19 @@ from hunter.discovery_sources import _error_code, _job, fetch_text
 from hunter.search_lanes import title_matches_search_lane
 
 _search_lock = Lock()
+
+
+def fetch_public_linkedin_description(url, *, fetcher=fetch_text):
+    """Read the original listing's public description without a browser session."""
+    parts = urlsplit(url or "")
+    match = re.fullmatch(r"/jobs/view/(?:[^/]+-)?(\d+)/?", parts.path)
+    host = parts.hostname or ""
+    if not match or (host != "linkedin.com" and not host.endswith(".linkedin.com")):
+        return None
+    listing = f"https://www.linkedin.com/jobs/view/{match[1]}"
+    detail = BeautifulSoup(fetcher(listing), "html.parser")
+    description = detail.select_one(".show-more-less-html__markup")
+    return (description.get_text("\n", strip=True) or None) if description else None
 
 
 def discover_linkedin_query(
@@ -82,10 +95,9 @@ def discover_linkedin_query(
                     )
                     jobs.append(job)
                     if fetch_description:
-                        detail = BeautifulSoup(fetcher(job["job_url"]), "html.parser")
-                        description = detail.select_one(".show-more-less-html__markup")
-                        if description:
-                            job["description"] = description.get_text("\n", strip=True) or None
+                        job["description"] = fetch_public_linkedin_description(
+                            job["job_url"], fetcher=fetcher
+                        )
                         if not job["description"]:
                             error = "linkedin_description_unavailable"
                         time.sleep(1)

@@ -769,7 +769,7 @@ def detect_apply_result(page, *, existing_apply_url=None, timeout_ms=45000, fast
             print(f"[enrich] Resolved external apply URL: {apply_url}")
             return {
                 "apply_type": "external_apply",
-                "auto_apply_eligible": 1,
+                "auto_apply_eligible": True,
                 "apply_url": apply_url,
                 "apply_host": get_apply_host(apply_url),
                 "ats_type": detect_ats_type(apply_url),
@@ -783,7 +783,7 @@ def detect_apply_result(page, *, existing_apply_url=None, timeout_ms=45000, fast
         print("[enrich] Classified as Easy Apply.")
         return {
             "apply_type": "easy_apply",
-            "auto_apply_eligible": 0,
+            "auto_apply_eligible": False,
             "apply_url": None,
             "apply_host": None,
             "ats_type": None,
@@ -881,12 +881,20 @@ def enrich_linkedin_job_in_context(context, job, *, timeout_ms=45000, fast_ui=Fa
                 "LinkedIn indicates the job is no longer available or accepting applications.",
             )
 
-        apply_result = detect_apply_result(
-            page,
-            existing_apply_url=job.get("apply_url"),
-            timeout_ms=timeout_ms,
-            fast_ui=fast_ui,
-        )
+        try:
+            apply_result = detect_apply_result(
+                page,
+                existing_apply_url=job.get("apply_url"),
+                timeout_ms=timeout_ms,
+                fast_ui=fast_ui,
+            )
+        except LinkedInEnrichmentError as exc:
+            if exc.code == "apply_button_not_found" and not job.get("description"):
+                try:
+                    exc.partial_result = {"description": extract_description(page)}
+                except LinkedInEnrichmentError:
+                    pass
+            raise
         if apply_result["apply_type"] == "easy_apply":
             description = None
             try:
