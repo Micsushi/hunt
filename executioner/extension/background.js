@@ -264,6 +264,18 @@ chrome.runtime.onConnect?.addListener(port=>{
     }
   });
 });
+async function revealReviewedField(tabId,expectedUrl,documentId,target) {
+  const reveal=()=>pageAction({operation:'reveal',tabId,expectedUrl,documentId,
+    frameId:target.frameId,fieldId:target.fieldId},attached,origin);
+  try {await reveal();return;} catch {
+    const fresh=await pageAction({operation:'inspect',tabId,expectedUrl},attached,origin);
+    if(fresh.documentId!==documentId)throw new Error('Review expired.');
+    const sameField=row=>row.frameId===target.frameId && row.fieldId===target.fieldId;
+    if(!fresh.requiredIssues?.some(sameField) && !fresh.matching?.some(row=>row.canReveal && sameField(row)))
+      throw new Error('Field unavailable.');
+    await reveal();
+  }
+}
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
   if (message.action === 'ownFillDocumentId' && sender.frameId===0 && sender.tab?.id) {
@@ -272,15 +284,21 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message.action === 'fillFromInvitation') {
     // The isolated script admits a trusted click. The sender, never page
     // arguments, determines the tab, top-level document and destination.
-    if (sender.frameId !== 0 || !sender.tab?.active || !sender.documentId || sender.url!==message.expectedUrl ||
-        !exactGenericUrl(sender.url) || reloadPending) {respond({ok:false,error:'This application page changed. Reopen Hunt.'});return;}
+    if (sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || !sender.documentId ||
+        !exactGenericUrl(sender.url) || !exactGenericUrl(message.expectedUrl) ||
+        new URL(sender.url).origin!==new URL(message.expectedUrl).origin) {
+      respond({ok:false,error:'Hunt could not identify the application in this tab.'});return;
+    }
+    if(reloadPending){respond({ok:false,error:'Hunt is reloading. Try again in a moment.'});return;}
     const {hostname} = new URL(sender.url);
     const hosts = chrome.runtime.getManifest().content_scripts.find(script => script.js.includes('ats-invitation.js')).matches;
     if (!hosts.some(pattern => {
       const host = pattern.slice('https://'.length, -2);
       return host.startsWith('*.') ? hostname.endsWith(host.slice(1)) : hostname === host;
     })) return;
-    currentPageFill.start({tabId:sender.tab.id,url:sender.url,callerDocumentId:sender.documentId,manual:false})
+    // On same-document navigation Chrome can retain the sender's original URL.
+    // start checks the active tab's live URL and challenges this exact document at that URL.
+    currentPageFill.start({tabId:sender.tab.id,url:message.expectedUrl,callerDocumentId:sender.documentId,manual:false})
       .then(respond,error=>respond({ok:false,error:error.message}));
     return true;
   }
@@ -316,19 +334,21 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
   if (message.action === 'revealIssue' && sender.url === chrome.runtime.getURL('popup.html')) {
     const {tabId,expectedUrl,documentId,frameId,fieldId}=message;
-    pageAction({operation:'reveal',tabId,expectedUrl,documentId,frameId,fieldId},attached,origin)
+    revealReviewedField(tabId,expectedUrl,documentId,{frameId,fieldId})
       .then(()=>respond({ok:true})).catch(error=>respond({ok:false,error:error.message}));
     return true;
   }
-  if (message.action === 'fieldReview' && sender.frameId === 0 && sender.tab?.id && sender.url === sender.tab.url) {
+  if (message.action === 'fieldReview' && sender.frameId === 0 && sender.tab?.id && sender.documentId) {
     (async()=>{
       const tabId=sender.tab.id, key='fillReview:'+tabId;
       const review=(await chrome.storage.session.get(key))[key];
       if(!review?.token || message.token!==review.token)throw new Error('Review expired.');
+      const tab=await chrome.tabs.get(tabId), url=message.expectedUrl;
+      if(tab.url!==url || tab.pendingUrl || new URL(sender.url).origin!==new URL(url).origin ||
+          review.browserDocumentId && review.browserDocumentId!==sender.documentId)throw new Error('Review expired.');
       if(message.command==='refresh'){
-        if(!sender.tab.active || reloadPending || currentPageFill.busy(tabId) || popupPageRequests.has(tabId) ||
-           review.browserDocumentId && review.browserDocumentId!==sender.documentId)throw new Error('Review unavailable.');
-        const result=await pageAction({operation:'inspect',tabId,expectedUrl:sender.url},attached,origin);
+        if(!tab.active || reloadPending || currentPageFill.busy(tabId) || popupPageRequests.has(tabId))throw new Error('Review unavailable.');
+        const result=await pageAction({operation:'inspect',tabId,expectedUrl:url},attached,origin);
         if(result.documentId!==review.documentId)throw new Error('Review expired.');
         const latest=(await chrome.storage.session.get(key))[key];
         if(latest?.token!==review.token)return;
@@ -341,7 +361,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const saved=await saveFillReview(tabId,review.page,review.documentId,next.issues,next.index,{
           browserDocumentId:sender.documentId,phase:next.issues.length?'review':'done',liveUpdate:true,
           summary:next.issues.length?'':'All flagged fields resolved.'});
-        await showPageReview(tabId,sender.url,saved,sender.documentId);
+        await showPageReview(tabId,url,saved,sender.documentId);
         return;
       }
       if(message.command==='close'){await chrome.storage.session.remove(key);return;}
@@ -351,9 +371,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       }
       const target=Number.isSafeInteger(message.index) && review.targets?.[message.index];
       if(message.command!=='show' || !target)throw new Error('Field unavailable.');
-      await pageAction({operation:'reveal',tabId,expectedUrl:sender.url,documentId:review.documentId,
-        frameId:target.frameId,fieldId:target.fieldId},attached,origin);
-    })().then(()=>respond({ok:true})).catch(()=>respond({ok:false}));
+      await revealReviewedField(tabId,url,review.documentId,target);
+    })().then(()=>respond({ok:true})).catch(error=>respond({ok:false,expired:error.message==='Review expired.'}));
     return true;
   }
   if (message.action === 'connect') { connect().then(() => respond({ ok: true })).catch(() => respond({ ok: false, error: 'Could not connect to C3.' })); return true; }

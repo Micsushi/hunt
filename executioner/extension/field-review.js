@@ -62,12 +62,25 @@ function renderFieldReview(expectedUrl, review) {
   const message = node(detail,'p');
   const nav = node(panel,'nav');
   const show = button(nav,'Show field',async () => {
-    const current = index;
-    show.disabled = true;
-    const reply = await send('show');
-    if (index !== current || !host.isConnected) return;
-    show.disabled = false;
-    status.textContent = reply?.ok ? '' : 'This field could not be located. Reopen Hunt to recheck the form.';
+    const selected=review.items[index]?.key;
+    const stillSelected=()=>host.isConnected && selected && review.items[index]?.key===selected;
+    revealing=true;
+    show.disabled=true;
+    status.textContent='';
+    try {
+      await checking;
+      if(!stillSelected())return;
+      const reply=await send('show');
+      if(!stillSelected() || reply?.ok)return;
+      const checked=await send('refresh');
+      if(!stillSelected())return;
+      status.textContent=checked?.expired?'The form has changed. Open Hunt to review this step.':
+        checked?.ok?'Hunt rechecked the form but could not highlight this field.':'Hunt could not recheck this field on the current form.';
+    } finally {
+      revealing=false;
+      if(host.isConnected)show.disabled=false;
+      if(dirty && host.isConnected)schedule();
+    }
   });
   show.className = 'primary';
   const previous = button(nav,'Previous',() => step(-1));
@@ -84,7 +97,7 @@ function renderFieldReview(expectedUrl, review) {
   };
   function send(command) {
     try {
-      return chrome.runtime.sendMessage({action:'fieldReview',token:review.token,command,index}).catch(() => null);
+      return chrome.runtime.sendMessage({action:'fieldReview',token:review.token,command,index,expectedUrl}).catch(() => null);
     } catch { return Promise.resolve(null); }
   }
   function step(delta) {
@@ -100,24 +113,24 @@ function renderFieldReview(expectedUrl, review) {
     label.textContent = item.section ? item.section+' · '+item.label : item.label;
     message.textContent = item.message;
     show.hidden = !item.canShow;
-    show.disabled = false;
+    show.disabled = revealing;
     previous.hidden = next.hidden = review.items.length===1;
     previous.disabled = index===0;
     next.disabled = index===review.items.length-1;
     status.textContent = '';
   }
   const routeChanged = () => { if (location.href !== expectedUrl) remove(); };
-  let timer, checking=false, dirty=false;
+  let timer, checking=null, revealing=false, dirty=false;
   const listeners=new AbortController();
   async function refresh(){
     if(location.href!==expectedUrl){remove();return;}
-    if(checking || document.hidden || !host.isConnected)return;
-    checking=true;
+    if(checking || revealing || document.hidden || !host.isConnected)return;
     dirty=false;
-    const reply=await send('refresh');
-    checking=false;
+    checking=send('refresh');
+    const reply=await checking;
+    checking=null;
     if(host.isConnected && dirty)schedule();
-    else if(host.isConnected)status.textContent=reply?.ok?'':'Could not recheck the form. Reopen Hunt to check the remaining fields.';
+    else if(host.isConnected && !revealing)status.textContent=reply?.ok?'':reply?.expired?'The form has changed. Open Hunt to review this step.':'Could not recheck the form. Reopen Hunt to check the remaining fields.';
   }
   function schedule(){
     dirty=true;

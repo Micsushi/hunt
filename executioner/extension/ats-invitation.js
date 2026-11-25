@@ -82,27 +82,31 @@
     close.onclick = event => {if (event.isTrusted) dismiss();};
     fill.className = 'fill';
     fill.textContent = 'Fill current page';
+    const message = document.createElement('p');
+    message.setAttribute('role','status');
+    message.hidden = true;
     fill.onclick = async event => {
-      if (!event.isTrusted || fill.disabled || location.href !== currentUrl || shadow.host !== host) return;
+      if (!event.isTrusted || fill.disabled || shadow.host !== host) return;
       // A field or route may have changed since the last debounced scan.
-      refresh();
+      refresh(true);
       if (!section.isConnected) return;
       const expectedUrl = currentUrl;
+      message.hidden = true;
       fill.disabled = true;
-      fill.textContent = 'Starting fill…';
+      fill.textContent = 'Checking this page…';
       let reply;
       try { reply = await chrome.runtime.sendMessage({action:'fillFromInvitation',expectedUrl}); } catch {}
       if (!section.isConnected || location.href !== expectedUrl) return;
-      if (reply?.ok && reply.started) dismiss();
+      if (reply?.ok) dismiss();
       else {
-        const message = document.createElement('p');
-        message.setAttribute('role','status');
-        message.textContent = reply?.error || 'Hunt could not confirm the fill request. Check this page in the toolbar.';
-        fill.replaceWith(message);
+        message.textContent = reply?.error || 'Hunt lost the connection. Check the form before trying again.';
+        message.hidden = false;
+        fill.textContent = 'Check again and fill';
+        fill.disabled = false;
       }
     };
     header.append(name,close);
-    section.append(header,fill);
+    section.append(header,message,fill);
     shadow.append(style,section);
     document.documentElement.append(host);
   }
@@ -110,10 +114,10 @@
   function schedule() {
     if (!timer) timer = setTimeout(refresh,160);
   }
-  function refresh() {
+  function refresh(keepOffer=false) {
     clearTimeout(timer);
     timer = null;
-    if (location.href !== currentUrl) {currentUrl = location.href; dismissed = false; remove();}
+    if (location.href !== currentUrl) {currentUrl = location.href; dismissed = false; if(!keepOffer)remove();}
     const icims = location.hostname.endsWith('.icims.com');
     if (document.getElementById('hunt-c3-field-review')) dismissed = true;
     if (dismissed || document.hidden || toolbarUrl === currentUrl ||

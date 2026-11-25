@@ -349,6 +349,18 @@ test('actual popup transport rejects synthetic profiles and keeps queued and cur
         await panelButton('Previous');
         await panelButton('Show field');
         await page.waitForFunction(()=>document.querySelectorAll('input[type=file]')[1]?.getAnimations().length,undefined,{timeout:5000});
+        const reviewKey='fillReview:'+tabId;
+        const oldTarget=await attachments.evaluate(async key=>{
+          const review=(await (globalThis as any).chrome.storage.session.get(key))[key];
+          return review.issues.find((issue:any)=>issue.label==='Transcript').target.fieldId;
+        },reviewKey);
+        await transcript.evaluate(input=>input.replaceWith(input.cloneNode()));
+        await panelButton('Show field');
+        await page.waitForFunction(()=>document.querySelectorAll('input[type=file]')[1]?.getAnimations().length,undefined,{timeout:8000});
+        assert.equal(await attachments.evaluate(async key=>{
+          const review=(await (globalThis as any).chrome.storage.session.get(key))[key];
+          return review.issues[review.index].target.fieldId;
+        },reviewKey),oldTarget,'Show field rechecks and highlights the same issue in one click');
         await panelButton('Close field review');
         await page.locator('#hunt-c3-field-review').waitFor({state:'detached'});
         await findIssue(attachments,/Interview session/i);

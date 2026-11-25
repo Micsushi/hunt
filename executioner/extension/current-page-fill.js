@@ -6,7 +6,7 @@ import { supportsCurrentPage } from './website-handoff.js';
 // destroy the caller (especially its toolbar popup) at any point after that.
 export function createCurrentPageFill(origin, connected, waitForPopupRead=async()=>{}) {
   const active=new Map();
-  const changed='The application page changed. Open Hunt on the current page.';
+  const changed='The form changed before Hunt could start filling. Check the current step and try again.';
   const interrupted='Hunt could not confirm the fill. Check the form before retrying.';
   // A service worker may be evicted or the browser may restart after sending
   // the write. Restore an honest status without replaying that request.
@@ -21,7 +21,9 @@ export function createCurrentPageFill(origin, connected, waitForPopupRead=async(
   })().catch(()=>{});
   async function checkTab(tabId,url) {
     const tab=await chrome.tabs.get(tabId);
-    if(!tab.active || tab.discarded || tab.pendingUrl || tab.url!==url)throw new Error(changed);
+    if(!tab.active)throw new Error('Select the application tab and try again.');
+    if(tab.discarded || tab.pendingUrl)throw new Error('Wait for this application step to finish loading, then try again.');
+    if(tab.url!==url)throw new Error(changed);
   }
   async function identify(tabId,url,documentId,manual) {
     const send=()=>chrome.tabs.sendMessage(tabId,{action:'identifyFillDocument',expectedUrl:url},

@@ -125,7 +125,8 @@ export async function saveFillReview(tabId,page,documentId,issues,index=0,status
 
 export async function showPageReview(tabId,expectedUrl,saved,browserDocumentId) {
   const items=saved?.issues?.map(issue=>({label:issue.label,section:issue.target?.section,message:issue.country
-    ? issue.message+' Open Hunt to use your profile country.' : issue.message,canShow:Boolean(issue.target)}));
+    ? issue.message+' Open Hunt to use your profile country.' : issue.message,canShow:Boolean(issue.target),
+    ...(issue.target && {key:issue.target.frameId+'/'+issue.target.fieldId})}));
   const review=items?.length || saved?.liveUpdate ? {token:saved.token,index:saved.index,items,liveUpdate:!!saved.liveUpdate} : null;
   const options=browserDocumentId ? {documentId:browserDocumentId} : {frameId:0};
   const send=()=>chrome.tabs.sendMessage(tabId,{action:'renderFieldReview',expectedUrl,review},options);

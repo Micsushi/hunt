@@ -56,8 +56,12 @@ test('real extension binds Rippling documents and only permits the verified Smar
       await invitation.waitFor();
       const session=await context!.newCDPSession(page);
       try {
-        const {nodes}=await session.send('Accessibility.getFullAXTree');
-        const node=nodes.find(node=>node.role?.value==='button' && node.name?.value===name);
+        const findButton=async()=>(await session.send('Accessibility.getFullAXTree')).nodes.find(node=>node.role?.value==='button' && node.name?.value===name);
+        let node=await findButton();
+        for(let attempt=0;!node && attempt<40;attempt++){
+          await page.waitForTimeout(50);
+          node=await findButton();
+        }
         assert.ok(node?.backendDOMNodeId,name);
         const {model}=await session.send('DOM.getBoxModel',{backendNodeId:node.backendDOMNodeId});
         const [left,top,,,right,bottom]=model.border;
@@ -73,7 +77,24 @@ test('real extension binds Rippling documents and only permits the verified Smar
     await invitation.waitFor({state:'detached',timeout:5000});
     assert.equal(await page.getByLabel('First name').inputValue(),'','opening the toolbar never starts a fill');
     await popup.evaluate(()=>(globalThis as any).chrome.extension.getViews({type:'popup'})[0].close());
+    const offerStep=offerUrl+'?step=profile';
+    await invitation.waitFor();
+    // Chrome may still identify the script by the URL where it first loaded.
+    await page.evaluate(url=>window.addEventListener('click',()=>history.replaceState({},'',url),{once:true,capture:true}),offerStep);
+    // Model an unsettled tab on the first preflight, before any write.
+    await worker.evaluate(url=>{
+      const tabs=(globalThis as any).chrome.tabs, get=tabs.get.bind(tabs);
+      tabs.get=async(id:number)=>{
+        const tab=await get(id);
+        if(tab.url!==url)return tab;
+        tabs.get=get;
+        return {...tab,pendingUrl:url};
+      };
+    },offerStep);
     await clickOffer('Fill current page');
+    await page.waitForFunction(()=>document.querySelector('#hunt-c3-fill-invitation') && location.search==='?step=profile');
+    assert.equal(await page.getByLabel('First name').inputValue(),'');
+    await clickOffer('Check again and fill');
     await invitation.waitFor({state:'detached'});
     await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('input[autocomplete=given-name]')?.value==='Fixture');
     await page.locator('#hunt-c3-field-review').waitFor();
@@ -82,10 +103,10 @@ test('real extension binds Rippling documents and only permits the verified Smar
     assert.equal(await page.getByLabel('Resume').evaluate((e:HTMLInputElement)=>e.files?.[0]?.text()),resume.toString());
     assert.equal(await page.getByLabel('Transcript').evaluate((e:HTMLInputElement)=>e.files?.length),0);
     assert.equal(await page.evaluate(()=>Boolean((window as any).submitted)),false);
-    const offerTabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((tab:any)=>tab.url===url).id,offerUrl);
+    const offerTabId=await worker.evaluate(async url=>(await (globalThis as any).chrome.tabs.query({})).find((tab:any)=>tab.url===url).id,offerStep);
     const fillHistoryResponse=await fetch(service.origin+'/browser/page-fill-log',{method:'POST',headers:{
       Authorization:'Bearer '+readFileSync(service.tokenPath,'utf8').trim(),'Content-Type':'application/json'},
-      body:JSON.stringify({tabId:offerTabId,expectedUrl:offerUrl})});
+      body:JSON.stringify({tabId:offerTabId,expectedUrl:offerStep})});
     assert.ok(fillHistoryResponse.ok);
     assert.equal((await fillHistoryResponse.json()).runs.length,1,'one invitation click records exactly one fill');
     const candidate='https://careers-example.icims.com/jobs/123/candidate';
@@ -162,7 +183,7 @@ test('real extension binds Rippling documents and only permits the verified Smar
       <label>Optional<input></label><button>Continue</button></form><style>[role=combobox]{height:30px}</style>`}));
     await context.route(issuesUrl,route=>route.fulfill({contentType:'text/html',body:`<form>
       <label>First name<input autocomplete=given-name></label><label>Email<input type=email></label>
-      <label>Email/Login<input type=email required value="bad"></label><label>Password<input type=password required autocomplete=new-password></label>
+      <label>Email/Login<input type=email required value="bad"></label><label>Password<input id="registration-password" type=password required autocomplete=new-password></label>
       <label>Password (Re-enter)<input type=password required value="private-fixture"></label></form>
       <form><label>Newsletter email<input type=email required></label></form>
       <form><label>Cover letter<input type=file required></label></form>
@@ -181,6 +202,13 @@ test('real extension binds Rippling documents and only permits the verified Smar
     assert.equal(province.section,'Address');
     const locate=(issue:Issue)=>popup.evaluate(args=>(globalThis as any).chrome.runtime.sendMessage(args),
       {action:'revealIssue',tabId,expectedUrl:issuesUrl,documentId:inspected.documentId,frameId:issue.frameId,fieldId:issue.fieldId});
+    const passwordIssue=issues.find(i=>i.label==='Password')!;
+    const password=page.locator('#registration-password');
+    await password.evaluate(input=>input.replaceWith(input.cloneNode()));
+    assert.equal((await locate(passwordIssue)).ok,true,'a redrawn password input in the same form is still locatable');
+    assert.equal(await password.evaluate(input=>input.getAnimations().length>0),true);
+    await password.evaluate(input=>input.after(input.cloneNode()));
+    assert.equal((await locate(passwordIssue)).ok,false,'duplicate IDs must not redirect a reveal');
     assert.equal((await locate(province)).ok,true);
     assert.equal(await child.getByLabel('State/Province').evaluate(e=>e.getAnimations().length>0),true);
     assert.equal(await child.getByLabel('State/Province').inputValue(),'-1');

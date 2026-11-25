@@ -170,14 +170,48 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired, readR
         return {target,reason,label,section};
       }
     };
+    // Carry an issue's handle through an inspection when the form replaced its
+    // input but retained a unique ID or the actual label that owned it.
+    for(const binding of state.requiredIssueBindings ?? []){
+      if(binding.control.isConnected)continue;
+      const replacement=binding.replacement();
+      if(replacement && !ids.has(replacement))ids.set(replacement,ids.get(binding.control));
+    }
+    const bindings=[];
     for(const control of controls){
       const issue=issueFor(control);
       if(!issue)continue;
       if(ids.get(control)?.label!==issue.label || ids.get(control)?.section!==issue.section)ids.set(control,{label:issue.label,section:issue.section,id:crypto.randomUUID()});
       const fieldId=ids.get(control).id;
       issues.push({fieldId,label:issue.label,reason:issue.reason,...(issue.section && {section:issue.section})});
-      targets.set(fieldId,()=>{const now=issueFor(control);return now?.target===issue.target && now.label===issue.label && now.section===issue.section ? now.target : null;});
+      const form=control.form, tree=control.getRootNode(), id=control.id;
+      const selector=id && form && issue.target===control ? '#'+CSS.escape(id) : null;
+      const unique=selector && tree.querySelectorAll(selector).length===1;
+      const label=control.labels?.length===1 ? control.labels[0] : null;
+      const replacement=()=>{
+        if(!form?.isConnected)return null;
+        let field;
+        if(id){
+          if(!unique)return null;
+          const matches=tree.querySelectorAll(selector);
+          if(matches.length===1)field=matches[0];
+        }else if(label?.isConnected && label.getRootNode()===tree && label.querySelectorAll('input,select,textarea,button').length===1){
+          field=label.control;
+        }
+        return field && field.form===form && field.tagName===control.tagName &&
+          field.type===control.type && field.name===control.name ? field : null;
+      };
+      bindings.push({control,replacement});
+      targets.set(fieldId,()=>{
+        // A label-only remount gets a fresh inspection before it can be shown.
+        const field=control.isConnected ? control : unique && replacement();
+        if(!field)return null;
+        const now=issueFor(field);
+        return now && now.target===(field===control?issue.target:field) &&
+          now.label===issue.label && now.section===issue.section ? now.target : null;
+      });
     }
+    state.requiredIssueBindings=bindings;
     state.requiredIssueTargets=targets;
     return issues;
   }
