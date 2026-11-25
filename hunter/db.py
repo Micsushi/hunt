@@ -1570,6 +1570,23 @@ def set_runtime_state(key, value):
         return 1
 
 
+def compare_and_set_runtime_state(key, previous, value):
+    """Set a runtime value only if it has not changed since it was read."""
+    with closing(get_connection()) as conn:
+        if previous is None:
+            cursor = conn.execute(
+                "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+                (key, value),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE runtime_state SET value = ? WHERE key = ? AND value = ?",
+                (value, key, previous),
+            )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
 def get_runtime_state(keys):
     with closing(get_connection()) as conn:
         cursor = conn.cursor()

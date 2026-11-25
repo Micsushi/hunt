@@ -773,11 +773,16 @@ until the employer's Apply destination is resolved. If that reveals a
 duplicate, Hunt keeps one active result and prefers a complete non-LinkedIn
 copy when both are complete.
 
-Enrichment checks public employer postings and Indeed before LinkedIn. When
-LinkedIn work is ready, a 25-job batch reserves up to five jobs and caps the
-LinkedIn portion at five. An account rate-limit response stops the batch and
-pauses LinkedIn enrichment on that account for one day. The worker opens the
-saved listing and reads its description and external Apply destination.
+After each discovery scan, the scheduler verifies public employer postings and
+enriches Indeed results. A separate worker spreads 5 to 15 LinkedIn
+enrichment slots across each hour, averaging 10 slots, with one job per slot
+and at least a minute between slot starts. The rolling-hour cap is 15
+scheduled attempts and survives restarts. The worker skips missed slots and
+can do fewer jobs when the queue is empty or the account is paused. An
+account rate-limit response pauses LinkedIn enrichment for one day. Manual
+multi-source enrichment keeps its separate five-job LinkedIn batch cap.
+The worker opens the saved listing and reads its description and external Apply
+destination.
 When the saved session expires, the fallback can save a publicly visible
 description even if it cannot verify an external link. Refresh the saved
 C1 session for direct LinkedIn Apply-link capture. Source rate limits and

@@ -651,15 +651,21 @@ def run_pending_job_enrichment(
     timeout_ms=45000,
     browser_channel=None,
     ui_verify_blocked=False,
+    include_linkedin=True,
 ):
     from hunter.db import (
+        ENRICHMENT_SOURCE_PRIORITY,
         count_ready_linkedin_jobs_for_hiring_cafe_fallback,
         count_ready_public_employer_jobs,
         is_linkedin_auth_available,
     )
 
-    ready_count = count_ready_jobs_for_enrichment() + count_ready_public_employer_jobs()
-    if not is_linkedin_auth_available():
+    board_sources = ENRICHMENT_SOURCE_PRIORITY
+    if not include_linkedin:
+        board_sources = tuple(source for source in board_sources if source != "linkedin")
+    ready_count = count_ready_jobs_for_enrichment(sources=board_sources)
+    ready_count += count_ready_public_employer_jobs()
+    if include_linkedin and not is_linkedin_auth_available():
         ready_count += count_ready_linkedin_jobs_for_hiring_cafe_fallback()
     if ready_count == 0:
         print("[scrape] No supported rows are ready for enrichment after discovery.")
@@ -671,7 +677,7 @@ def run_pending_job_enrichment(
         effective_limit = max(0, min(limit, ready_count))
 
     if effective_limit == 0:
-        print("[scrape] Post-scrape LinkedIn enrichment is enabled, but the configured limit is 0.")
+        print("[scrape] Post-scrape enrichment is enabled, but the configured limit is 0.")
         return 0
 
     print(
@@ -684,6 +690,7 @@ def run_pending_job_enrichment(
 
         return process_multi_source_batch(
             limit=effective_limit,
+            sources=("public_employer", *board_sources),
             storage_state_path=storage_state_path,
             headless=headless,
             slow_mo=slow_mo,
@@ -710,6 +717,7 @@ def scrape(
     include_public_sources=False,
     include_company_queue=False,
     discovery_due_only=False,
+    include_linkedin_enrichment=True,
 ):
     init_db()
     logger = C1Logger()
@@ -869,6 +877,7 @@ def scrape(
             if enrich_pending and not run.stopped():
                 enrichment_exit_code = run_pending_job_enrichment(
                     limit=enrich_limit,
+                    include_linkedin=include_linkedin_enrichment,
                     storage_state_path=storage_state_path,
                     headless=enrichment_headless,
                     slow_mo=enrichment_slow_mo,

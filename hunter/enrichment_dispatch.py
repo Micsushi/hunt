@@ -270,12 +270,15 @@ def run_enrichment_round(
     browser_channel: str | None = None,
     ui_verify_blocked: bool = False,
     return_summary: bool = False,
+    sources: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | int:
     """
     One dispatcher round: walk sources in `ENRICHMENT_SOURCE_PRIORITY`, spend up to `limit`
     attempted jobs across sources. Each source uses only rows where `jobs.source` matches.
     """
     _validate_registry()
+    if sources is None:
+        sources = ("public_employer", *ENRICHMENT_SOURCE_PRIORITY)
     remaining = limit
     aggregate: dict[str, Any] = {
         "exit_code": 0,
@@ -291,16 +294,17 @@ def run_enrichment_round(
         "by_source": {},
     }
 
-    linkedin_paused = is_account_blocked(get_active_account_index())
+    linkedin_enabled = "linkedin" in sources
+    linkedin_paused = linkedin_enabled and is_account_blocked(get_active_account_index())
     linkedin_ready = 0
-    if limit > 1 and not linkedin_paused:
+    if linkedin_enabled and limit > 1 and not linkedin_paused:
         linkedin_ready = count_ready_jobs_for_enrichment(sources=("linkedin",))
         if not linkedin_ready and not get_linkedin_auth_state()["available"]:
             linkedin_ready = count_ready_linkedin_jobs_for_hiring_cafe_fallback()
     # Large public and Indeed queues can otherwise use the whole batch every hour.
     linkedin_reserve = min(LINKEDIN_BATCH_LIMIT, max(1, limit // 5), linkedin_ready)
     public_limit = remaining - linkedin_reserve
-    if public_limit > 0 and count_ready_public_employer_jobs():
+    if "public_employer" in sources and public_limit > 0 and count_ready_public_employer_jobs():
         from hunter.verify_public import process_public_verification_batch
 
         started = monotonic()
@@ -318,7 +322,7 @@ def run_enrichment_round(
     for source in ENRICHMENT_SOURCE_PRIORITY:
         if remaining <= 0:
             break
-        if source not in _REQUIRES_LINKEDIN_SESSION:
+        if source not in sources:
             continue
 
         requires_li = _REQUIRES_LINKEDIN_SESSION[source]
@@ -426,7 +430,11 @@ def run_enrichment_round(
         )
     aggregate["exit_code"] = 0 if aggregate["actionable_failed"] == 0 else 1
     C1Logger().event(
-        key="hunt_last_enrich_summary",
+        key=(
+            "hunt_last_linkedin_enrich_summary"
+            if sources == ("linkedin",)
+            else "hunt_last_enrich_summary"
+        ),
         level="info" if aggregate["exit_code"] == 0 else "warn",
         message="C1 enrichment round finished.",
         code="enrichment_round_summary",

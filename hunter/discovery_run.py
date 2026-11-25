@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 
-from hunter.db import get_connection, get_runtime_state, set_runtime_state
+from hunter.db import compare_and_set_runtime_state, get_runtime_state, set_runtime_state
 
 RUN_KEY = "discovery_run"
 LEASE_KEY = "discovery_run_lease"
@@ -45,23 +45,7 @@ def scan_is_running():
 
 
 def _claim(previous, value):
-    """Compare-and-swap works across both SQLite and PostgreSQL processes."""
-    conn = get_connection()
-    try:
-        if previous is None:
-            cursor = conn.execute(
-                "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
-                (LEASE_KEY, value),
-            )
-        else:
-            cursor = conn.execute(
-                "UPDATE runtime_state SET value = ? WHERE key = ? AND value = ?",
-                (value, LEASE_KEY, previous),
-            )
-        conn.commit()
-        return cursor.rowcount == 1
-    finally:
-        conn.close()
+    return compare_and_set_runtime_state(LEASE_KEY, previous, value)
 
 
 class ScanRun:

@@ -7,10 +7,13 @@ if __package__ is None or __package__ == "":
 import signal
 import time
 from datetime import UTC, datetime
+from threading import Event, Thread
 
 from hunter.config import (
     BACKFILL_HOURS_OLD,
     BACKFILL_INTERVAL_SECONDS,
+    ENRICH_AFTER_SCRAPE,
+    ENRICHMENT_BATCH_LIMIT,
     PUBLIC_FEED_DISCOVERY,
     RUN_INTERVAL_SECONDS,
 )
@@ -21,6 +24,7 @@ from hunter.db import (
     set_runtime_state,
 )
 from hunter.discovery_run import ScanBusy, stop_requested
+from hunter.linkedin_schedule import run_linkedin_enrichment_schedule
 from hunter.scraper import scrape
 
 _shutdown = False
@@ -54,6 +58,17 @@ def _backfill_due(now=None):
 
 
 def main():
+    linkedin_stop = Event()
+    linkedin_worker = None
+    if ENRICH_AFTER_SCRAPE and ENRICHMENT_BATCH_LIMIT > 0:
+        linkedin_worker = Thread(
+            target=run_linkedin_enrichment_schedule,
+            args=(linkedin_stop,),
+            name="linkedin-enrichment",
+            daemon=True,
+        )
+        linkedin_worker.start()
+
     run_number = 0
     while not _shutdown:
         run_number += 1
@@ -72,6 +87,7 @@ def main():
                 include_public_sources=PUBLIC_FEED_DISCOVERY,
                 include_company_queue=True,
                 discovery_due_only=not backfill,
+                include_linkedin_enrichment=False,
             )
             if backfill and not (summary or {}).get("interrupted"):
                 set_runtime_state(_LAST_BACKFILL_KEY, datetime.now(UTC).isoformat())
@@ -104,6 +120,9 @@ def main():
         while time.monotonic() < sleep_end and not _shutdown:
             time.sleep(min(1, max(0, sleep_end - time.monotonic())))
 
+    if linkedin_worker is not None:
+        linkedin_stop.set()
+        linkedin_worker.join()
     print("[runner] Shutting down cleanly.")
 
 
