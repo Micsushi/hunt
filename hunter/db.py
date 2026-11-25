@@ -154,6 +154,8 @@ MIGRATION_COLUMNS = {
     "personal_fit": "TEXT",
     "personal_fit_input": "TEXT",
     "personal_fit_reviewed_at": "TEXT",
+    "personal_fit_role": "TEXT",
+    "personal_fit_seniority": "TEXT",
     "application_date": "TEXT",
     "apply_type": "TEXT",
     "auto_apply_eligible": "BOOLEAN",

@@ -14,10 +14,10 @@ from zoneinfo import ZoneInfo
 from hunter.config import PRIORITY_COMPANIES, REFERRAL_COMPANIES
 from hunter.db import _get_runtime_state_values, _upsert_runtime_state, get_connection
 from hunter.discovery_policy import normalize_company
+from hunter.fit_tags import MAX_REVIEW_SESSIONS, TIER_SQL, validate_fit_decision
 from hunter.job_posting import html_text, normalize_description_text
 
 OWNER_TIMEZONE = ZoneInfo("America/Guatemala")
-DECISIONS = {"yes", "no", "deferred"}
 RECEIPT_KEY = "daily_personal_fit_receipt"
 RUN_KEY = "personal_fit_run"
 DAILY_RECEIPT_KEY = "personal_fit_digest_receipt"
@@ -46,6 +46,8 @@ coalesce(CASE WHEN personal_fit IN ('yes', 'no') THEN personal_fit END, (
     ORDER BY previous.personal_fit_reviewed_at DESC, previous.id DESC LIMIT 1
 ), personal_fit)
 """
+UNTAGGED = "(personal_fit_role IS NULL OR personal_fit_seniority IS NULL)"
+REVIEWABLE_FIT = f"(personal_fit IS NULL OR personal_fit = 'deferred' OR {UNTAGGED})"
 
 
 def owner_day() -> date:
@@ -57,7 +59,16 @@ def date_window(day: date):
 
 
 def view_filter(
-    view, day=None, *, match_days=None, company_limit=2, match_status="all", details="all"
+    view,
+    day=None,
+    *,
+    match_days=None,
+    company_limit=2,
+    match_status="all",
+    details="all",
+    tier=None,
+    role=None,
+    seniority=None,
 ):
     day = day or owner_day()
     cutoff, today = date_window(day)
@@ -73,6 +84,14 @@ def view_filter(
         link_ok = details in {"complete", "description"}
         date_sql += f" AND ({has_description}) = ? AND ({VERIFIED_APPLY}) = ?"
         date_params.extend([description_ok, link_ok])
+    for column, value in (
+        (TIER_SQL, tier),
+        ("personal_fit_role", role),
+        ("personal_fit_seniority", seniority),
+    ):
+        if value is not None:
+            date_sql += f" AND ({column}) = ?"
+            date_params.append(value)
     if view != "matches":
         return (f" AND {HISTORY}" if view == "history" else "") + date_sql, date_params
     readiness = {
@@ -97,11 +116,11 @@ def view_filter(
             ranked AS (
                 SELECT id, {EMPLOYER_KEY} AS employer,
                        row_number() OVER (
-                           PARTITION BY {EMPLOYER_KEY} ORDER BY {POSTED_DATE} DESC, id DESC
+                           PARTITION BY {EMPLOYER_KEY} ORDER BY {TIER_SQL}, {POSTED_DATE} DESC, id DESC
                        ) AS job_rank
                 FROM jobs
                 WHERE {ADVANCEABLE} AND NOT ({HISTORY}) {readiness}
-                  {date_sql} AND ({FIT}) = 'yes'
+                  {date_sql} AND ({TIER_SQL}) IN ('p1', 'p2', 'p3', 'p4', 'p5')
             )
             SELECT ranked.id FROM ranked LEFT JOIN history ON ranked.employer = history.employer
             WHERE ? = 0 OR ranked.job_rank + coalesce(history.slots, 0) <= ?
@@ -127,8 +146,6 @@ def review_candidates(limit, day=None, *, include_deferred=False, run_id=None):
         else ""
     )
     with closing(get_connection()) as conn:
-        publication_window = f"AND {POSTED_DATE} BETWEEN ? AND ?"
-        window_params = (cutoff, today)
         snapshot, snapshot_params = "", ()
         if run_id:
             run = _run_state(conn)
@@ -138,16 +155,14 @@ def review_candidates(limit, day=None, *, include_deferred=False, run_id=None):
             snapshot = """AND id <= ?
                 AND (personal_fit_reviewed_at IS NULL OR personal_fit_reviewed_at < ?)"""
             snapshot_params = (run["through_job_id"], started.isoformat())
-            if run["trigger"] == "backfill":
-                publication_window, window_params = "", ()
         rows = conn.execute(
             f"""
             SELECT id, title, company, location, description,
                    normalized_company
             FROM jobs
-            WHERE {ADVANCEABLE} AND NOT ({HISTORY}) {publication_window}
+            WHERE {ADVANCEABLE} AND NOT ({HISTORY}) AND {POSTED_DATE} BETWEEN ? AND ?
               {snapshot}
-              AND (personal_fit IS NULL OR (
+              AND (personal_fit IS NULL OR {UNTAGGED} OR (
                   personal_fit = 'deferred' AND (? OR coalesce(personal_fit_input, '') !=
                       CASE WHEN length(trim(coalesce(description, ''))) > 0 THEN 'description'
                            ELSE 'title' END)
@@ -157,12 +172,14 @@ def review_candidates(limit, day=None, *, include_deferred=False, run_id=None):
                   WHERE reviewed.canonical_job_key = jobs.canonical_job_key
                     AND nullif(reviewed.canonical_job_key, '') IS NOT NULL
                     AND reviewed.personal_fit IN ('yes', 'no')
+                    AND reviewed.personal_fit_role IS NOT NULL
+                    AND reviewed.personal_fit_seniority IS NOT NULL
               )
             ORDER BY CASE WHEN personal_fit IS NULL THEN 0 ELSE 1 END,
                      {POSTED_DATE} DESC, {priority_order} id DESC
             LIMIT ?
             """,
-            (*window_params, *snapshot_params, include_deferred, *names, limit),
+            (cutoff, today, *snapshot_params, include_deferred, *names, limit),
         )
         results = []
         for row in rows:
@@ -297,6 +314,7 @@ def review_stages(job_ids, day=None, *, current_matches=False):
             f"""
             SELECT id, ({FIT}) AS decision, ({ADVANCEABLE}) AS can_review,
                    ({VISIBLE}) AS can_show, ({HISTORY}) AS history,
+                   NOT {UNTAGGED} AS tagged, ({TIER_SQL}) AS tier,
                    CASE WHEN {POSTED_DATE} BETWEEN ? AND ? THEN 1 ELSE 0 END AS recent,
                    discovery_suppressed_reason, last_enrichment_error, apply_type, status, date_posted
             FROM jobs WHERE id IN ({",".join("?" for _ in job_ids)})
@@ -307,7 +325,10 @@ def review_stages(job_ids, day=None, *, current_matches=False):
             visible_job_ids(conn, day)
             if not current_matches
             and any(
-                row["decision"] == "yes" and row["can_review"] and row["recent"] for row in rows
+                row["tier"] in ("p1", "p2", "p3", "p4", "p5")
+                and row["can_review"]
+                and row["recent"]
+                for row in rows
             )
             else set()
         )
@@ -320,6 +341,13 @@ def review_stages(job_ids, day=None, *, current_matches=False):
             stage = "approved_applied" if status == "applied" else "approved_canceled"
         elif row["history"]:
             stage = "application_history"
+        elif (
+            row["recent"]
+            and row["can_review"]
+            and decision in ("yes", "no", "deferred")
+            and not row["tagged"]
+        ):
+            stage = "awaiting_tags"
         elif decision == "no":
             stage = "ai_rejected"
         elif not row["can_review"]:
@@ -336,31 +364,34 @@ def review_stages(job_ids, day=None, *, current_matches=False):
             stage, reason = "approved_filtered", "posting_date_unknown"
         elif not current_matches and not row["recent"]:
             stage = "approved_outside_window"
-        elif not current_matches and row["id"] not in visible:
+        elif not current_matches and row["tier"] is not None and row["id"] not in visible:
             stage = "approved_company_limit"
         elif not row["can_show"]:
             stage = "approved_waiting_for_verification"
             reason = reason or row["last_enrichment_error"]
         else:
             stage = "approved_visible"
-        result[row["id"]] = {"stage": stage, "reason": reason}
+        result[row["id"]] = {"stage": stage, "reason": reason, "tier": row["tier"]}
     return result
 
 
 def record_decisions(entries, *, day=None, run_id=None, partial=False):
     day = day or owner_day()
+    cutoff, today = date_window(day)
     if not isinstance(entries, list) or len(entries) > 100:
         raise ValueError("Expected a list of at most 100 decisions.")
+    decisions = {}
     for entry in entries:
         if (
             not isinstance(entry, dict)
             or type(entry.get("id")) is not int
-            or not isinstance(entry.get("decision"), str)
-            or entry["decision"] not in DECISIONS
             or not isinstance(entry.get("revision"), str)
         ):
-            raise ValueError("Every decision needs an integer id, revision, and yes/no/deferred.")
-    if len({entry["id"] for entry in entries}) != len(entries):
+            raise ValueError("Every decision needs an integer ID and revision.")
+        decisions[entry["id"]] = validate_fit_decision(
+            entry.get("decision"), entry.get("role"), entry.get("seniority")
+        )
+    if len(decisions) != len(entries):
         raise ValueError("Decision IDs must be unique.")
 
     with closing(get_connection()) as conn:
@@ -383,8 +414,8 @@ def record_decisions(entries, *, day=None, run_id=None, partial=False):
             row = conn.execute(
                 f"""SELECT id, title, company, location, description
                     FROM jobs WHERE id = ? AND {ADVANCEABLE}
-                    AND NOT ({HISTORY}) AND (personal_fit IS NULL OR personal_fit = 'deferred')""",
-                (entry["id"],),
+                    AND NOT ({HISTORY}) AND {POSTED_DATE} BETWEEN ? AND ? AND {REVIEWABLE_FIT}""",
+                (entry["id"], cutoff, today),
             ).fetchone()
             if row is None or _revision(_review_posting(row)) != entry["revision"]:
                 if run.get("trigger") == "backfill":
@@ -393,13 +424,15 @@ def record_decisions(entries, *, day=None, run_id=None, partial=False):
                     f"Job {entry['id']} changed during review. No decisions were saved."
                 )
             result = conn.execute(
-                """UPDATE jobs SET personal_fit = ?, personal_fit_input = ?,
-                       personal_fit_reviewed_at = ?
-                   WHERE id = ? AND (personal_fit IS NULL OR personal_fit = 'deferred')""",
+                f"""UPDATE jobs SET personal_fit = ?, personal_fit_input = ?,
+                       personal_fit_reviewed_at = ?, personal_fit_role = ?, personal_fit_seniority = ?
+                   WHERE id = ? AND {REVIEWABLE_FIT}""",
                 (
-                    entry["decision"],
+                    decisions[entry["id"]],
                     "description" if (row["description"] or "").strip() else "title",
                     datetime.now(OWNER_TIMEZONE).isoformat(),
+                    entry["role"],
+                    entry["seniority"],
                     entry["id"],
                 ),
             )
@@ -507,8 +540,9 @@ def main():
     notify.add_argument("hunt_url")
     args = parser.parse_args()
     if args.command == "queue":
-        if not 1 <= args.limit <= 400 or (args.limit > 100 and args.run_id is None):
-            parser.error("--limit must be 1 to 100, or up to 400 for an active review")
+        largest = 100 * MAX_REVIEW_SESSIONS if args.run_id else 100
+        if not 1 <= args.limit <= largest:
+            parser.error(f"--limit must be between 1 and {largest}")
         result = review_candidates(
             args.limit, include_deferred=args.include_deferred, run_id=args.run_id
         )

@@ -10,6 +10,9 @@ export function jobsQueryParams(q: JobsQuery): URLSearchParams {
   if (q.company_limit !== undefined) p.set('company_limit', String(q.company_limit))
   if (q.match_status) p.set('match_status', q.match_status)
   if (q.details && q.details !== 'all') p.set('details', q.details)
+  if (q.tier) p.set('tier', q.tier)
+  if (q.role) p.set('role', q.role)
+  if (q.seniority) p.set('seniority', q.seniority)
   if (q.source) p.set('source', q.source)
   if (q.status) p.set('status', q.status)
   if (q.limit !== undefined) p.set('limit', String(q.limit))
@@ -136,6 +139,20 @@ export function bulkSelection(payload: {
 }
 
 export type ApplicationStatus = 'new' | 'applied' | 'canceled'
+export type ApplicationState = { status: ApplicationStatus; application_date: string | null }
+export type JobEnrichmentFields = {
+  description: string | null
+  description_source: string | null
+  apply_url: string | null
+}
+
+export function editJobEnrichment(
+  id: number,
+  fields: JobEnrichmentFields,
+  expected: JobEnrichmentFields,
+) {
+  return patch<JobEnrichmentFields>(`/api/jobs/${id}/enrichment`, { fields, expected })
+}
 
 export function setApplicationStatus(
   id: number,

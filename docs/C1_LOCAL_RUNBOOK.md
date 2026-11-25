@@ -663,7 +663,17 @@ verified. **Status** tracks fit and application history. Use
 applied and canceled jobs. **Enrichment** shows whether the job has a
 description and a verified application link. Those details can be filtered
 independently. Open **Listing** to view a match that still needs verification.
-Change the application status on a job's detail page.
+Change application status in the Jobs list. Select the enrichment tag to edit
+the description or application link in place. A changed link needs verification.
+
+The reviewer records role type and seniority independently from fit and
+enrichment. My matches shows confirmed P1–P5 jobs and sorts by tier first.
+P1 covers new-grad and junior software or ML engineering. P2 covers software
+or ML internships and co-ops. P3 covers data science and analytics, P4 covers
+IT, and P5 covers business analysis and other tech-adjacent roles. Jobs above
+junior or otherwise unsuitable stay in All jobs. Ambiguous roles can wait for
+more information. Use **Fit tier**, **Role type**, and **Seniority** to narrow
+the list.
 
 **Posting date** defaults to **Past 2 weeks** in My matches. It uses the date
 the employer published the job. Select **Any date** to include jobs with an
@@ -672,8 +682,8 @@ removed. Applications in the last 14 days consume slots and canceled jobs
 release them. For older imported applications without an application date, C1
 uses the saved posting date when available. An application with neither date
 counts conservatively. **My matches** fills the remaining slots with the
-newest eligible postings. The application verification and C3 gates remain
-separate from fit review.
+highest-tier eligible postings, newest first within a tier. Application
+verification and the C3 gates remain separate from fit review.
 
 ### Import the existing tracker
 
@@ -730,10 +740,11 @@ progress, completed, failed, or unconfirmed. The button is disabled while a
 review is queued or running. An authenticated integration can
 call `POST /api/jobs/fit-review` and poll `GET /api/jobs/fit-review`. A second
 request during an active run returns the existing run. Manual and scheduled
-reviews handle the last 14 days, newest first. A standalone `--backfill`
-reviews the remaining eligible catalog without a posting-date cutoff. It
+reviews handle the last 14 days, newest first. The first pass also retags
+existing decisions in that window. A standalone `--backfill` runs the same
+14-day review in parallel without sending a digest. It
 uses GPT-6 Luna on low effort with a fresh context for each batch of up to
-100 jobs. Use `--parallel` to run up to four disjoint batches together under
+100 jobs. Use `--parallel` to run up to ten disjoint batches together under
 the same review. Each batch saves its decisions as soon as it finishes. Fit
 review can use the title and any available job details.
 

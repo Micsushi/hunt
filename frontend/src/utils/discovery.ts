@@ -1,4 +1,54 @@
-import type { Job, JobDetailsFilter } from '@/types/job'
+import type { FitRole, FitSeniority, FitTier, Job, JobDetailsFilter } from '@/types/job'
+
+export const fitTierLabels: Record<FitTier, string> = {
+  p1: 'P1 · New grad and junior software / ML',
+  p2: 'P2 · Software / ML internships',
+  p3: 'P3 · Data science and analytics',
+  p4: 'P4 · IT',
+  p5: 'P5 · Business and tech-adjacent',
+  outside_scope: 'Outside scope',
+}
+
+export const fitRoleLabels: Record<FitRole, string> = {
+  software: 'Software',
+  ml_engineering: 'ML engineering',
+  data: 'Data science and analytics',
+  it: 'IT',
+  business: 'Business and tech-adjacent',
+  other: 'Other',
+  unknown: 'Unclear role',
+}
+
+export const fitSeniorityLabels: Record<FitSeniority, string> = {
+  intern: 'Intern / co-op',
+  new_grad: 'New grad',
+  junior: 'Junior',
+  above_junior: 'Above junior',
+  unknown: 'Unclear seniority',
+}
+
+function knownFitValue<T extends string>(value: string | null, labels: Record<T, string>) {
+  return value && Object.prototype.hasOwnProperty.call(labels, value) ? (value as T) : undefined
+}
+
+export function fitFilters(params: URLSearchParams) {
+  return {
+    tier: knownFitValue(params.get('tier'), fitTierLabels),
+    role: knownFitValue(params.get('role'), fitRoleLabels),
+    seniority: knownFitValue(params.get('seniority'), fitSeniorityLabels),
+  }
+}
+
+export function jobFitTags(job: Job, includeTier = true): string {
+  const tier = job.fit_tier ?? job.fit_review?.tier
+  return [
+    includeTier && (tier === 'outside_scope' ? 'Outside scope' : tier?.toUpperCase()),
+    job.personal_fit_role && fitRoleLabels[job.personal_fit_role],
+    job.personal_fit_seniority && fitSeniorityLabels[job.personal_fit_seniority],
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
 
 export const detailQualityLabels: Record<string, string> = {
   enriched: 'Description + link',
@@ -34,6 +84,12 @@ export function jobEnrichmentLabel(job: Job & { description?: string | null }): 
   const hasLink = verifiedApplyLink(job)
   if (hasDescription) return enrichmentLabels[hasLink ? 'complete' : 'link']
   return enrichmentLabels[hasLink ? 'description' : 'both']
+}
+
+export function shortEnrichmentLabel(job: Job): string {
+  if (job.enrichment_status === 'processing') return 'Checking'
+  if (job.has_description) return verifiedApplyLink(job) ? 'Complete' : 'Link check'
+  return verifiedApplyLink(job) ? 'No description' : 'Both needed'
 }
 
 export function enrichmentIssue(job: Job): string | null {
@@ -78,6 +134,7 @@ export function discoveryLabel(
 
 const fitLabels: Record<NonNullable<Job['fit_review']>['stage'], string> = {
   awaiting_review: 'Awaiting AI review',
+  awaiting_tags: 'Awaiting tier review',
   outside_review_window: 'Filtered before AI · Outside review window',
   filtered_before_ai: 'Filtered before AI',
   needs_information: 'AI reviewed · Needs more information',
@@ -121,6 +178,7 @@ export function jobReviewStatus(job: Job): string {
   if (error === 'job_removed') return 'Posting closed'
   if (job.apply_type === 'easy_apply') return 'Easy Apply only'
   const fit = job.fit_review
+  if (fit?.stage === 'awaiting_tags') return 'Awaiting tier review'
   if (fit?.stage === 'ai_rejected' || job.personal_fit === 'no') return 'Doesn’t match'
   if (fit?.stage === 'needs_information' || job.personal_fit === 'deferred')
     return 'Fit needs more information'

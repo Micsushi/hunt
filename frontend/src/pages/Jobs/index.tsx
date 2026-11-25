@@ -3,20 +3,26 @@ import { timeAgo } from '@/utils/time'
 import {
   detailsFilter,
   enrichmentIssue,
+  fitFilters,
   jobEnrichmentLabel,
+  jobFitTags,
   jobReviewStatus,
   matchHoldReason,
+  shortEnrichmentLabel,
   verifiedApplyLink,
 } from '@/utils/discovery'
 import { fetchFitReview, jobsQueryParams as queryToParams, requestFitReview } from '@/api/jobs'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
+import { applicationState, useJobEdits } from '@/hooks/useJobEdits'
+import type { ApplicationStatus } from '@/api/jobs'
 import { useSummary } from '@/hooks/useSummary'
 import { useUiStore } from '@/store/ui'
 import { Filters } from '@/components/Filters'
 import { Pagination } from '@/components/Pagination'
 import { BulkBar } from '@/components/BulkBar'
+import { InlineEnrichment } from './InlineEnrichment'
 import styles from './Jobs.module.css'
 import type { FitReviewRun, JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
@@ -33,6 +39,7 @@ const JOB_VIEWS = [
 function queryFromParams(p: URLSearchParams): JobsQuery {
   const view = p.get('view') === 'all' ? 'all' : p.get('view') === 'history' ? 'history' : 'matches'
   const matchStatus = p.get('match_status')
+  const sort = (p.get('sort') || (view === 'matches' ? 'fit_tier' : 'date_scraped')) as SortField
   return {
     view,
     match_days: boundedParam(p.get('match_days'), view === 'matches' ? 14 : 0, 365),
@@ -40,14 +47,15 @@ function queryFromParams(p: URLSearchParams): JobsQuery {
     match_status:
       matchStatus === 'ready' || matchStatus === 'needs_verification' ? matchStatus : 'all',
     details: detailsFilter(p.get('details')),
+    ...fitFilters(p),
     source: p.get('source') || 'all',
     status: p.get('status') || 'all',
     q: p.get('q') || '',
     tag: p.get('tag') || '',
     category: p.get('category') || '',
     ats_type: p.get('ats_type') || '',
-    sort: (p.get('sort') || (view === 'matches' ? 'date_posted' : 'date_scraped')) as SortField,
-    direction: (p.get('direction') || 'desc') as SortDirection,
+    sort,
+    direction: (p.get('direction') || (sort === 'fit_tier' ? 'asc' : 'desc')) as SortDirection,
     limit: Math.max(1, parseInt(p.get('limit') || '50', 10) || 50),
     page: Math.max(1, parseInt(p.get('page') || '1', 10) || 1),
   }
@@ -273,6 +281,17 @@ export function JobsPage() {
   const { selectedIds, toggleSelect, selectAll, clearSelection, setSelectionQuery } = useUiStore()
   const selectionReady = !isLoading && !isError && !isPlaceholderData
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const countRef = useRef<HTMLSpanElement>(null)
+  const editTrigger = useRef<HTMLButtonElement | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const edits = useJobEdits()
+  function closeEditor() {
+    setEditingId(null)
+    requestAnimationFrame(() => {
+      if (editTrigger.current?.isConnected) editTrigger.current.focus()
+      else countRef.current?.focus()
+    })
+  }
   const tbodyRef = useRef<HTMLTableSectionElement>(null)
   const [focusIdx, setFocusIdx] = useState(-1)
   const [localSort, setLocalSort] = useState<LocalSort | null>(null)
@@ -326,7 +345,7 @@ export function JobsPage() {
         e.altKey ||
         e.metaKey ||
         target?.closest(
-          'input, textarea, select, [role="dialog"], [contenteditable]:not([contenteditable="false"])',
+          'input, textarea, select, button, a, [role="dialog"], [contenteditable]:not([contenteditable="false"])',
         )
       )
         return
@@ -367,15 +386,23 @@ export function JobsPage() {
 
   const isMatches = query.view === 'matches'
   const columns = isMatches
-    ? ['Title', 'Company', 'Posted', 'Status', 'Enrichment', 'Links']
-    : ['Title', 'Company', 'Posted', 'Status', 'Enrichment', 'Links', 'Added']
+    ? ['Title', 'Company', 'Posted', 'Tier', 'Status', 'Enrichment', 'Links']
+    : ['Title', 'Company', 'Posted', 'Tier', 'Status', 'Enrichment', 'Links', 'Added']
 
   function renderJob(job: Job, idx: number) {
     const checked = selectedIds.has(job.id)
     const jobState = jobReviewStatus(job)
     const hold = matchHoldReason(job.fit_review)
+    const tags = jobFitTags(job, false)
     const issue = enrichmentIssue(job)
     const hasVerifiedLink = verifiedApplyLink(job)
+    const state = applicationState(job).status
+    const tier = job.fit_tier ?? job.fit_review?.tier
+    const shortStatus = jobState.startsWith('Awaiting')
+      ? 'Review'
+      : jobState === 'Fit needs more information'
+        ? 'Needs info'
+        : jobState
     return (
       <tr
         key={job.id}
@@ -397,6 +424,7 @@ export function JobsPage() {
           <Link to={`/jobs/${job.id}${detailSearch}`} onClick={(event) => event.stopPropagation()}>
             {job.title || `Job #${job.id}`}
           </Link>
+          {tags && <small>{tags}</small>}
         </td>
         <td className={styles.companyCell} title={job.company ?? undefined}>
           {job.company ?? '-'}
@@ -408,15 +436,53 @@ export function JobsPage() {
             'Date unknown'
           )}
         </td>
-        <td className={styles.statusCell}>
-          <span className={styles.jobStatus} data-confirmed={jobState === 'Confirmed' || undefined}>
-            {jobState}
-          </span>
+        <td className={styles.tierCell}>
+          {tier && (
+            <span
+              className={styles.tierTag}
+              title={tier === 'outside_scope' ? 'Outside scope' : undefined}
+            >
+              {tier === 'outside_scope' ? 'Out' : tier.toUpperCase()}
+            </span>
+          )}
+        </td>
+        <td className={styles.statusCell} onClick={(event) => event.stopPropagation()}>
+          <select
+            className={styles.rowSelect}
+            value={state}
+            title={jobState}
+            aria-label={`Status for ${job.title}`}
+            data-confirmed={jobState === 'Confirmed' || undefined}
+            disabled={edits.pending || !selectionReady}
+            onChange={async (event) => {
+              const control = event.currentTarget
+              if (await edits.changeStatus(job, control.value as ApplicationStatus)) {
+                if (!control.isConnected && document.activeElement === document.body)
+                  countRef.current?.focus()
+              }
+            }}
+          >
+            <option value="new">{state === 'new' ? shortStatus : 'Not applied'}</option>
+            <option value="applied">Applied</option>
+            <option value="canceled">Canceled</option>
+          </select>
           {hold && <small>{hold}</small>}
         </td>
-        <td className={styles.enrichmentCell}>
-          <span>{jobEnrichmentLabel(job)}</span>
-          {issue && <small>{issue}</small>}
+        <td className={styles.enrichmentCell} onClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className={styles.enrichmentTag}
+            title={[jobEnrichmentLabel(job), issue].filter(Boolean).join(' · ')}
+            aria-label={`Edit enrichment for ${job.title}: ${jobEnrichmentLabel(job)}`}
+            aria-expanded={editingId === job.id}
+            disabled={editingId !== null || edits.pending || !selectionReady}
+            onClick={(event) => {
+              editTrigger.current = event.currentTarget
+              setEditingId(job.id)
+            }}
+          >
+            {shortEnrichmentLabel(job)}
+          </button>
         </td>
         <td className={styles.linksCell} onClick={(e) => e.stopPropagation()}>
           {job.job_url && (!isMatches || !hasVerifiedLink) && (
@@ -430,17 +496,20 @@ export function JobsPage() {
               Listing ↗
             </a>
           )}
-          {job.apply_url && (!isMatches || hasVerifiedLink) && (
-            <a
-              href={job.apply_url}
-              target="_blank"
-              rel="noreferrer"
-              title="Apply page"
-              className={styles.extLink}
-            >
-              Apply ↗
-            </a>
-          )}
+          {job.apply_url &&
+            (!isMatches ||
+              hasVerifiedLink ||
+              job.last_enrichment_error === 'manual_apply_url_unverified') && (
+              <a
+                href={job.apply_url}
+                target="_blank"
+                rel="noreferrer"
+                title="Apply page"
+                className={styles.extLink}
+              >
+                {hasVerifiedLink ? 'Apply ↗' : 'Link ↗'}
+              </a>
+            )}
         </td>
         {!isMatches && (
           <td className={styles.addedCell} title={job.date_scraped ?? undefined}>
@@ -504,9 +573,12 @@ export function JobsPage() {
                 company_limit: 2,
                 match_status: 'all',
                 details: 'all',
+                tier: undefined,
+                role: undefined,
+                seniority: undefined,
                 status: 'all',
-                sort: view === 'matches' ? 'date_posted' : 'date_scraped',
-                direction: 'desc',
+                sort: view === 'matches' ? 'fit_tier' : 'date_scraped',
+                direction: view === 'matches' ? 'asc' : 'desc',
                 page: 1,
               })
             }}
@@ -526,7 +598,7 @@ export function JobsPage() {
 
       {/* Export row */}
       <div className={styles.exportRow}>
-        <span role="status" className="muted">
+        <span role="status" className="muted" ref={countRef} tabIndex={-1}>
           {isLoading
             ? 'Loading jobs…'
             : isPlaceholderData
@@ -535,6 +607,23 @@ export function JobsPage() {
                 ? ''
                 : `${jobs.length} of ${total} jobs`}
         </span>
+        {(['undo', 'redo'] as const).map(
+          (action) =>
+            edits[action] && (
+              <button
+                type="button"
+                key={action}
+                className={styles.exportBtn}
+                disabled={edits.pending}
+                title={edits[action]?.title}
+                onClick={async () => {
+                  if (await edits.historyAction(action)) countRef.current?.focus()
+                }}
+              >
+                {action === 'undo' ? 'Undo' : 'Redo'}
+              </button>
+            ),
+        )}
         <span className={styles.exportRowLabel}>Export</span>
         <a
           className={styles.exportBtn}
@@ -563,6 +652,19 @@ export function JobsPage() {
       </div>
 
       {/* Table */}
+      {edits.error && (
+        <p role="alert" className={styles.editError}>
+          {edits.error}
+        </p>
+      )}
+      {editingId !== null && (
+        <InlineEnrichment
+          jobId={editingId}
+          pending={edits.pending}
+          close={closeEditor}
+          save={edits.changeEnrichment}
+        />
+      )}
       <div
         className={styles.tableWrap}
         role="region"

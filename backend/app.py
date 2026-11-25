@@ -97,6 +97,7 @@ from hunter.db import (  # noqa: E402
 )
 from hunter.db_compat import is_integrity_error  # noqa: E402
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
+from hunter.fit_tags import FitRole, FitSeniority, FitTier  # noqa: E402
 from hunter.personal_fit import request_review, review_stages, review_status  # noqa: E402
 from shared.paths import get_frontend_dist  # noqa: E402
 
@@ -3405,12 +3406,18 @@ def job_match_options(
     company_limit: int = Query(2, ge=0, le=20),
     match_status: Literal["all", "ready", "needs_verification"] = "all",
     details: Literal["all", "complete", "description", "link", "both"] = "all",
+    tier: FitTier | None = None,
+    role: FitRole | None = None,
+    seniority: FitSeniority | None = None,
 ):
     return {
         "match_days": match_days,
         "company_limit": company_limit,
         "match_status": match_status,
         "details": details,
+        "tier": tier,
+        "role": role,
+        "seniority": seniority,
     }
 
 
@@ -5479,6 +5486,47 @@ def api_job_application_status(
         raise HTTPException(status_code=409, detail="Application status changed. Reload the job.")
     job = get_job_by_id(job_id)
     return {"status": job["status"], "application_date": job["application_date"]}
+
+
+class JobEnrichmentFields(BaseModel):
+    description: str | None
+    description_source: str | None
+    apply_url: str | None
+
+
+class JobEnrichmentUpdate(BaseModel):
+    fields: JobEnrichmentFields
+    expected: JobEnrichmentFields
+
+
+@app.patch("/api/jobs/{job_id}/enrichment", dependencies=[Depends(review_ops_dependency)])
+def api_edit_job_enrichment(job_id: int, update: JobEnrichmentUpdate):
+    from backend.db import edit_job_enrichment
+
+    fields = update.fields.model_dump()
+    expected = update.expected.model_dump()
+    url = fields["apply_url"]
+    if url and url != expected["apply_url"]:
+        try:
+            parsed = urlsplit(url)
+            valid_url = (
+                parsed.scheme in ("http", "https")
+                and parsed.hostname
+                and parsed.username is None
+                and not any(char.isspace() for char in url)
+                and "\\" not in url
+            )
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            raise HTTPException(status_code=400, detail="Enter a valid HTTP or HTTPS URL.")
+    if not edit_job_enrichment(job_id, fields, expected):
+        if not get_job_by_id(job_id):
+            raise HTTPException(status_code=404, detail="Job not found.")
+        raise HTTPException(
+            status_code=409, detail="Enrichment changed or is running. Reopen the editor."
+        )
+    return fields
 
 
 @app.patch("/api/jobs/{job_id}", dependencies=[Depends(review_ops_dependency)])

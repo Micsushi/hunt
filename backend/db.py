@@ -8,12 +8,14 @@ import the historical names from there.
 from __future__ import annotations
 
 import json
+from contextlib import closing
 from datetime import timedelta
 
 from hunter import config
 from hunter import db as hunter_db
 from hunter.config import ENRICHMENT_MAX_ATTEMPTS, ENRICHMENT_STALE_PROCESSING_MINUTES
 from hunter.enrichment_policy import format_sqlite_timestamp, utc_now
+from hunter.fit_tags import TIER_SQL
 from hunter.personal_fit import view_filter
 
 TERMINAL_ENRICHMENT_STATUSES = (
@@ -417,7 +419,7 @@ def list_jobs_for_review(
     try:
         cursor = conn.cursor()
         base_select = (
-            """
+            f"""
             SELECT id, title, company, source, job_url, apply_url, description,
                    trim(coalesce(description, '')) != '' AS has_description,
                    status, apply_type, auto_apply_eligible, enrichment_status,
@@ -425,7 +427,8 @@ def list_jobs_for_review(
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
                    last_artifact_dir, last_artifact_screenshot_path, last_artifact_html_path, last_artifact_text_path,
                    date_scraped, date_posted, is_remote, level, category, priority, operator_notes, operator_tag,
-                   discovery_suppressed_reason, discovery_policy_version, personal_fit, application_date
+                   discovery_suppressed_reason, discovery_policy_version, personal_fit, application_date,
+                   personal_fit_role, personal_fit_seniority, ({TIER_SQL}) AS fit_tier
             FROM jobs
             WHERE 1=1
         """
@@ -464,6 +467,8 @@ def list_jobs_for_review(
                      CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
                      id DESC
             """
+        elif sort == "fit_tier":
+            base_select += f" ORDER BY {TIER_SQL} {safe_direction} NULLS LAST, coalesce(nullif(date_posted, ''), date_scraped) DESC, id DESC"
         else:
             base_select += f" ORDER BY {safe_sort_sql} {safe_direction}, id DESC"
 
@@ -540,6 +545,8 @@ def list_job_ids_for_review(
                      CASE WHEN enrichment_status != 'pending' THEN next_enrichment_retry_at END ASC,
                      id DESC
             """
+        elif sort == "fit_tier":
+            sql += f" ORDER BY {TIER_SQL} {safe_direction} NULLS LAST, coalesce(nullif(date_posted, ''), date_scraped) DESC, id DESC"
         else:
             sql += f" ORDER BY {safe_sort_sql} {safe_direction}, id DESC"
         return [int(row[0]) for row in cursor.execute(sql, tuple(params)).fetchall()]
@@ -727,6 +734,30 @@ def patch_job(job_id: int, fields: dict) -> int:
         return cursor.rowcount
     finally:
         conn.close()
+
+
+def edit_job_enrichment(job_id: int, fields: dict, expected: dict) -> bool:
+    keys = ("description", "description_source", "apply_url")
+    assignments = [f"{key} = ?" for key in keys]
+    if fields["apply_url"] != expected["apply_url"]:
+        assignments += [
+            "auto_apply_eligible = FALSE",
+            "apply_type = CASE WHEN apply_type = 'easy_apply' THEN apply_type ELSE 'unknown' END",
+            "apply_host = NULL",
+            "ats_type = NULL",
+            "enrichment_status = 'blocked'",
+            "last_enrichment_error = 'manual_apply_url_unverified'",
+        ]
+    checks = " AND ".join(f"{key} IS NOT DISTINCT FROM ?" for key in keys)
+    params = (*[fields[key] for key in keys], job_id, *[expected[key] for key in keys])
+    with closing(hunter_db.get_connection()) as conn:
+        updated = conn.execute(
+            f"UPDATE jobs SET {', '.join(assignments)} WHERE id = ? AND {checks} "
+            "AND coalesce(enrichment_status, '') != 'processing'",
+            params,
+        ).rowcount
+        conn.commit()
+    return updated == 1
 
 
 def list_runtime_state_recent(*, limit=40):

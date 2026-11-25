@@ -12,6 +12,7 @@ export type EnrichmentStatus =
 
 export type FitReviewStage =
   | 'awaiting_review'
+  | 'awaiting_tags'
   | 'outside_review_window'
   | 'filtered_before_ai'
   | 'needs_information'
@@ -36,6 +37,16 @@ export interface FitReviewRun {
 
 export type JobSource = string
 export type ApplyType = 'external_apply' | 'easy_apply' | 'unknown'
+export type FitTier = 'p1' | 'p2' | 'p3' | 'p4' | 'p5' | 'outside_scope'
+export type FitRole =
+  | 'software'
+  | 'ml_engineering'
+  | 'data'
+  | 'it'
+  | 'business'
+  | 'other'
+  | 'unknown'
+export type FitSeniority = 'intern' | 'new_grad' | 'junior' | 'above_junior' | 'unknown'
 
 /** Row returned by GET /api/jobs (list view - no description by default) */
 export interface Job {
@@ -43,7 +54,10 @@ export interface Job {
   status?: string | null
   application_date?: string | null
   personal_fit?: 'yes' | 'no' | 'deferred' | null
-  fit_review?: { stage: FitReviewStage; reason: string | null } | null
+  personal_fit_role?: FitRole | null
+  personal_fit_seniority?: FitSeniority | null
+  fit_tier?: FitTier | null
+  fit_review?: { stage: FitReviewStage; reason: string | null; tier?: FitTier | null } | null
   title: string
   company: string
   location: string | null
@@ -120,6 +134,7 @@ export type SortField =
   | 'id'
   | 'date_scraped'
   | 'date_posted'
+  | 'fit_tier'
   | 'company'
   | 'title'
   | 'enrichment_status'
@@ -139,6 +154,9 @@ export interface JobsQuery {
   company_limit?: number
   match_status?: 'all' | 'ready' | 'needs_verification'
   details?: JobDetailsFilter
+  tier?: FitTier
+  role?: FitRole
+  seniority?: FitSeniority
   source?: string
   status?: string
   limit?: number

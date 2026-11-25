@@ -1,3 +1,4 @@
+import { applicationState, useJobEdits } from '@/hooks/useJobEdits'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobDetail, useResumeAttempts, useAdjacentJobs } from '@/hooks/useJobDetail'
@@ -9,7 +10,6 @@ import {
   patchJob,
   requeueJob,
   setJobPriority,
-  setApplicationStatus,
   type ApplicationStatus,
 } from '@/api/jobs'
 import {
@@ -25,8 +25,10 @@ import {
   detailsFilter,
   discoveryLabel,
   enrichmentIssue,
+  fitFilters,
   fitReviewLabel,
   jobEnrichmentLabel,
+  jobFitTags,
 } from '@/utils/discovery'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
@@ -83,6 +85,7 @@ function adjacentQueryFromParams(p: URLSearchParams): JobsQuery {
     ...(p.has('match_days') ? { match_days: Number(p.get('match_days')) } : {}),
     ...(p.has('company_limit') ? { company_limit: Number(p.get('company_limit')) } : {}),
     details: detailsFilter(p.get('details')),
+    ...fitFilters(p),
     match_status:
       p.get('match_status') === 'ready'
         ? 'ready'
@@ -626,73 +629,12 @@ export function JobDetailPage() {
   return <JobDetail key={jobId} jobId={jobId} />
 }
 
-type ApplicationState = { status: ApplicationStatus; application_date: string | null }
-type ApplicationChange = { jobId: number; before: ApplicationState; after: ApplicationState }
-type ApplicationHistory = { undo: ApplicationChange[]; redo: ApplicationChange[] }
-const APPLICATION_HISTORY_KEY = ['job-application-history']
 const APPLICATION_LABELS = { new: 'Not applied', applied: 'Applied', canceled: 'Canceled' }
 
 function ApplicationStatusControl({ job }: { job: JobDetail }) {
-  const qc = useQueryClient()
-  const { data: history } = useQuery<ApplicationHistory>({
-    queryKey: APPLICATION_HISTORY_KEY,
-    enabled: false,
-    initialData: { undo: [], redo: [] },
-    gcTime: Infinity,
-  })
-  const current: ApplicationState = {
-    status:
-      job.status === 'applied'
-        ? 'applied'
-        : job.status === 'canceled' || job.status === 'cancelled'
-          ? 'canceled'
-          : 'new',
-    application_date: job.application_date ?? null,
-  }
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState('')
+  const edits = useJobEdits()
+  const current = applicationState(job)
   const selectRef = useRef<HTMLSelectElement>(null)
-  const undo = history?.undo[history.undo.length - 1]
-  const redo = history?.redo[history.redo.length - 1]
-
-  async function save(status: ApplicationStatus, action?: 'undo' | 'redo') {
-    if (pending) return
-    const entry = action === 'undo' ? undo : action === 'redo' ? redo : undefined
-    const origin = document.activeElement
-    setPending(true)
-    setError('')
-    try {
-      const target = action === 'undo' ? entry?.before : entry?.after
-      const expected = action === 'undo' ? entry?.after : entry?.before
-      const after = await setApplicationStatus(
-        job.id,
-        status,
-        expected ?? current,
-        target?.application_date,
-      )
-      qc.setQueryData<JobDetail>(['job', job.id], (old) => old && { ...old, ...after })
-      qc.setQueryData<ApplicationHistory>(APPLICATION_HISTORY_KEY, (old) => {
-        const { undo: prior, redo: future } = old ?? { undo: [], redo: [] }
-        if (action === 'undo' && entry)
-          return { undo: prior.slice(0, -1), redo: [...future, entry] }
-        if (action === 'redo' && entry)
-          return { undo: [...prior, entry], redo: future.slice(0, -1) }
-        return { undo: [...prior.slice(-19), { jobId: job.id, before: current, after }], redo: [] }
-      })
-      if (origin instanceof HTMLButtonElement && document.activeElement === origin) {
-        selectRef.current?.focus()
-      }
-      void qc.invalidateQueries({ queryKey: ['jobs'] })
-      void qc.invalidateQueries({ queryKey: ['job', job.id] })
-      void qc.invalidateQueries({ queryKey: ['job-adjacent'] })
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not save application status.')
-      void qc.invalidateQueries({ queryKey: ['job', job.id] })
-    } finally {
-      setPending(false)
-    }
-  }
-
   return (
     <div className={styles.inlineField}>
       <label className={styles.inlineLabel} htmlFor="application-status">
@@ -703,8 +645,8 @@ function ApplicationStatusControl({ job }: { job: JobDetail }) {
         ref={selectRef}
         className={styles.inlineInput}
         value={current.status}
-        aria-disabled={pending}
-        onChange={(event) => void save(event.target.value as ApplicationStatus)}
+        disabled={edits.pending}
+        onChange={(event) => void edits.changeStatus(job, event.target.value as ApplicationStatus)}
       >
         {Object.entries(APPLICATION_LABELS).map(([value, label]) => (
           <option key={value} value={value}>
@@ -712,28 +654,32 @@ function ApplicationStatusControl({ job }: { job: JobDetail }) {
           </option>
         ))}
       </select>
-      {undo?.jobId === job.id && (
-        <button
-          type="button"
-          className={styles.backBtn}
-          aria-disabled={pending}
-          onClick={() => void save(undo.before.status, 'undo')}
-        >
-          Undo
-        </button>
+      {(['undo', 'redo'] as const).map(
+        (action) =>
+          edits[action]?.jobId === job.id && (
+            <button
+              type="button"
+              key={action}
+              className={styles.backBtn}
+              disabled={edits.pending}
+              onClick={async (event) => {
+                const button = event.currentTarget
+                if (await edits.historyAction(action)) {
+                  if (
+                    document.activeElement === button ||
+                    document.activeElement === document.body
+                  ) {
+                    selectRef.current?.focus()
+                  }
+                }
+              }}
+            >
+              {action === 'undo' ? 'Undo' : 'Redo'}
+            </button>
+          ),
       )}
-      {redo?.jobId === job.id && (
-        <button
-          type="button"
-          className={styles.backBtn}
-          aria-disabled={pending}
-          onClick={() => void save(redo.after.status, 'redo')}
-        >
-          Redo
-        </button>
-      )}
-      {pending && <span role="status">Saving application status…</span>}
-      {error && <span role="alert">{error}</span>}
+      {edits.pending && <span role="status">Saving application status…</span>}
+      {edits.error && <span role="alert">{edits.error}</span>}
     </div>
   )
 }
@@ -1135,6 +1081,9 @@ function JobDetail({ jobId }: { jobId: number }) {
               />
               {job.source && <ReadonlyField label="Source" value={job.source} />}
               <ReadonlyField label="Discovery fit" value={discoveryLabel(job)} />
+              {job.personal_fit_role && (
+                <ReadonlyField label="Tier and tags" value={jobFitTags(job)} />
+              )}
               {job.fit_review && (
                 <ReadonlyField label="Fit review" value={fitReviewLabel(job.fit_review)} />
               )}

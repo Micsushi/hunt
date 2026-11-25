@@ -1,7 +1,14 @@
 import { useEffect, useRef, useCallback } from 'react'
 import styles from './Filters.module.css'
 import type { JobsQuery, SortField } from '@/types/job'
-import { detailQualityLabels, detailsFilter, enrichmentLabels } from '@/utils/discovery'
+import {
+  detailQualityLabels,
+  detailsFilter,
+  enrichmentLabels,
+  fitRoleLabels,
+  fitSeniorityLabels,
+  fitTierLabels,
+} from '@/utils/discovery'
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
@@ -33,6 +40,7 @@ const SOURCE_OPTIONS = [
 ]
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: 'fit_tier', label: 'Fit tier' },
   { value: 'date_posted', label: 'Posting date' },
   { value: 'date_scraped', label: 'Date added' },
   { value: 'company', label: 'Company' },
@@ -56,7 +64,8 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
   const isHistory = query.view === 'history'
   const statusOptions = isHistory ? HISTORY_OPTIONS : STATUS_OPTIONS
   const defaultDays = isMatches ? 14 : 0
-  const defaultSort = isMatches ? 'date_posted' : 'date_scraped'
+  const defaultSort = isMatches ? 'fit_tier' : 'date_scraped'
+  const defaultDirection = isMatches ? 'asc' : 'desc'
   const period = query.match_days ?? defaultDays
   const companyLimit = query.company_limit ?? 2
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -105,10 +114,13 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
     (query.source && query.source !== 'all') ||
     (query.status && query.status !== 'all') ||
     (query.details && query.details !== 'all') ||
+    query.tier ||
+    query.role ||
+    query.seniority ||
     period !== defaultDays ||
     (isMatches && (companyLimit !== 2 || (query.match_status ?? 'all') !== 'all')) ||
     (query.sort && query.sort !== defaultSort) ||
-    query.direction === 'asc' ||
+    (query.direction && query.direction !== defaultDirection) ||
     (query.limit ?? 50) !== 50 ||
     (query.page ?? 1) !== 1,
   )
@@ -131,7 +143,10 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
       company_limit: 2,
       match_status: 'all',
       details: 'all',
-      direction: 'desc',
+      tier: undefined,
+      role: undefined,
+      seniority: undefined,
+      direction: defaultDirection,
       page: 1,
       limit: 50,
     })
@@ -251,6 +266,29 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
         )}
 
         <div className={styles.filterGroup}>
+          <label className={styles.filterLabel} htmlFor="jobs-tier">
+            Fit tier
+          </label>
+          <select
+            id="jobs-tier"
+            className={styles.select}
+            value={query.tier ?? ''}
+            onChange={(e) =>
+              onChange({ tier: (e.target.value || undefined) as JobsQuery['tier'], page: 1 })
+            }
+          >
+            <option value="">All tiers</option>
+            {Object.entries(fitTierLabels)
+              .filter(([key]) => !isMatches || key !== 'outside_scope')
+              .map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+          </select>
+        </div>
+
+        <div className={styles.filterGroup}>
           <label className={styles.filterLabel} htmlFor="jobs-enrichment">
             Enrichment
           </label>
@@ -268,25 +306,6 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
           </select>
         </div>
 
-        <div className={styles.filterGroup}>
-          <label className={styles.filterLabel} htmlFor="jobs-source">
-            Source
-          </label>
-          <select
-            id="jobs-source"
-            className={styles.select}
-            value={query.source ?? 'all'}
-            onChange={(e) => onChange({ source: e.target.value, page: 1 })}
-            aria-label="Filter by source"
-          >
-            {sourceOptions.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
         {hasFilters && (
           <div className={styles.filterGroup}>
             <button className={styles.resetBtn} onClick={reset} aria-label="Reset job filters">
@@ -297,8 +316,53 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
       </div>
 
       <details className={styles.displayOptions}>
-        <summary>Sort and display</summary>
+        <summary>More filters and sort</summary>
         <div className={styles.filterRow}>
+          <div className={styles.filterGroup}>
+            <label className={styles.filterLabel} htmlFor="jobs-source">
+              Source
+            </label>
+            <select
+              id="jobs-source"
+              className={styles.select}
+              value={query.source ?? 'all'}
+              onChange={(e) => onChange({ source: e.target.value, page: 1 })}
+              aria-label="Filter by source"
+            >
+              {sourceOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {(
+            [
+              ['role', 'Role type', fitRoleLabels],
+              ['seniority', 'Seniority', fitSeniorityLabels],
+            ] as const
+          ).map(([key, label, options]) => (
+            <div className={styles.filterGroup} key={key}>
+              <label className={styles.filterLabel} htmlFor={`jobs-${key}`}>
+                {label}
+              </label>
+              <select
+                id={`jobs-${key}`}
+                className={styles.select}
+                value={query[key] ?? ''}
+                onChange={(e) => onChange({ [key]: e.target.value || undefined, page: 1 })}
+              >
+                <option value="">
+                  {key === 'role' ? 'All role types' : 'All seniority levels'}
+                </option>
+                {Object.entries(options).map(([value, name]) => (
+                  <option key={value} value={value}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
           <div className={styles.filterGroup}>
             <label className={styles.filterLabel} htmlFor="jobs-sort">
               Sort by
@@ -307,7 +371,13 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
               id="jobs-sort"
               className={styles.select}
               value={query.sort ?? defaultSort}
-              onChange={(e) => onChange({ sort: e.target.value as SortField, page: 1 })}
+              onChange={(e) =>
+                onChange({
+                  sort: e.target.value as SortField,
+                  direction: e.target.value === 'fit_tier' ? 'asc' : 'desc',
+                  page: 1,
+                })
+              }
               aria-label="Sort by"
             >
               {SORT_OPTIONS.map((o) => (

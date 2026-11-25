@@ -65,11 +65,7 @@
   color: var(--ink);
 }
 
-.jobStatus {
-  color: var(--muted);
-}
-
-.jobStatus[data-confirmed='true'] {
+.rowSelect[data-confirmed='true'] {
   color: var(--accent);
   font-weight: 650;
 }
@@ -146,28 +142,97 @@
   display: none;
 }
 .table th:nth-child(4) {
-  width: 18%;
+  width: 17%;
 }
 .table th:nth-child(5) {
-  width: 11%;
+  width: 10%;
 }
 .table th:nth-child(6) {
-  width: 13%;
+  width: 6%;
 }
 .table th:nth-child(7) {
-  width: 19%;
+  width: 11%;
 }
 .table th:nth-child(8) {
-  width: 9%;
+  width: 12%;
 }
 .table th:nth-child(9) {
+  width: 10%;
+}
+.table th:nth-child(10) {
   width: 8%;
 }
-.matchesTable th:nth-child(4) {
-  width: 20%;
+.rowSelect,
+.enrichmentTag,
+.tierTag,
+.enrichmentEditor button {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--ink);
+  padding: 3px 7px;
+  font: inherit;
+  font-size: 0.8rem;
 }
-.matchesTable th:nth-child(7) {
-  width: 22%;
+.rowSelect,
+.enrichmentTag,
+.enrichmentEditor button {
+  min-height: 32px;
+  max-width: 100%;
+}
+.enrichmentTag {
+  white-space: nowrap;
+}
+.tierTag {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 650;
+}
+.enrichmentEditor {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+.enrichmentEditor header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 10px;
+}
+.enrichmentEditor h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.enrichmentEditor form,
+.enrichmentEditor label {
+  display: grid;
+  gap: 6px;
+}
+.enrichmentEditor form {
+  gap: 10px;
+  justify-items: start;
+}
+.enrichmentEditor label {
+  width: min(100%, 56rem);
+}
+.enrichmentEditor input,
+.enrichmentEditor textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px;
+  color: var(--ink);
+  background: var(--panel-strong);
+  font: inherit;
+}
+.enrichmentEditor p {
+  margin: 0;
+  color: var(--muted);
+}
+.editError {
+  margin: 0;
+  color: var(--danger);
 }
 .table input[type='checkbox'] {
   accent-color: var(--accent);
@@ -177,6 +242,7 @@
   padding-inline: 0;
   text-align: center;
 }
+.titleCell small,
 .statusCell small,
 .enrichmentCell small {
   display: block;
@@ -339,10 +405,9 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'check title title'
+      'check title tier'
       '. company posted'
-      '. status status'
-      '. enrichment enrichment'
+      '. status enrichment'
       '. links added';
     gap: 5px 10px;
     padding: 14px;
@@ -351,10 +416,10 @@
   }
   .matchesTable .jobRow {
     grid-template-areas:
-      'check title title'
+      'check title tier'
       '. company posted'
-      '. status links'
-      '. enrichment enrichment';
+      '. status enrichment'
+      '. links links';
   }
   .jobRow:last-child {
     border-bottom: 0;
@@ -382,6 +447,11 @@
   .statusCell {
     grid-area: status;
   }
+  .tierCell {
+    grid-area: tier;
+    text-align: right;
+    align-self: start;
+  }
   .enrichmentCell {
     grid-area: enrichment;
   }
@@ -400,6 +470,9 @@
     padding-top: 4px;
   }
   .matchesTable .linksCell {
+    text-align: right;
+  }
+  .enrichmentCell {
     text-align: right;
   }
   .table .statusCell,
