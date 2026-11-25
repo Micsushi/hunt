@@ -17,7 +17,6 @@ def main() -> int:
         default="{}",
         help='JSON string for details (example: {"account_index":0,"blocked_days":1})',
     )
-    p.add_argument("--discord", action="store_true", help="Also try to send Discord webhook.")
     args = p.parse_args()
 
     try:
@@ -25,7 +24,7 @@ def main() -> int:
     except json.JSONDecodeError as e:
         raise SystemExit(f"Invalid --details-json: {e}") from e
 
-    C1Logger(discord=bool(args.discord)).event(
+    C1Logger().event(
         key=args.key,
         level=args.level,
         message=args.message,

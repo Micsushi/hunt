@@ -201,13 +201,11 @@ def cmd_auth_auto_relogin(args):
     _run(command, env=env)
 
 
-def cmd_auth_test_discord(args):
+def cmd_auth_test_discord(_args):
     command = [
         PYTHON,
         "hunter/linkedin_session.py",
         "--test-discord-webhook",
-        "--discord-message",
-        args.message,
     ]
     _run(command)
 
@@ -866,11 +864,7 @@ def build_parser():
 
     auth_test_discord = subparsers.add_parser(
         "auth-test-discord",
-        help="Send a test message through the configured Discord webhook.",
-    )
-    auth_test_discord.add_argument(
-        "--message",
-        default="Hunt test: Discord webhook connectivity check.",
+        help="Check access to the configured Discord webhook.",
     )
     auth_test_discord.set_defaults(func=cmd_auth_test_discord)
 

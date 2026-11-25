@@ -63,7 +63,7 @@ def main():
         )
         print(f"{'=' * 60}")
 
-        start = time.time()
+        start = time.monotonic()
         try:
             backfill = _backfill_due()
             summary = scrape(
@@ -84,23 +84,21 @@ def main():
         except Exception as e:
             print(f"[runner] Run #{run_number} failed with error: {e}")
 
-        elapsed = time.time() - start
+        elapsed = time.monotonic() - start
         minutes, seconds = divmod(int(elapsed), 60)
         print(f"[runner] Run #{run_number} finished in {minutes}m {seconds}s")
 
         if _shutdown:
             break
 
-        next_run = datetime.fromtimestamp(time.time() + RUN_INTERVAL_SECONDS)
-        print(
-            f"[runner] Next run at {next_run.strftime('%Y-%m-%d %H:%M:%S')} "
-            f"(sleeping {RUN_INTERVAL_SECONDS // 60}m)"
-        )
+        remaining = max(0, RUN_INTERVAL_SECONDS - elapsed)
+        next_run = datetime.fromtimestamp(time.time() + remaining)
+        print(f"[runner] Next run at {next_run:%Y-%m-%d %H:%M:%S} (in {remaining:.0f}s)")
 
-        # Sleep in small increments so SIGTERM/SIGINT is caught promptly
-        sleep_end = time.time() + RUN_INTERVAL_SECONDS
-        while time.time() < sleep_end and not _shutdown:
-            time.sleep(1)
+        # Stay responsive to shutdown and avoid running two cycles at once.
+        sleep_end = time.monotonic() + remaining
+        while time.monotonic() < sleep_end and not _shutdown:
+            time.sleep(min(1, max(0, sleep_end - time.monotonic())))
 
     print("[runner] Shutting down cleanly.")
 

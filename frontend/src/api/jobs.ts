@@ -1,10 +1,11 @@
 import { get, patch, post, del } from './client'
 import { logHumanCommand } from './humanCommandLog'
-import type { JobDetail, JobsQuery, JobsResponse, ResumeAttempt } from '@/types/job'
+import type { FitReviewRun, JobDetail, JobsQuery, JobsResponse, ResumeAttempt } from '@/types/job'
 import type { ResumeReviewPackage } from '@/pages/Fletcher/review/types'
 
 function buildParams(q: JobsQuery): string {
   const p = new URLSearchParams()
+  if (q.view) p.set('view', q.view)
   if (q.source) p.set('source', q.source)
   if (q.status) p.set('status', q.status)
   if (q.limit !== undefined) p.set('limit', String(q.limit))
@@ -26,6 +27,7 @@ export function fetchJobCount(
   q: Omit<JobsQuery, 'limit' | 'page' | 'sort' | 'direction'>,
 ): Promise<{ count: number }> {
   const p = new URLSearchParams()
+  if (q.view) p.set('view', q.view)
   if (q.source) p.set('source', q.source)
   if (q.status) p.set('status', q.status)
   if (q.q) p.set('q', q.q)
@@ -135,4 +137,28 @@ export function bulkSelection(payload: {
     },
   })
   return post('/api/jobs/bulk-selection', payload)
+}
+
+export type ApplicationStatus = 'new' | 'applied' | 'canceled'
+
+export function setApplicationStatus(
+  id: number,
+  status: ApplicationStatus,
+  expected: { status: ApplicationStatus; application_date: string | null },
+  applicationDate?: string | null,
+): Promise<{ status: ApplicationStatus; application_date: string | null }> {
+  return patch(`/api/jobs/${id}/application-status`, {
+    status,
+    expected_status: expected.status,
+    expected_date: expected.application_date,
+    application_date: applicationDate,
+  })
+}
+
+export function fetchFitReview(): Promise<FitReviewRun> {
+  return get('/api/jobs/fit-review')
+}
+
+export function requestFitReview(): Promise<FitReviewRun> {
+  return post('/api/jobs/fit-review', {})
 }

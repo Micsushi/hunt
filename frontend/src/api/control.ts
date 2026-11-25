@@ -583,7 +583,7 @@ export function saveC1Config(
   return patch<ConfigSaveResult>('/api/gateway/c1/config', updates)
 }
 
-export function testC1Discord(): Promise<{ sent: boolean; status_code?: number }> {
+export function testC1Discord(): Promise<{ connected: boolean; status_code?: number }> {
   return post('/api/gateway/c1/test-discord', {})
 }
 

@@ -92,7 +92,7 @@ def summarize_batch(
 def log_retry_exhausted(claimed_job, *, source, error_code, error_message, provider=None):
     from hunter.c1_logging import C1Logger
 
-    C1Logger(discord=False).event(
+    C1Logger().event(
         key="hunt_last_retry_exhausted",
         level="warn",
         message="C1 enrichment retries exhausted.",

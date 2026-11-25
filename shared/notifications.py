@@ -27,6 +27,20 @@ def get_discord_webhook_url():
     return None
 
 
+def check_discord_webhook(*, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
+    webhook_url = get_discord_webhook_url()
+    if not webhook_url:
+        return {"connected": False, "reason": "not_configured"}
+    req = request.Request(webhook_url, headers={"User-Agent": "HuntDiscordNotifier/1.0"})
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as response:
+            return {"connected": True, "status_code": response.status}
+    except error.HTTPError as exc:
+        return {"connected": False, "reason": f"http_error:{exc.code}"}
+    except (error.URLError, TimeoutError):
+        return {"connected": False, "reason": "discord_unreachable"}
+
+
 def send_discord_webhook_message(
     content, *, username="Hunt", timeout_seconds=DEFAULT_TIMEOUT_SECONDS
 ):

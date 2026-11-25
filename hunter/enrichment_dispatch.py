@@ -250,13 +250,12 @@ def _maybe_alert_high_failure_rate(summary: dict[str, Any], *, limit: int) -> No
             )
         )
 
-    C1Logger(discord=True).event(
+    C1Logger().event(
         key=HIGH_FAILURE_ALERT_RUNTIME_KEY,
         level="warn",
         message="\n".join(lines),
         code="high_failure_rate",
         details=details,
-        discord=True,
     )
 
 
@@ -390,13 +389,12 @@ def run_enrichment_round(
             if source_key == "linkedin" and summary["stop_error_code"] == "rate_limited":
                 blocked_index = get_active_account_index()
                 block_account_for_days(blocked_index, days=RATE_LIMIT_BLOCK_DAYS)
-                C1Logger(discord=True).event(
+                C1Logger().event(
                     key="linkedin_last_rate_limited",
                     level="warn",
                     message=f"Hunt: LinkedIn rate-limited. Account {blocked_index} blocked for {RATE_LIMIT_BLOCK_DAYS} day(s).",
                     code="rate_limited",
                     details={"account_index": blocked_index, "blocked_days": RATE_LIMIT_BLOCK_DAYS},
-                    discord=True,
                 )
                 print(
                     f"[enrich] Account {blocked_index} rate-limited; "
@@ -416,7 +414,7 @@ def run_enrichment_round(
             aggregate["total_elapsed_seconds"] / aggregate["attempted"]
         )
     aggregate["exit_code"] = 0 if aggregate["actionable_failed"] == 0 else 1
-    C1Logger(discord=False).event(
+    C1Logger().event(
         key="hunt_last_enrich_summary",
         level="info" if aggregate["exit_code"] == 0 else "warn",
         message="C1 enrichment round finished.",

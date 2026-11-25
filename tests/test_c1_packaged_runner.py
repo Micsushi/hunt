@@ -97,7 +97,6 @@ class PackagedRunnerTest(unittest.TestCase):
                             for category in occupations
                         },
                     ),
-                    patch.object(scraper, "_notify_priority_jobs") as notify,
                     patch.object(runner, "PUBLIC_FEED_DISCOVERY", False),
                     patch.object(runner, "scrape", one_cycle),
                     patch("builtins.__import__", side_effect=c1_only),
@@ -120,7 +119,6 @@ class PackagedRunnerTest(unittest.TestCase):
                         all(row["state"] == "partial" for row in db.list_company_fetch_queue())
                     )
                     self.assertFalse(runner._backfill_due())
-                    self.assertTrue(notify.called)
         finally:
             server.shutdown()
             server.server_close()

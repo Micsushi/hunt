@@ -15,8 +15,8 @@ from hunter.browser_runtime import (
 )
 from hunter.config import get_db_path
 from hunter.db import mark_linkedin_auth_available, mark_linkedin_auth_unavailable
-from hunter.notifications import send_discord_webhook_message
 from shared.config_utils import get_bool_env as _get_bool_env
+from shared.notifications import check_discord_webhook
 from shared.paths import get_state_root, resolve_state_path
 
 try:
@@ -1158,7 +1158,7 @@ def _attempt_session_reuse_in_context(context, target_path, *, timeout_ms=30000)
         _close_page(page)
 
 
-def _all_accounts_blocked_discord_alert(n_accounts):
+def _record_all_accounts_blocked(n_accounts):
     msg = (
         f"Hunt: all {n_accounts} LinkedIn account(s) are blocked for "
         f"{ACCOUNT_BLOCK_DAYS} days due to automation detection. "
@@ -1166,7 +1166,6 @@ def _all_accounts_blocked_discord_alert(n_accounts):
         "Manual intervention required."
     )
     mark_linkedin_auth_unavailable(msg)
-    send_discord_webhook_message(msg)
     return msg
 
 
@@ -1260,7 +1259,7 @@ def attempt_auto_relogin(
             break
 
     if account_index is None:
-        msg = _all_accounts_blocked_discord_alert(len(accounts))
+        msg = _record_all_accounts_blocked(len(accounts))
         return finalize(msg)
 
     if account_index != current:
@@ -1295,13 +1294,12 @@ def attempt_auto_relogin(
             )
     except LinkedInAutomationFlagged:
         block_account_for_days(account_index)
-        C1Logger(discord=True).event(
+        C1Logger().event(
             key="linkedin_last_automation_flagged",
             level="error",
             message=f"Hunt: LinkedIn automation detected. Account {account_index} blocked for {ACCOUNT_BLOCK_DAYS} days.",
             code="automation_detected",
             details={"account_index": account_index, "blocked_days": ACCOUNT_BLOCK_DAYS},
-            discord=True,
         )
         # Find another available account to use on the next run.
         next_idx = None
@@ -1311,7 +1309,7 @@ def attempt_auto_relogin(
                 next_idx = idx
                 break
         if next_idx is None:
-            msg = _all_accounts_blocked_discord_alert(len(accounts))
+            msg = _record_all_accounts_blocked(len(accounts))
             return finalize(msg)
         set_active_account_index(next_idx)
         mark_linkedin_auth_unavailable(
@@ -1374,7 +1372,7 @@ def rotate_linkedin_account(
             break
 
     if next_index is None:
-        msg = _all_accounts_blocked_discord_alert(len(accounts))
+        msg = _record_all_accounts_blocked(len(accounts))
         return {"rotated": False, "account_index": current, "recovered": False, "message": msg}
 
     set_active_account_index(next_index)
@@ -1407,7 +1405,7 @@ def rotate_linkedin_account(
                 fallback = idx
                 break
         if fallback is None:
-            msg = _all_accounts_blocked_discord_alert(len(accounts))
+            msg = _record_all_accounts_blocked(len(accounts))
             return {
                 "rotated": True,
                 "account_index": next_index,
@@ -1577,12 +1575,7 @@ def main():
     parser.add_argument(
         "--test-discord-webhook",
         action="store_true",
-        help="Send a test message through the configured Discord webhook.",
-    )
-    parser.add_argument(
-        "--discord-message",
-        default="Hunt test: Discord webhook connectivity check.",
-        help="Optional message to send with --test-discord-webhook.",
+        help="Check access to the configured Discord webhook.",
     )
     args = parser.parse_args()
 
@@ -1623,9 +1616,9 @@ def main():
             return 0
 
         if args.test_discord_webhook:
-            result = send_discord_webhook_message(args.discord_message)
-            if result["sent"]:
-                print("Discord webhook test sent successfully.")
+            result = check_discord_webhook()
+            if result["connected"]:
+                print("Discord webhook is reachable.")
                 return 0
             print(f"Discord webhook test failed: {result['reason']}")
             return 1

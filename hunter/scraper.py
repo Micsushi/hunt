@@ -34,7 +34,9 @@ from hunter.config import (
     LINKEDIN_FETCH_DESCRIPTION,
     LOCATIONS,
     MAX_WORKERS,
+    PRIORITY_COMPANIES,
     PUBLIC_DISCOVERY_INTERVAL_SECONDS,
+    REFERRAL_COMPANIES,
     RESULTS_WANTED,
     REVIEW_APP_PUBLIC_URL,
     SEARCH_TERMS,
@@ -53,7 +55,7 @@ from hunter.db import (
 from hunter.discovery_browser import resolve_rendered_career_fetch_plan
 from hunter.discovery_indeed import discover_indeed_query
 from hunter.discovery_linkedin import discover_linkedin_query
-from hunter.discovery_policy import annotate_job
+from hunter.discovery_policy import annotate_job, normalize_company
 from hunter.discovery_run import ScanBusy, ScanRun, ScanStopped
 from hunter.discovery_sources import (
     career_fetch_plan,
@@ -67,7 +69,6 @@ from hunter.discovery_sources import (
     discover_vanhack,
     discover_wellfound,
 )
-from hunter.notifications import send_discord_webhook_message
 from hunter.search_lanes import title_matches_search_lane
 from hunter.url_utils import detect_ats_type, get_apply_host, normalize_optional_str
 
@@ -82,10 +83,11 @@ def _discovery_due(source):
         return True
 
 
-def _schedule_discovery(source, seconds):
+def _schedule_discovery(source, seconds, *, since=None):
+    cycle_start = since.replace(second=0, microsecond=0) if since else datetime.now(UTC)
     set_runtime_state(
         f"discovery_next_check:{source}",
-        (datetime.now(UTC) + timedelta(seconds=max(60, seconds))).isoformat(),
+        (cycle_start + timedelta(seconds=max(60, seconds))).isoformat(),
     )
 
 
@@ -105,6 +107,8 @@ def _source_retry_delay(health, normal):
 
 def _discover_public_sources(hours_old, on_result, *, due_only=False, run=None):
     from hunter import config
+
+    started = datetime.now(UTC)
 
     # Public catalogs need each role once; board-only level variants would reread
     # the same catalog many times. The shared title policy still enforces levels.
@@ -310,9 +314,11 @@ def _discover_public_sources(hours_old, on_result, *, due_only=False, run=None):
                 raise persistence_error
             if not streamed:
                 persist(*result)
+        health = result[1] if result else []
         _schedule_discovery(
             source,
-            _source_retry_delay(result[1] if result else [], PUBLIC_DISCOVERY_INTERVAL_SECONDS),
+            _source_retry_delay(health, PUBLIC_DISCOVERY_INTERVAL_SECONDS),
+            since=started if health and all(item["status"] == "ok" for item in health) else None,
         )
         if run:
             run.saved("public:" + source)
@@ -379,53 +385,14 @@ def _record_priority_job(job_id, job_data):
     title = job_data.get("title") or "Unknown title"
     company = job_data.get("company") or "Unknown company"
     url = f"{REVIEW_APP_PUBLIC_URL.rstrip('/')}/jobs/{job_id}"
-    logger = C1Logger(discord=True)
+    logger = C1Logger()
     logger.event(
         key="hunt_last_priority_job",
         level="info",
         message=f"Priority job: {title} at {company}\n{url}",
         code="priority_job",
         details={"job_id": job_id, "company": company, "title": title},
-        discord=False,
     )
-    return {
-        "job_id": job_id,
-        "title": title,
-        "company": company,
-        "url": url,
-    }
-
-
-def _build_priority_jobs_message(priority_jobs):
-    if not priority_jobs:
-        return None
-    lines = [f"Priority jobs found: {len(priority_jobs)}"]
-    for item in priority_jobs:
-        lines.append(f"- {item['title']} at {item['company']}")
-        lines.append(f"  {item['url']}")
-    return "\n".join(lines)
-
-
-def _notify_priority_jobs(priority_jobs):
-    if not priority_jobs:
-        return None
-    message = _build_priority_jobs_message(priority_jobs)
-    result = send_discord_webhook_message(message)
-    if result.get("sent"):
-        return result
-    C1Logger(discord=False).event(
-        key="discord_last_priority_notify_error",
-        level="warn",
-        message=f"Priority job Discord notification failed: {result.get('reason')}",
-        code="priority_job_discord_failed",
-        details={
-            "reason": result.get("reason"),
-            "status_code": result.get("status_code"),
-            "priority_job_count": len(priority_jobs),
-        },
-        discord=False,
-    )
-    return result
 
 
 def scrape_single(site, term, location, category, *, hours_old=None, raise_errors=False):
@@ -545,10 +512,14 @@ def _discover_company_queue(
     on_result=None, hours_old=BACKFILL_HOURS_OLD, *, due_only=False, run=None, refresh_plans=False
 ):
     jobs = []
-    cutoff = (datetime.now(UTC) - timedelta(hours=hours_old)).date().isoformat()
+    started = datetime.now(UTC)
+    cutoff = (started - timedelta(hours=hours_old)).date().isoformat()
     configured = COMPANY_CAREER_SITES or catalog_company_sites()
+    priority = {normalize_company(name) for name in [*REFERRAL_COMPANIES, *PRIORITY_COMPANIES]}
     sites, employers = {}, {}
-    for company, boards in configured.items():
+    for company, boards in sorted(
+        configured.items(), key=lambda item: normalize_company(item[0]) not in priority
+    ):
         urls = [boards] if isinstance(boards, str) else list(dict.fromkeys(boards))
         for url in urls:
             key = company if len(urls) == 1 else f"{company} [{url}]"
@@ -570,14 +541,35 @@ def _discover_company_queue(
     def discover(company, url):
         if run and not run.start(f"company:{company}:{url}"):
             return None
-        return discover_company_career_site(
-            employers[company],
+        employer = employers[company]
+        found, health = discover_company_career_site(
+            employer,
             url,
             hours_old=hours_old,
             rendered_resolver=resolve_rendered_career_fetch_plan,
             **({"refresh_plan": True} if refresh_plans else {}),
             **({"resolved_plan": resolved_plans[company]} if company in resolved_plans else {}),
         )
+        if (
+            normalize_company(employer) in priority
+            and health.get("error") == "career_adapter_unavailable"
+            and not found
+        ):
+            leads, board_health = discover_indeed_query(
+                employer, "Canada", None, hours_old=hours_old
+            )
+            same_company = [
+                job
+                for job in leads
+                if normalize_company(job.get("company")) == normalize_company(employer)
+            ]
+            return same_company, {
+                **health,
+                "status": "partial",
+                "catalog_complete": False,
+                "error": board_health["error"] or "company_board_coverage_only",
+            }
+        return found, health
 
     with ThreadPoolExecutor(max_workers=max(1, min(MAX_WORKERS, 4))) as executor:
         futures = {
@@ -639,6 +631,7 @@ def _discover_company_queue(
                     [health],
                     COMPANY_DISCOVERY_INTERVAL_SECONDS if health["status"] == "ok" else 3600,
                 ),
+                since=started if health["status"] == "ok" else None,
             )
             if run:
                 run.saved(
@@ -713,7 +706,7 @@ def scrape(
     discovery_due_only=False,
 ):
     init_db()
-    logger = C1Logger(discord=False)
+    logger = C1Logger()
 
     if enrich_pending is None:
         enrich_pending = ENRICH_AFTER_SCRAPE
@@ -737,6 +730,8 @@ def scrape(
             "LOCATIONS",
             "SITES",
             "COMPANY_CAREER_SITES",
+            "PRIORITY_COMPANIES",
+            "REFERRAL_COMPANIES",
             "INCLUDE_EXPERIENCED_ROLES",
             "TITLE_BLACKLIST",
             "COMPANY_BLOCKLIST",
@@ -755,7 +750,6 @@ def scrape(
     )
     with ScanRun(settings) as run:
         scraped_total = inserted = refreshed = 0
-        priority_jobs = []
         save_lock = Lock()
 
         def save_batch(jobs):
@@ -768,11 +762,11 @@ def scrape(
                     if result == "inserted":
                         inserted += 1
                         if job_data.get("priority"):
-                            priority_jobs.append(_record_priority_job(job_id, job_data))
+                            _record_priority_job(job_id, job_data)
                     elif result == "updated":
                         refreshed += 1
                         if len(add_result) > 2 and add_result[2]:
-                            priority_jobs.append(_record_priority_job(job_id, job_data))
+                            _record_priority_job(job_id, job_data)
 
         def save_public_batch(jobs, health):
             save_batch(jobs)
@@ -850,8 +844,6 @@ def scrape(
                     )
                 for future in as_completed(futures):
                     future.result()
-
-            _notify_priority_jobs(priority_jobs)
 
             skipped = scraped_total - inserted - refreshed
             print(

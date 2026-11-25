@@ -9,7 +9,7 @@
   "search_terms": {
     "engineering": [
       "software engineer", "backend developer", "frontend developer", "full stack developer",
-      "mobile developer", "devops cloud platform"
+      "mobile developer", "devops engineer", "cloud engineer", "platform engineer"
     ],
     "product": [
       "technical product manager", "project coordinator", "implementation specialist",
@@ -39,12 +39,14 @@
   "max_workers": 10,
   "results_wanted": 500,
   "hours_old": 24,
-  "run_interval_seconds": 600,
+  "run_interval_seconds": 3600,
   "backfill_interval_seconds": 86400,
   "backfill_hours_old": 336,
   "public_feed_discovery": true,
   "public_discovery_interval_seconds": 3600,
-  "company_discovery_interval_seconds": 21600,
+  "company_discovery_interval_seconds": 3600,
+  "priority_companies": [],
+  "referral_companies": [],
   "company_career_sites": {},
   "enrich_after_scrape": true,
   "linkedin_fetch_description": true,

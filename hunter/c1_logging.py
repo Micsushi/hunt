@@ -13,11 +13,9 @@ from shared.timestamps import utc_iso  # noqa: E402
 try:
     # Package-style imports (preferred when `hunter` is imported as a module).
     from .db import set_runtime_state  # type: ignore
-    from .notifications import send_discord_webhook_message  # type: ignore
 except ImportError:
     # Script-style fallback (used when `hunter/` is on sys.path).
     from db import set_runtime_state  # type: ignore
-    from notifications import send_discord_webhook_message  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -59,13 +57,11 @@ class C1Logger:
     Sinks:
     - terminal: stderr
     - webapp: a single JSON event stored under a `runtime_state` key
-    - discord: best-effort Discord message
     """
 
-    def __init__(self, *, terminal=True, webapp=True, discord=False):
+    def __init__(self, *, terminal=True, webapp=True):
         self.terminal = bool(terminal)
         self.webapp = bool(webapp)
-        self.discord = bool(discord)
 
     def _emit_terminal(self, event: C1LogEvent):
         if not self.terminal:
@@ -84,14 +80,6 @@ class C1Logger:
         except Exception:
             return
 
-    def _emit_discord(self, event: C1LogEvent):
-        if not self.discord:
-            return
-        try:
-            send_discord_webhook_message(event.message)
-        except Exception:
-            return
-
     def event(
         self,
         *,
@@ -100,15 +88,10 @@ class C1Logger:
         message: str,
         code: str | None = None,
         details: dict | None = None,
-        discord: bool | None = None,
     ):
         event = C1LogEvent(level=level, message=message, code=code, details=details)
         self._emit_terminal(event)
         self._emit_webapp(key, event)
-        if discord is None:
-            discord = self.discord
-        if discord:
-            self._emit_discord(event)
         return event
 
     def exception(
@@ -118,7 +101,6 @@ class C1Logger:
         message: str,
         exc: BaseException,
         code: str | None = None,
-        discord: bool | None = None,
     ):
         details = {
             "exception_type": type(exc).__name__,
@@ -131,5 +113,4 @@ class C1Logger:
             message=message,
             code=code,
             details=details,
-            discord=discord,
         )

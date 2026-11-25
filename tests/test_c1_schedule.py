@@ -218,7 +218,6 @@ def test_slow_board_does_not_hold_public_or_company_results(monkeypatch):
     board_started, public_saved, company_saved = Event(), Event(), Event()
     monkeypatch.setattr(scraper, "init_db", Mock())
     monkeypatch.setattr(scraper, "C1Logger", Mock())
-    monkeypatch.setattr(scraper, "_notify_priority_jobs", Mock())
     monkeypatch.setattr(scraper, "SEARCH_TERMS", {"engineering": ["software engineer"]})
     monkeypatch.setattr(scraper, "LOCATIONS", ["Canada"])
     monkeypatch.setattr(scraper, "SITES", ["linkedin"])

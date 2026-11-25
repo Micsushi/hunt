@@ -2,7 +2,7 @@ import json
 import os
 import re
 import sqlite3
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import UTC, datetime, timedelta
 
 from hunter import config
@@ -151,6 +151,10 @@ MIGRATION_COLUMNS = {
     "employment_type": "TEXT",
     "operator_notes": "TEXT",
     "operator_tag": "TEXT",
+    "personal_fit": "TEXT",
+    "personal_fit_input": "TEXT",
+    "personal_fit_reviewed_at": "TEXT",
+    "application_date": "TEXT",
     "apply_type": "TEXT",
     "auto_apply_eligible": "BOOLEAN",
     "enrichment_status": "TEXT",
@@ -1819,9 +1823,9 @@ def list_company_fetch_queue():
         ]
 
 
-def add_job(job_data):
+def add_job(job_data, *, connection=None):
     job_data = annotate_job(job_data)
-    with closing(get_connection()) as conn:
+    with nullcontext(connection) if connection is not None else closing(get_connection()) as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -1880,7 +1884,8 @@ def add_job(job_data):
             )
             _record_source_observation(cursor, job_id, job_data)
             _enforce_employer_month_cap(cursor, job_data.get("normalized_company"))
-            conn.commit()
+            if connection is None:
+                conn.commit()
             return "inserted", job_id
 
         existing = dict(existing_row)
@@ -1973,7 +1978,8 @@ def add_job(job_data):
                 cursor,
                 job_data.get("normalized_company") or existing.get("normalized_company"),
             )
-            conn.commit()
+            if connection is None:
+                conn.commit()
             return "skipped", existing["id"]
 
         assignments = ", ".join(f"{field_name} = ?" for field_name in updates)
@@ -1990,7 +1996,8 @@ def add_job(job_data):
             cursor,
             job_data.get("normalized_company") or existing.get("normalized_company"),
         )
-        conn.commit()
+        if connection is None:
+            conn.commit()
         return "updated", existing["id"], "priority" in updates
 
 
@@ -2155,10 +2162,36 @@ def search_jobs(query):
         return [dict(row) for row in cursor.fetchall()]
 
 
-def update_job_status(job_id, status):
+def update_job_status(job_id, status, *, application_date=_UNSET, expected=None):
+    from hunter.personal_fit import owner_day
+
+    where = "id = ?"
+    conditions = [job_id]
+    if expected is not None:
+        where += """ AND CASE lower(trim(coalesce(status, '')))
+                         WHEN 'applied' THEN 'applied'
+                         WHEN 'canceled' THEN 'canceled'
+                         WHEN 'cancelled' THEN 'canceled'
+                         ELSE 'new' END = ?
+                     AND coalesce(application_date, '') = ?"""
+        conditions.extend((expected[0], expected[1] or ""))
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
+        if application_date is _UNSET:
+            cursor.execute(
+                f"""UPDATE jobs SET status = ?, application_date = CASE
+                    WHEN ? = 'new' THEN NULL
+                    WHEN ? = 'applied' THEN coalesce(
+                        CASE WHEN lower(status) = 'applied' THEN application_date END, ?
+                    )
+                    ELSE application_date END WHERE {where}""",
+                (status, status, status, owner_day().isoformat(), *conditions),
+            )
+        else:
+            cursor.execute(
+                f"UPDATE jobs SET status = ?, application_date = ? WHERE {where}",
+                (status, application_date, *conditions),
+            )
         updated = cursor.rowcount
         if updated:
             row = cursor.execute(

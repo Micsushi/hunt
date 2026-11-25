@@ -412,16 +412,12 @@ def post_c3_outcome(job_id: int, req: C3OutcomeRequest):
 
 @app.post("/test-discord", dependencies=[Depends(require_service_token)])
 def post_test_discord():
-    from shared.notifications import send_discord_webhook_message
+    from shared.notifications import check_discord_webhook
 
-    result = send_discord_webhook_message(
-        "C1 Hunter: Discord webhook test from operator UI.",
-        username="Hunt C1",
-        timeout_seconds=10,
-    )
-    if not result["sent"]:
-        raise HTTPException(status_code=502, detail=result.get("reason", "Discord send failed"))
-    return {"sent": True, "status_code": result.get("status_code")}
+    result = check_discord_webhook(timeout_seconds=10)
+    if not result["connected"]:
+        raise HTTPException(status_code=502, detail=result["reason"])
+    return result
 
 
 @app.post("/accounts/{account_id}/reauth", dependencies=[Depends(require_service_token)])

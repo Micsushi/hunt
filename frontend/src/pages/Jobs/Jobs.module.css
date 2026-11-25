@@ -4,7 +4,35 @@
   gap: 16px;
 }
 .hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 20px;
   margin: 0;
+}
+
+.reviewControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.reviewControls button {
+  min-height: 44px;
+}
+
+.reviewControls button[aria-disabled='true'] {
+  cursor: default;
+}
+
+.reviewStage {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  white-space: normal;
 }
 .heroTitle {
   font-size: 1.5rem;

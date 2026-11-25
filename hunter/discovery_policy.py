@@ -9,10 +9,11 @@ from hunter import config
 from hunter.config import TITLE_BLACKLIST, WATCHLIST
 from hunter.search_lanes import canonicalize_title_text, matching_search_lane
 
-DISCOVERY_POLICY_VERSION = 16
+DISCOVERY_POLICY_VERSION = 17
 
 EMPLOYER_ALIASES = {
     "amazon web services": "amazon",
+    "amazon aws": "amazon",
     "aws": "amazon",
     "bank of montreal": "bmo",
     "bmo financial group": "bmo",
@@ -20,8 +21,12 @@ EMPLOYER_ALIASES = {
     "demonware": "activision",
     "dragonfly": "intelcom",
     "equitable bank": "eq bank",
+    "government of edmonton": "city of edmonton",
     "intelcom": "intelcom",
+    "little potato company ltd": "little potato company",
     "loblaw digital": "loblaw",
+    "the little potato company": "little potato company",
+    "the little potato company ltd": "little potato company",
     "mda space students": "mda space",
     "royal bank of canada": "rbc",
     "sap concur": "sap",
@@ -95,6 +100,16 @@ def normalize_job_url(value: object) -> str | None:
     if port is not None and (parts.scheme.lower(), port) not in {("https", 443), ("http", 80)}:
         netloc = f"{netloc}:{port}"
     return urlunsplit((parts.scheme.lower(), netloc, parts.path.rstrip("/"), urlencode(query), ""))
+
+
+def requisition_path(url: object) -> str:
+    normalized = normalize_job_url(url)
+    if not normalized:
+        return ""
+    parts = urlsplit(normalized)
+    if not parts.path:
+        return ""
+    return (parts.hostname or "").removeprefix("www.") + parts.path.lower()
 
 
 def canonical_job_key(url: object, company: object = "") -> str:
@@ -423,6 +438,13 @@ def score_job(job: dict) -> tuple[int, int, str | None]:
         normalize_company(value) for value in COMPANY_BLOCKLIST
     }:
         reason = "company_blocklist"
+    elif job.get("canonical_job_key") in config.REMOVED_REQUISITION_KEYS:
+        reason = "removed_requisition"
+    elif config.REMOVED_REQUISITION_PATHS and any(
+        requisition_path(url) in config.REMOVED_REQUISITION_PATHS
+        for url in (job.get("apply_url"), job.get("job_url"))
+    ):
+        reason = "possible_removed_requisition"
     elif stage == "experienced_excluded" and not config.DISCOVERY_ALLOW_EXPERIENCED:
         reason = "experienced_title"
     elif geography_reason := geography_suppression(job.get("location")):

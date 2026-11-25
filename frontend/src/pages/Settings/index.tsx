@@ -1931,8 +1931,8 @@ export function SettingsPage() {
     setDiscordResult(null)
     try {
       await testC1Discord()
-      setDiscordResult('Test message sent.')
-      showToast('Discord test sent')
+      setDiscordResult('Discord webhook is reachable.')
+      showToast('Discord connection verified')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Test failed'
       setDiscordResult(`Failed: ${msg}`)
@@ -2072,7 +2072,7 @@ export function SettingsPage() {
         <h2 className={styles.panelTitle}>Integrations</h2>
       </div>
       <button className={styles.btn} disabled={testingDiscord} onClick={handleTestDiscord}>
-        {testingDiscord ? 'Sending...' : 'Send Discord test message'}
+        {testingDiscord ? 'Checking...' : 'Check Discord connection'}
       </button>
       {discordResult && <p style={{ marginTop: 8, fontSize: '0.88rem' }}>{discordResult}</p>}
     </div>

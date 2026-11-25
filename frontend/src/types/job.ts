@@ -10,6 +10,29 @@ export type EnrichmentStatus =
   | 'blocked'
   | 'blocked_verified'
 
+export type FitReviewStage =
+  | 'awaiting_review'
+  | 'outside_review_window'
+  | 'filtered_before_ai'
+  | 'needs_information'
+  | 'ai_rejected'
+  | 'approved_visible'
+  | 'approved_company_limit'
+  | 'approved_waiting_for_verification'
+  | 'approved_outside_window'
+  | 'approved_filtered'
+  | 'approved_applied'
+  | 'approved_canceled'
+  | 'application_history'
+
+export interface FitReviewRun {
+  id?: string
+  status: 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'unconfirmed'
+  reviewed?: number
+  new_visible_count?: number
+  reason?: string
+}
+
 export type JobSource = string
 export type ApplyType = 'external_apply' | 'easy_apply' | 'unknown'
 
@@ -17,6 +40,9 @@ export type ApplyType = 'external_apply' | 'easy_apply' | 'unknown'
 export interface Job {
   id: number
   status?: string | null
+  application_date?: string | null
+  personal_fit?: 'yes' | 'no' | 'deferred' | null
+  fit_review?: { stage: FitReviewStage; reason: string | null } | null
   title: string
   company: string
   location: string | null
@@ -104,6 +130,7 @@ export type SortField =
 export type SortDirection = 'asc' | 'desc'
 
 export interface JobsQuery {
+  view?: 'all' | 'matches' | 'history'
   source?: string
   status?: string
   limit?: number

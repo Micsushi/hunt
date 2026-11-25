@@ -9,6 +9,8 @@ import {
   patchJob,
   requeueJob,
   setJobPriority,
+  setApplicationStatus,
+  type ApplicationStatus,
 } from '@/api/jobs'
 import {
   enqueueFletcherJob,
@@ -19,7 +21,7 @@ import {
 } from '@/api/control'
 import { logHumanCommand } from '@/api/humanCommandLog'
 import { StatusBadge } from '@/components/StatusBadge'
-import { discoveryLabel } from '@/utils/discovery'
+import { discoveryLabel, fitReviewLabel } from '@/utils/discovery'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
 import type { JobDetail, JobsQuery, SortDirection, SortField } from '@/types/job'
@@ -71,6 +73,7 @@ function adjacentQueryFromParams(p: URLSearchParams): JobsQuery {
   const limit = parseInt(p.get('limit') || '', 10)
   const page = parseInt(p.get('page') || '', 10)
   return {
+    view: p.get('view') === 'matches' ? 'matches' : p.get('view') === 'history' ? 'history' : 'all',
     source: p.get('source') || 'all',
     status: p.get('status') || 'all',
     q: p.get('q') || '',
@@ -608,6 +611,118 @@ export function JobDetailPage() {
   return <JobDetail key={jobId} jobId={jobId} />
 }
 
+type ApplicationState = { status: ApplicationStatus; application_date: string | null }
+type ApplicationChange = { jobId: number; before: ApplicationState; after: ApplicationState }
+type ApplicationHistory = { undo: ApplicationChange[]; redo: ApplicationChange[] }
+const APPLICATION_HISTORY_KEY = ['job-application-history']
+const APPLICATION_LABELS = { new: 'Not applied', applied: 'Applied', canceled: 'Canceled' }
+
+function ApplicationStatusControl({ job }: { job: JobDetail }) {
+  const qc = useQueryClient()
+  const { data: history } = useQuery<ApplicationHistory>({
+    queryKey: APPLICATION_HISTORY_KEY,
+    enabled: false,
+    initialData: { undo: [], redo: [] },
+    gcTime: Infinity,
+  })
+  const current: ApplicationState = {
+    status:
+      job.status === 'applied'
+        ? 'applied'
+        : job.status === 'canceled' || job.status === 'cancelled'
+          ? 'canceled'
+          : 'new',
+    application_date: job.application_date ?? null,
+  }
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  const selectRef = useRef<HTMLSelectElement>(null)
+  const undo = history?.undo[history.undo.length - 1]
+  const redo = history?.redo[history.redo.length - 1]
+
+  async function save(status: ApplicationStatus, action?: 'undo' | 'redo') {
+    if (pending) return
+    const entry = action === 'undo' ? undo : action === 'redo' ? redo : undefined
+    const origin = document.activeElement
+    setPending(true)
+    setError('')
+    try {
+      const target = action === 'undo' ? entry?.before : entry?.after
+      const expected = action === 'undo' ? entry?.after : entry?.before
+      const after = await setApplicationStatus(
+        job.id,
+        status,
+        expected ?? current,
+        target?.application_date,
+      )
+      qc.setQueryData<JobDetail>(['job', job.id], (old) => old && { ...old, ...after })
+      qc.setQueryData<ApplicationHistory>(APPLICATION_HISTORY_KEY, (old) => {
+        const { undo: prior, redo: future } = old ?? { undo: [], redo: [] }
+        if (action === 'undo' && entry)
+          return { undo: prior.slice(0, -1), redo: [...future, entry] }
+        if (action === 'redo' && entry)
+          return { undo: [...prior, entry], redo: future.slice(0, -1) }
+        return { undo: [...prior.slice(-19), { jobId: job.id, before: current, after }], redo: [] }
+      })
+      if (origin instanceof HTMLButtonElement && document.activeElement === origin) {
+        selectRef.current?.focus()
+      }
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['job', job.id] })
+      void qc.invalidateQueries({ queryKey: ['job-adjacent'] })
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not save application status.')
+      void qc.invalidateQueries({ queryKey: ['job', job.id] })
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className={styles.inlineField}>
+      <label className={styles.inlineLabel} htmlFor="application-status">
+        Application status
+      </label>
+      <select
+        id="application-status"
+        ref={selectRef}
+        className={styles.inlineInput}
+        value={current.status}
+        aria-disabled={pending}
+        onChange={(event) => void save(event.target.value as ApplicationStatus)}
+      >
+        {Object.entries(APPLICATION_LABELS).map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      {undo?.jobId === job.id && (
+        <button
+          type="button"
+          className={styles.backBtn}
+          aria-disabled={pending}
+          onClick={() => void save(undo.before.status, 'undo')}
+        >
+          Undo
+        </button>
+      )}
+      {redo?.jobId === job.id && (
+        <button
+          type="button"
+          className={styles.backBtn}
+          aria-disabled={pending}
+          onClick={() => void save(redo.after.status, 'redo')}
+        >
+          Redo
+        </button>
+      )}
+      {pending && <span role="status">Saving application status…</span>}
+      {error && <span role="alert">{error}</span>}
+    </div>
+  )
+}
+
 function JobDetail({ jobId }: { jobId: number }) {
   const navigate = useNavigate()
   const active = useRef(false)
@@ -965,6 +1080,7 @@ function JobDetail({ jobId }: { jobId: number }) {
         <div className={styles.col}>
           <section className={styles.panel}>
             <h2 className={styles.panelTitle}>Application</h2>
+            <ApplicationStatusControl job={job} />
             <ApplicationActions key={job.id} job={job} />
           </section>
           <div className={styles.panel}>
@@ -1004,6 +1120,9 @@ function JobDetail({ jobId }: { jobId: number }) {
               />
               {job.source && <ReadonlyField label="Source" value={job.source} />}
               <ReadonlyField label="Discovery fit" value={discoveryLabel(job)} />
+              {job.fit_review && (
+                <ReadonlyField label="Review status" value={fitReviewLabel(job.fit_review)} />
+              )}
               {job.apply_type && job.apply_type !== 'unknown' && (
                 <ReadonlyField label="Apply type" value={job.apply_type.replace(/_/g, ' ')} />
               )}

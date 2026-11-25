@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
+import { fitReviewLabel } from '@/utils/discovery'
+import { fetchFitReview, requestFitReview } from '@/api/jobs'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
 import { useSummary } from '@/hooks/useSummary'
@@ -9,7 +12,7 @@ import { Pagination } from '@/components/Pagination'
 import { BulkBar } from '@/components/BulkBar'
 import { StatusBadge } from '@/components/StatusBadge'
 import styles from './Jobs.module.css'
-import type { JobsQuery, SortField, SortDirection, Job } from '@/types/job'
+import type { FitReviewRun, JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
 const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
@@ -17,6 +20,7 @@ const JOBS_QUERY_STORAGE_KEY = 'hunt.jobs.query'
 
 function queryFromParams(p: URLSearchParams): JobsQuery {
   return {
+    view: p.get('view') === 'all' ? 'all' : p.get('view') === 'history' ? 'history' : 'matches',
     source: p.get('source') || 'all',
     status: p.get('status') || 'all',
     q: p.get('q') || '',
@@ -32,6 +36,7 @@ function queryFromParams(p: URLSearchParams): JobsQuery {
 
 function queryToParams(q: JobsQuery): URLSearchParams {
   const p = new URLSearchParams()
+  if (q.view) p.set('view', q.view)
   if (q.source) p.set('source', q.source)
   if (q.status) p.set('status', q.status)
   if (q.q) p.set('q', q.q)
@@ -179,6 +184,70 @@ function Th({
   )
 }
 
+const FIT_REVIEW_QUERY = ['fit-review-run']
+
+function reviewRunLabel(run: FitReviewRun | undefined): string | null {
+  switch (run?.status) {
+    case 'queued':
+      return 'Review queued'
+    case 'running':
+      return 'Review in progress'
+    case 'completed':
+      return `Reviewed ${run.reviewed ?? 0} jobs · ${run.new_visible_count ?? 0} new matches`
+    case 'failed':
+      return run.reason ? `Review failed · ${run.reason}` : 'Review failed'
+    case 'unconfirmed':
+      return 'Review result unconfirmed'
+    default:
+      return null
+  }
+}
+
+function ReviewControl() {
+  const client = useQueryClient()
+  const run = useQuery({
+    queryKey: FIT_REVIEW_QUERY,
+    queryFn: fetchFitReview,
+    refetchInterval: (query) =>
+      ['queued', 'running'].includes(query.state.data?.status ?? '') ? 2_000 : 15_000,
+  })
+  const request = useMutation({
+    mutationFn: requestFitReview,
+    onSuccess: (state) => client.setQueryData(FIT_REVIEW_QUERY, state),
+  })
+  const status = run.data?.status
+  const runId = run.data?.id
+  useEffect(() => {
+    if (status === 'completed') {
+      void client.invalidateQueries({ queryKey: ['jobs'] })
+      void client.invalidateQueries({ queryKey: ['job'] })
+    }
+  }, [client, runId, status])
+  const busy = request.isPending || status === 'queued' || status === 'running'
+  return (
+    <div className={styles.reviewControls}>
+      <button
+        type="button"
+        className={styles.exportBtn}
+        aria-disabled={busy}
+        onClick={() => {
+          if (!busy) request.mutate()
+        }}
+      >
+        Run review
+      </button>
+      <span role="status" className="muted">
+        {request.isPending
+          ? 'Requesting review…'
+          : run.isError
+            ? 'Review status unavailable'
+            : reviewRunLabel(run.data)}
+      </span>
+      {request.isError && <span role="alert">Could not queue the review. Try again.</span>}
+    </div>
+  )
+}
+
 export function JobsPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -284,6 +353,7 @@ export function JobsPage() {
 
   function renderJob(job: Job, idx: number) {
     const checked = selectedIds.has(job.id)
+    const fitLabel = query.view === 'all' ? fitReviewLabel(job.fit_review) : null
     return (
       <tr
         key={job.id}
@@ -305,6 +375,7 @@ export function JobsPage() {
           <Link to={`/jobs/${job.id}${detailSearch}`} onClick={(event) => event.stopPropagation()}>
             {job.title || `Job #${job.id}`}
           </Link>
+          {fitLabel && <span className={styles.reviewStage}>{fitLabel}</span>}
         </td>
         <td className={styles.companyCell} title={job.company ?? undefined}>
           {job.company ?? '-'}
@@ -361,6 +432,7 @@ export function JobsPage() {
         <h1 ref={headingRef} tabIndex={-1} className={styles.heroTitle}>
           Jobs
         </h1>
+        <ReviewControl />
       </section>
 
       {isError && (
@@ -382,6 +454,22 @@ export function JobsPage() {
           </button>
         </div>
       )}
+
+      <div className={styles.exportRow}>
+        <label htmlFor="jobs-view">Show</label>
+        <select
+          id="jobs-view"
+          className={styles.exportBtn}
+          value={query.view}
+          onChange={(event) =>
+            updateQuery({ view: event.target.value as JobsQuery['view'], page: 1 })
+          }
+        >
+          <option value="matches">My matches</option>
+          <option value="all">All jobs</option>
+          <option value="history">Application history</option>
+        </select>
+      </div>
 
       <Filters
         query={query}
@@ -496,7 +584,11 @@ export function JobsPage() {
             ) : displayJobs.length === 0 ? (
               <tr>
                 <td colSpan={8} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
-                  {isError ? 'Jobs are unavailable. Retry above.' : 'No jobs match this filter.'}
+                  {isError
+                    ? 'Jobs are unavailable. Retry above.'
+                    : query.view === 'matches'
+                      ? 'No matching jobs to show.'
+                      : 'No jobs match this filter.'}
                 </td>
               </tr>
             ) : (

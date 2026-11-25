@@ -30,7 +30,7 @@ python deploy.py c1
 ```
 
 Starts `hunter`, `hunter-scheduler`, and `postgres` containers.
-Scheduler fires a scrape+enrich cycle every 10 minutes automatically.
+Scheduler targets one scrape and enrichment cycle per hour.
 
 Open the UI at `http://localhost:18090`.
 
@@ -130,7 +130,7 @@ Examples:
 ```
 
 Discovery itself has two rhythms. The normal scheduler uses a 24-hour board
-window, checks public sources hourly and employers every six hours when due.
+window and checks due public sources and employer catalogs hourly.
 Once per day it performs the configured 14-day backfill.
 Every lane records health independently; a zero-result or failed lane does not
 erase leads from another lane. Run the same full discovery pass manually with:

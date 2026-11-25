@@ -34,6 +34,9 @@ $Target = if ($NormalizedStages.Count -eq 2) { "c1c2" } elseif ($NormalizedStage
 $AppOnly = if ($Target -eq "c1c2") { "true" } else { "false" }
 $PlayArgs = @("--limit", "server2", "-e", "hunt_release_ref=$ReleaseRef",
               "-e", "hunt_deploy_target=$Target", "-e", "hunt_app_only=$AppOnly")
+if ($NormalizedStages -contains "6") {
+  $PlayArgs += @("-e", "scraper_interval_minutes=60")
+}
 if ($Check) { $PlayArgs += "--check" }
 Write-Host "Hunt server2 deploy: $Playbook $($PlayArgs -join ' ')"
 if ($PrintOnly) { return }

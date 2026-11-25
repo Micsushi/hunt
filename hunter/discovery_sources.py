@@ -1706,6 +1706,9 @@ def discover_workday(company, plan, *, fetcher=fetch_text, poster=post_public_js
                 payload = poster(plan["url"] + "/jobs", {**query, "offset": offset})
             rows = payload["jobPostings"]
             total = payload["total"]
+            # Some Workday boards report the filtered total only on the first page.
+            if offset and type(total) is int and total == 0 and rows:
+                total = expected_total
             if (
                 not isinstance(rows, list)
                 or type(total) is not int

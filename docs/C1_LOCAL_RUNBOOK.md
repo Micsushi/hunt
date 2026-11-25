@@ -248,10 +248,10 @@ it is not the normal LinkedIn or Indeed runner path.
 Transient public HTTP failures are retried up to three times; authentication,
 access denials and long rate-limit backoffs are not bypassed.
 
-The unattended runner checks due public sources hourly and company catalogs every
-six hours by default, in addition to the daily 14-day backfill. Failed or partial
-company checks are due again after one hour. These are minimum intervals after
-completion, not promises of exact start times. Board searches, public sources and
+The unattended runner targets one discovery cycle per hour and performs a daily
+14-day backfill. Referral and priority employers go first in the employer queue.
+Failed or partial checks retain their source-specific cooldowns. An overrun
+delays the next cycle. Board searches, public sources and
 company catalogs run concurrently with their existing request limits; a slow board
 does not hold up company results. Saves are serialized to preserve counts and
 deduplication. An in-progress scan must still finish before the next runner cycle.
@@ -653,3 +653,101 @@ backend use it. `ui serve` and `review` require its `index.html` and fail clearl
 if assets are missing, without attempting a build. Release preparation must verify
 the matching frontend inputs and seal the complete asset inventory separately.
 Normal checkouts without `HUNT_STATE_ROOT` retain their existing build behavior.
+## Personal job matches
+
+C1 retains discovered jobs and application history. **Jobs → My matches** shows
+reviewed fits with verified external applications. **All jobs** includes the
+rest of the catalog. Select **Application history** to see applied and canceled
+jobs. Change the application status on a job's detail page.
+
+The saved fit decision is independent of application status. Every employer
+gets two slots across the inclusive 14-day window. Recent applications consume
+slots and canceled jobs release them. For older imported applications without an
+application date, C1 uses the saved posting date when available. An application
+with neither date counts conservatively. **My matches** fills the remaining slots
+with the newest eligible postings. The application verification and C3 gates
+remain separate from fit review.
+
+### Import the existing tracker
+
+Install openpyxl on the machine doing the one-time import. From the Hunt
+checkout, preview the XLSX export and prepare a new **private** config file:
+
+```text
+python -m scripts.import_job_tracker TRACKER.xlsx --ats-map ATS_CATALOG_MAP.json --removed-keys REMOVED_REQUISITIONS.json --base-config EXISTING_C1_CONFIG.json --config-output PRIVATE_CANDIDATE.json
+```
+
+For a verified employer URL missing from the export, add
+`--career-site 'Company=https://example.com/careers'` to the preview.
+Check the import counts and inspect the destination configuration before moving
+it into place. The config merges career sites and referral companies. Legacy
+removal keys with a precise compatible requisition identity are carried over.
+Review the remaining ambiguous or incompatible keys separately.
+
+Run the import with `--apply` against an isolated database first. It preserves
+existing applied/canceled history and reports conflicts. The production import
+target must be the same database used by the C1 scheduler and the Jobs page.
+Re-run imports of the same workbook are deduplicated. No command writes to the
+original Google Sheet.
+
+### Run the six-hourly and on-demand review on server2
+
+The review worker runs under the signed-in Codex account on the host. It pulls
+the pending jobs that existed when the run started in batches of 30 and saves
+each batch as it finishes. If Codex fails or returns invalid decisions, the
+worker retries that batch through local Qwen3 8B with thinking enabled. If both
+attempts fail, the remaining jobs stay queued.
+The worker defaults to GPT-6 Luna at low effort and local Ollama at
+`http://127.0.0.1:11434`. C1 applies eligibility and employer limits after AI
+review.
+
+```text
+python3 -m scripts.review_job_matches --dry-run
+python3 -m scripts.review_job_matches
+python3 -m scripts.review_job_matches --watch --notify --hunt-url https://HUNT_HOST
+```
+
+For persistent operation, install `tools/hunt-fit-review.service` as a
+user systemd service under the user that passed `codex login status` and can
+access the C1 container. Point `~/.local/share/hunt-fit-review/current` at the
+deployed release and put `HUNT_PUBLIC_ORIGIN=https://HUNT_HOST` in
+`~/.config/hunt-fit-review/worker.env`. The service uses that origin in its
+Discord link. The worker serves
+button requests and schedules reviews at 00:00, 06:00, 12:00 and 18:00
+America/Guatemala. A worker restart picks up the current slot if it has yet
+to be queued. Use `--codex-bin` for a separately installed CLI and
+`--ollama-url` when the trusted Ollama endpoint uses a different local port.
+
+In Jobs, **Run review** queues a batch and shows whether it is queued, in
+progress, completed, failed, or unconfirmed. An authenticated integration can
+call `POST /api/jobs/fit-review` and poll `GET /api/jobs/fit-review`. A second
+request during an active run returns the existing run. Manual reviews can
+check jobs that still need information. Scheduled reviews revisit those jobs
+when a description becomes available.
+
+**All jobs** and job details show the review stage. Jobs held at the company
+limit retain their AI approval in C1. **My matches** reflects the current
+company and application history rules.
+
+Use the public Hunt origin and confirm the existing Discord webhook
+destination. Only the noon review can send a digest, after it saves its
+decisions. It counts jobs visible in **My matches** that
+weren’t in the last delivered digest, including matches added by earlier
+reviews. A completed noon review can report zero. Manual runs update Hunt
+immediately. Discovery, authentication, and enrichment report status in Hunt.
+
+The Server2 deployment wrapper passes a 60-minute interval for C1. When
+deploying directly, set `RUN_INTERVAL_SECONDS=3600` or the equivalent Ansible
+override `scraper_interval_minutes=60`. Check the next C1 cycle in Ops.
+The hourly pass runs LinkedIn, Indeed via JobSpy, public
+boards and configured direct employer catalogs, including sites inherited
+from the bundled catalogs and the tracker import. Source rate limits and
+retry delays still apply. Switch off the former spreadsheet automation after
+the live Hunt review and digest are verified.
+
+### Compare fit-review models
+
+Run `python -m scripts.benchmark_job_fit --help` for the offline comparison.
+The benchmark gives each model the production review prompt and the same
+labeled input order. The JSON report records each decision, errors, timing,
+and token counts. It does not write to Hunt or send a digest.

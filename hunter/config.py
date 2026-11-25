@@ -136,8 +136,9 @@ _DEFAULT_SEARCH_TERMS = {
         "software engineer",
         "backend developer",
         "frontend developer",
-        "DevOps",
+        "devops engineer",
         "cloud engineer",
+        "platform engineer",
         "mobile developer",
     ],
     "data": [
@@ -201,12 +202,16 @@ RESULTS_WANTED = _get_config_int("RESULTS_WANTED", 500)
 HOURS_OLD = _get_config_int(
     "HOURS_OLD", 24
 )  # 24h lookback: job_url uniqueness handles dedup across runs
-RUN_INTERVAL_SECONDS = _get_config_int("RUN_INTERVAL_SECONDS", 600)  # 10 minutes between runs
+RUN_INTERVAL_SECONDS = _get_config_int("RUN_INTERVAL_SECONDS", 3600)
 BACKFILL_INTERVAL_SECONDS = _get_config_int("BACKFILL_INTERVAL_SECONDS", 86400)
 BACKFILL_HOURS_OLD = _get_config_int("BACKFILL_HOURS_OLD", 336)
 PUBLIC_FEED_DISCOVERY = _get_config_bool("PUBLIC_FEED_DISCOVERY", True)
 PUBLIC_DISCOVERY_INTERVAL_SECONDS = _get_config_int("PUBLIC_DISCOVERY_INTERVAL_SECONDS", 3600)
-COMPANY_DISCOVERY_INTERVAL_SECONDS = _get_config_int("COMPANY_DISCOVERY_INTERVAL_SECONDS", 21600)
+COMPANY_DISCOVERY_INTERVAL_SECONDS = _get_config_int("COMPANY_DISCOVERY_INTERVAL_SECONDS", 3600)
+PRIORITY_COMPANIES = _get_config_list("PRIORITY_COMPANIES", [])
+REFERRAL_COMPANIES = _get_config_list("REFERRAL_COMPANIES", [])
+REMOVED_REQUISITION_KEYS = frozenset(_get_config_list("REMOVED_REQUISITION_KEYS", []))
+REMOVED_REQUISITION_PATHS = frozenset(_get_config_list("REMOVED_REQUISITION_PATHS", []))
 COMPANY_CAREER_SITES = _get_company_sites()
 ENRICH_AFTER_SCRAPE = _get_config_bool("ENRICH_AFTER_SCRAPE", True)
 LINKEDIN_FETCH_DESCRIPTION = _get_config_bool("LINKEDIN_FETCH_DESCRIPTION", True)

@@ -1,0 +1,14 @@
+[Unit]
+Description=Hunt personal-fit review and daily Discord digest
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/hunt-fit-review/current
+EnvironmentFile=%h/.config/hunt-fit-review/worker.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 -m scripts.review_job_matches --watch --notify --hunt-url ${HUNT_PUBLIC_ORIGIN}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

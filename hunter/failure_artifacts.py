@@ -53,7 +53,7 @@ def _relative(path):
 
 
 def _log_artifact_write(job, error_code, *, source, paths, metadata_path):
-    C1Logger(discord=False).event(
+    C1Logger().event(
         key="hunt_last_artifact_write",
         level="info",
         message="C1 failure artifacts written.",

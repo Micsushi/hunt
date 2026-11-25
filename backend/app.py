@@ -11,8 +11,9 @@ import traceback
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -37,6 +38,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -95,6 +97,7 @@ from hunter.db import (  # noqa: E402
 )
 from hunter.db_compat import is_integrity_error  # noqa: E402
 from hunter.failure_artifacts import resolve_artifact_path  # noqa: E402
+from hunter.personal_fit import request_review, review_stages, review_status  # noqa: E402
 from shared.paths import get_frontend_dist  # noqa: E402
 
 try:  # noqa: E402
@@ -3399,6 +3402,7 @@ def api_jobs_count(
     tag: str = "",
     category: str = "",
     ats_type: str = "",
+    view: Literal["all", "matches", "history"] = "all",
     _auth: str = Depends(require_auth),
 ):
     """Return total row count for current filter - used for pagination."""
@@ -3416,6 +3420,7 @@ def api_jobs_count(
         operator_tag=tag_clean,
         category=category_clean,
         ats_type=ats_type_clean,
+        view=view,
     )
     return JSONResponse({"count": total})
 
@@ -5036,6 +5041,16 @@ async def ops_requeue_errors_form(request: Request):
     return RedirectResponse(url=f"/legacy/ops?updated={updated}", status_code=303)
 
 
+@app.get("/api/jobs/fit-review")
+def api_fit_review_status(_auth: str = Depends(require_metrics_auth)):
+    return review_status()
+
+
+@app.post("/api/jobs/fit-review", status_code=202)
+def api_request_fit_review(_auth: str = Depends(require_metrics_auth)):
+    return request_review("manual")
+
+
 @app.get("/api/jobs")
 def api_jobs(
     source: str = "all",
@@ -5049,6 +5064,7 @@ def api_jobs(
     ats_type: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
+    view: Literal["all", "matches", "history"] = "all",
     _auth: str = Depends(require_auth),
 ):
     validate_job_source_filter(source)
@@ -5072,6 +5088,7 @@ def api_jobs(
         operator_tag=tag_clean,
         category=category_clean,
         ats_type=ats_type_clean,
+        view=view,
     )
     total = count_jobs_for_review(
         status=status,
@@ -5080,8 +5097,19 @@ def api_jobs(
         operator_tag=tag_clean,
         category=category_clean,
         ats_type=ats_type_clean,
+        view=view,
     )
-    return JSONResponse({"items": [_job_json(row) for row in rows], "total": total})
+    stages = (
+        {row["id"]: {"stage": "approved_visible", "reason": None} for row in rows}
+        if view == "matches"
+        else review_stages([row["id"] for row in rows])
+    )
+    return JSONResponse(
+        {
+            "items": [{**_job_json(row), "fit_review": stages.get(row["id"])} for row in rows],
+            "total": total,
+        }
+    )
 
 
 @app.get("/api/jobs/export")
@@ -5097,6 +5125,7 @@ def api_jobs_export(
     ats_type: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
+    view: Literal["all", "matches", "history"] = "all",
     _auth: str = Depends(require_auth),
 ):
     if export_format not in ("csv", "json"):
@@ -5121,6 +5150,7 @@ def api_jobs_export(
         operator_tag=tag_clean,
         category=category_clean,
         ats_type=ats_type_clean,
+        view=view,
     )
     rows = [_job_json(row) for row in rows]
     if export_format == "json":
@@ -5165,6 +5195,7 @@ def api_job_adjacent(
     ats_type: str = "",
     sort: str = "date_scraped",
     direction: str = "desc",
+    view: Literal["all", "matches", "history"] = "all",
     _auth: str = Depends(require_auth),
 ):
     """Return prev/next job IDs using the same filter and sort as the review list."""
@@ -5184,6 +5215,7 @@ def api_job_adjacent(
         operator_tag=(tag or "").strip() or None,
         category=(category or "").strip() or None,
         ats_type=(ats_type or "").strip() or None,
+        view=view,
     )
     if not ids:
         return JSONResponse({"prev_id": None, "next_id": None})
@@ -5201,7 +5233,7 @@ def api_job(job_id: int, _auth: str = Depends(require_auth)):
     row = get_job_by_id(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
-    return JSONResponse(_job_json(row))
+    return JSONResponse({**_job_json(row), "fit_review": review_stages([job_id]).get(job_id)})
 
 
 @app.get("/api/jobs/{job_id}/artifacts/{artifact_kind}")
@@ -5396,6 +5428,35 @@ def _serve_attempt_artifact(attempt_id: int, path_field: str, media_type: str):
     if not artifact_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk.")
     return FileResponse(artifact_path, media_type=media_type)
+
+
+class ApplicationStatusUpdate(BaseModel):
+    status: Literal["new", "applied", "canceled"]
+    expected_status: Literal["new", "applied", "canceled"]
+    expected_date: date | None = None
+    application_date: date | None = None
+
+
+@app.patch("/api/jobs/{job_id}/application-status")
+def api_job_application_status(
+    job_id: int, update: ApplicationStatusUpdate, _auth: str = Depends(require_auth)
+):
+    from hunter.db import update_job_status
+
+    if not get_job_by_id(job_id):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    previous_date = update.expected_date.isoformat() if update.expected_date else None
+    fields = {}
+    if "application_date" in update.model_fields_set:
+        fields["application_date"] = (
+            update.application_date.isoformat() if update.application_date else None
+        )
+    if not update_job_status(
+        job_id, update.status, expected=(update.expected_status, previous_date), **fields
+    ):
+        raise HTTPException(status_code=409, detail="Application status changed. Reload the job.")
+    job = get_job_by_id(job_id)
+    return {"status": job["status"], "application_date": job["application_date"]}
 
 
 @app.patch("/api/jobs/{job_id}", dependencies=[Depends(review_ops_dependency)])
