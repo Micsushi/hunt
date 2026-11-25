@@ -262,6 +262,8 @@ export async function prepareWorkdayAccount(call: (method: string, params?: Reco
           if (creating) preferCreate = false;
           else signInClickConfirmed = true;
           record('sign_in_diagnostic', 'submit_script_click_succeeded');
+          if (clicked.submitEvent === true) record('sign_in_diagnostic', 'submit_dom_event_observed');
+          if (clicked.invalidEvent === true) record('sign_in_diagnostic', 'submit_dom_validation_blocked');
         }
       } else if (action && (!attempted || action === 'continue_application')) {
         // Workday can reuse one document for entry and the return from registration.

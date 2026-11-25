@@ -52,8 +52,14 @@ export async function verifyAshbyAutocomplete(input: Locator, expected: string) 
     if (await element.inputValue() !== query) throw new ApplicationPause('The employer did not display the dropdown search.');
     await element.press('Escape');
     if (await element.inputValue() !== query) throw new ApplicationPause('The dropdown search changed before its selection could be verified.');
+    await element.evaluate(e => e.blur());
+    const restored = await input.page().waitForFunction(({e, expected}) =>
+      !e.isConnected || e.value === expected && e.getAttribute('aria-expanded') === 'false',
+    {e:element, expected}, {polling:50, timeout:1000}).catch(error => {
+      if (!(error instanceof Error && error.name === 'TimeoutError')) throw error;
+    });
+    await restored?.dispose();
     const result = await element.evaluate((e, expected) => {
-      e.blur();
       if (!e.isConnected || e === document.activeElement || e.getAttribute('aria-expanded') !== 'false' ||
           e.value !== expected || e.getAttribute('aria-invalid') === 'true') return {restored:false, value:e.value};
       e.huntRestoredChoice = expected;

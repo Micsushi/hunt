@@ -70,7 +70,16 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
   assertTarget();
   if (target.ats === 'lever' && !/\/apply\/?$/.test(new URL(page.url()).pathname)) await page.goto(target.url.replace(/\/$/,'')+'/apply', {waitUntil:'domcontentloaded'});
   if (target.ats === 'ashby' && !/\/application\/?$/.test(new URL(page.url()).pathname)) await page.goto(target.url.replace(/\/$/,'')+'/application', {waitUntil:'domcontentloaded'});
-  if(target.ats==='workable'&&!/\/apply\/?$/.test(new URL(page.url()).pathname))await page.goto(target.url.replace(/\/$/,'')+'/apply/',{waitUntil:'domcontentloaded'});
+  if (target.ats === 'workable' && !/\/apply\/?$/.test(new URL(page.url()).pathname)) {
+    const currentPage = await observeHostedPage(page);
+    if (currentPage.kind === 'security_challenge' || currentPage.signals.includes('account_or_code_control')) requireHostedApplication(currentPage);
+    if (currentPage.kind !== 'application') {
+      // Wait for the application controls below, even if the browser misses DOMContentLoaded.
+      assertTarget();
+      await page.goto(target.url.replace(/\/$/, '') + '/apply/', { waitUntil: 'commit' });
+    }
+  }
+  assertTarget();
   if(target.ats==='workable'){const decline=page.getByRole('button',{name:'Decline all',exact:true});if(await decline.isVisible().catch(()=>false))await decline.click();}
   const readyDeadline=Date.now()+30_000;
   let observation=await observeHostedPage(page);
@@ -80,6 +89,7 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
     await page.waitForTimeout(250);
     observation=await observeHostedPage(page);
   }
+  assertTarget();
   requireHostedApplication(observation);
   const sources = productSources(input.profile, input.resume);
   const facts = effectiveProfileFacts(input.profile);
@@ -374,7 +384,23 @@ export async function fillHostedApplication(page: Page, input: ProductInput, sig
         else {
           await loc.fill(String(expected));
           await loc.blur();
-          const readback = await loc.inputValue();
+          let readback = await loc.inputValue();
+          if (target.ats === 'greenhouse' && f.kind === 'text' && !readback &&
+              ['text', 'email', 'tel', 'url'].includes(f.inputType)) {
+            const editor = await loc.elementHandle();
+            try {
+              assertTarget();
+              const owned = (await inspectHostedFields(page)).find(field =>
+                field.key === f.key && field.label === f.label && field.inputType === f.inputType && !field.value);
+              if (owned && await editor.evaluate(e => e.isConnected && e instanceof HTMLInputElement &&
+                  !e.value && !e.disabled && !e.readOnly)) {
+                // Controlled fields can discard a bulk insertion if they track keystrokes.
+                await editor.type(String(expected));
+                await editor.evaluate(e => (e as HTMLInputElement).blur());
+                readback = await editor.inputValue();
+              }
+            } finally { await editor.dispose(); }
+          }
           if (displaysSavedSalary(f.label, readback, salary)) {
             const current = (await inspectHostedFields(page)).find(field=>field.key===f.key && field.label===f.label && field.kind===f.kind);
             if (!current?.valid || current.value!==readback) throw new ApplicationPause('The salary amount did not persist.');

@@ -13,7 +13,7 @@ export function createRequiredFieldReader({ uploadHeading, markedRequired, readR
           deepQuery(group,'input[type=radio]').some(r=>r.required || r.getAttribute('aria-required')==='true'))) return true;
     const originalLabel=e.getAttribute('data-hunt-question-label')||rawLabelFor(e);
     const label=e.type==='radio' && group ? group.getAttribute('data-hunt-question-label') ?? group.getAttribute('aria-label') ?? group.querySelector('legend')?.textContent ?? originalLabel : originalLabel;
-    if (/[✱*]\s*$/.test(label) || /(?:^|\s|\()required\)?$/i.test(label) && !/not required\)?$/i.test(label)) return true;
+    if (/[✱*]\s*(?:required\s*)?$/i.test(label) || /(?:^|\s|\()required\)?$/i.test(label) && !/not required\)?$/i.test(label)) return true;
     if (e.type==='file') {
       const binding=fileBinding(e),widget=state.nativeFileBindings?.get(e)?.group ?? binding?.widget;
       if (widget && widget!==regionFor(e)) {
