@@ -281,6 +281,7 @@ def _review_jobs_filter_sql_and_params(
     category=None,
     ats_type=None,
     view="all",
+    match_options=None,
 ):
     """Shared AND-fragment for control-plane list, counts, exports, and bulk requeue."""
     parts = []
@@ -288,7 +289,10 @@ def _review_jobs_filter_sql_and_params(
     if source:
         parts.append(" AND source = ?")
         params.append(source)
-    if status == "ready":
+    if view == "history" and status in {"applied", "canceled"}:
+        parts.append(" AND replace(lower(trim(coalesce(status, ''))), 'cancelled', 'canceled') = ?")
+        params.append(status)
+    elif status == "ready":
         if source == "linkedin" and not linkedin_auth_available:
             return None, None
         parts.append(
@@ -375,7 +379,7 @@ def _review_jobs_filter_sql_and_params(
     if ats_type_value:
         parts.append(" AND lower(trim(coalesce(ats_type, 'unknown'))) = lower(?)")
         params.append(ats_type_value)
-    view_sql, view_params = view_filter(view)
+    view_sql, view_params = view_filter(view, **(match_options or {}))
     return "".join(parts) + view_sql, params + view_params
 
 
@@ -393,6 +397,7 @@ def list_jobs_for_review(
     category=None,
     ats_type=None,
     view="all",
+    match_options=None,
 ):
     linkedin_auth_available = hunter_db.is_linkedin_auth_available()
     frag, filter_params = _review_jobs_filter_sql_and_params(
@@ -404,6 +409,7 @@ def list_jobs_for_review(
         category=category,
         ats_type=ats_type,
         view=view,
+        match_options=match_options,
     )
     if frag is None:
         return []
@@ -413,6 +419,7 @@ def list_jobs_for_review(
         base_select = (
             """
             SELECT id, title, company, source, job_url, apply_url, description,
+                   trim(coalesce(description, '')) != '' AS has_description,
                    status, apply_type, auto_apply_eligible, enrichment_status,
                    enrichment_attempts, enriched_at, last_enrichment_error,
                    apply_host, ats_type, last_enrichment_started_at, next_enrichment_retry_at,
@@ -439,6 +446,7 @@ def list_jobs_for_review(
             "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
             "last_enrichment_error": "coalesce(last_enrichment_error, '')",
             "date_scraped": "date_scraped",
+            "date_posted": "coalesce(nullif(date_posted, ''), date_scraped)",
             "enriched_at": "coalesce(enriched_at, '')",
         }
         safe_sort_sql = sortable_columns.get(sort, "date_scraped")
@@ -482,6 +490,7 @@ def list_job_ids_for_review(
     category=None,
     ats_type=None,
     view="all",
+    match_options=None,
 ):
     linkedin_auth_available = hunter_db.is_linkedin_auth_available()
     frag, filter_params = _review_jobs_filter_sql_and_params(
@@ -493,6 +502,7 @@ def list_job_ids_for_review(
         category=category,
         ats_type=ats_type,
         view=view,
+        match_options=match_options,
     )
     if frag is None:
         return []
@@ -512,6 +522,7 @@ def list_job_ids_for_review(
             "next_enrichment_retry_at": "coalesce(next_enrichment_retry_at, '')",
             "last_enrichment_error": "coalesce(last_enrichment_error, '')",
             "date_scraped": "date_scraped",
+            "date_posted": "coalesce(nullif(date_posted, ''), date_scraped)",
             "enriched_at": "coalesce(enriched_at, '')",
         }
         safe_sort_sql = sortable_columns.get(sort, "date_scraped")
@@ -545,6 +556,7 @@ def count_jobs_for_review(
     category=None,
     ats_type=None,
     view="all",
+    match_options=None,
 ):
     linkedin_auth_available = hunter_db.is_linkedin_auth_available()
     frag, filter_params = _review_jobs_filter_sql_and_params(
@@ -556,6 +568,7 @@ def count_jobs_for_review(
         category=category,
         ats_type=ats_type,
         view=view,
+        match_options=match_options,
     )
     if frag is None:
         return 0

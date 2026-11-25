@@ -1,7 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { timeAgo } from '@/utils/time'
-import { fitReviewLabel } from '@/utils/discovery'
-import { fetchFitReview, requestFitReview } from '@/api/jobs'
+import {
+  detailsFilter,
+  enrichmentIssue,
+  jobEnrichmentLabel,
+  jobReviewStatus,
+  matchHoldReason,
+  verifiedApplyLink,
+} from '@/utils/discovery'
+import { fetchFitReview, jobsQueryParams as queryToParams, requestFitReview } from '@/api/jobs'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useJobs } from '@/hooks/useJobs'
@@ -10,7 +17,6 @@ import { useUiStore } from '@/store/ui'
 import { Filters } from '@/components/Filters'
 import { Pagination } from '@/components/Pagination'
 import { BulkBar } from '@/components/BulkBar'
-import { StatusBadge } from '@/components/StatusBadge'
 import styles from './Jobs.module.css'
 import type { FitReviewRun, JobsQuery, SortField, SortDirection, Job } from '@/types/job'
 
@@ -18,36 +24,38 @@ const MOCK = import.meta.env.VITE_MOCK_BACKEND === 'true'
 const REVIEW_QUERY_STORAGE_KEY = 'hunt.jobs.reviewQuery'
 const JOBS_QUERY_STORAGE_KEY = 'hunt.jobs.query'
 
+const JOB_VIEWS = [
+  ['matches', 'My matches'],
+  ['all', 'All jobs'],
+  ['history', 'Application history'],
+] as const
+
 function queryFromParams(p: URLSearchParams): JobsQuery {
+  const view = p.get('view') === 'all' ? 'all' : p.get('view') === 'history' ? 'history' : 'matches'
+  const matchStatus = p.get('match_status')
   return {
-    view: p.get('view') === 'all' ? 'all' : p.get('view') === 'history' ? 'history' : 'matches',
+    view,
+    match_days: boundedParam(p.get('match_days'), view === 'matches' ? 14 : 0, 365),
+    company_limit: boundedParam(p.get('company_limit'), 2, 20),
+    match_status:
+      matchStatus === 'ready' || matchStatus === 'needs_verification' ? matchStatus : 'all',
+    details: detailsFilter(p.get('details')),
     source: p.get('source') || 'all',
     status: p.get('status') || 'all',
     q: p.get('q') || '',
     tag: p.get('tag') || '',
     category: p.get('category') || '',
     ats_type: p.get('ats_type') || '',
-    sort: (p.get('sort') || 'date_scraped') as SortField,
+    sort: (p.get('sort') || (view === 'matches' ? 'date_posted' : 'date_scraped')) as SortField,
     direction: (p.get('direction') || 'desc') as SortDirection,
     limit: Math.max(1, parseInt(p.get('limit') || '50', 10) || 50),
     page: Math.max(1, parseInt(p.get('page') || '1', 10) || 1),
   }
 }
 
-function queryToParams(q: JobsQuery): URLSearchParams {
-  const p = new URLSearchParams()
-  if (q.view) p.set('view', q.view)
-  if (q.source) p.set('source', q.source)
-  if (q.status) p.set('status', q.status)
-  if (q.q) p.set('q', q.q)
-  if (q.tag) p.set('tag', q.tag)
-  if (q.category) p.set('category', q.category)
-  if (q.ats_type) p.set('ats_type', q.ats_type)
-  if (q.sort) p.set('sort', q.sort)
-  if (q.direction) p.set('direction', q.direction)
-  if (q.limit) p.set('limit', String(q.limit))
-  if (q.page) p.set('page', String(q.page))
-  return p
+function boundedParam(value: string | null, fallback: number, max: number) {
+  if (value === null || !/^\d+$/.test(value)) return fallback
+  return Math.min(Number(value), max)
 }
 
 function storedJobsQueryParams(): URLSearchParams | null {
@@ -90,19 +98,17 @@ function mockDownloadHref(format: 'csv' | 'json'): string {
 const COL_TIPS: Record<string, string> = {
   Title: 'Job title',
   Company: 'Employer name',
-  ID: 'Database row ID',
+  Posted: 'Employer posting date',
   Links: 'View listing or apply page',
-  Enrichment: 'Current enrichment status',
-  'Apply type': '"external_apply" = company ATS. "easy_apply" = LinkedIn - we skip those.',
+  Status: 'Fit and application readiness',
+  Enrichment: 'Description and direct application link',
   Added: 'When this job was scraped',
 }
 
 const COL_SORT_KEYS: Record<string, SortField | undefined> = {
-  ID: 'id',
+  Posted: 'date_posted',
   Company: 'company',
   Title: 'title',
-  Enrichment: 'enrichment_status',
-  'Apply type': 'apply_type',
   Added: 'date_scraped',
 }
 
@@ -127,6 +133,9 @@ function compareJobs(a: Job, b: Job, field: string, dir: 'asc' | 'desc'): number
   } else if (field === 'apply_type') {
     av = a.apply_type ?? ''
     bv = b.apply_type ?? ''
+  } else if (field === 'date_posted') {
+    av = a.date_posted || a.date_scraped
+    bv = b.date_posted || b.date_scraped
   } else if (field === 'date_scraped') {
     av = a.date_scraped ?? ''
     bv = b.date_scraped ?? ''
@@ -191,7 +200,7 @@ function reviewRunLabel(run: FitReviewRun | undefined): string | null {
     case 'queued':
       return 'Review queued'
     case 'running':
-      return 'Review in progress'
+      return `${run.trigger === 'backfill' ? 'Backlog review' : 'Agent review'} in progress${run.reviewed ? ` · ${run.reviewed} checked` : ''}`
     case 'completed':
       return `Reviewed ${run.reviewed ?? 0} jobs · ${run.new_visible_count ?? 0} new matches`
     case 'failed':
@@ -217,26 +226,31 @@ function ReviewControl() {
   })
   const status = run.data?.status
   const runId = run.data?.id
+  const reviewed = run.data?.reviewed ?? 0
+  const statusRef = useRef<HTMLSpanElement>(null)
   useEffect(() => {
-    if (status === 'completed') {
+    if (reviewed > 0 || status === 'completed') {
       void client.invalidateQueries({ queryKey: ['jobs'] })
       void client.invalidateQueries({ queryKey: ['job'] })
     }
-  }, [client, runId, status])
-  const busy = request.isPending || status === 'queued' || status === 'running'
+  }, [client, reviewed, runId, status])
+  const busy =
+    request.isPending || run.isPending || run.isError || status === 'queued' || status === 'running'
   return (
     <div className={styles.reviewControls}>
       <button
         type="button"
-        className={styles.exportBtn}
-        aria-disabled={busy}
+        className={styles.reviewButton}
+        disabled={busy}
         onClick={() => {
-          if (!busy) request.mutate()
+          if (busy) return
+          statusRef.current?.focus()
+          request.mutate()
         }}
       >
-        Run review
+        Run agent review
       </button>
-      <span role="status" className="muted">
+      <span ref={statusRef} tabIndex={-1} role="status" className={styles.reviewState}>
         {request.isPending
           ? 'Requesting review…'
           : run.isError
@@ -351,9 +365,17 @@ export function JobsPage() {
   const allChecked = allIds.length > 0 && allIds.every((id) => selectedIds.has(id))
   const someChecked = allIds.some((id) => selectedIds.has(id))
 
+  const isMatches = query.view === 'matches'
+  const columns = isMatches
+    ? ['Title', 'Company', 'Posted', 'Status', 'Enrichment', 'Links']
+    : ['Title', 'Company', 'Posted', 'Status', 'Enrichment', 'Links', 'Added']
+
   function renderJob(job: Job, idx: number) {
     const checked = selectedIds.has(job.id)
-    const fitLabel = query.view === 'all' ? fitReviewLabel(job.fit_review) : null
+    const jobState = jobReviewStatus(job)
+    const hold = matchHoldReason(job.fit_review)
+    const issue = enrichmentIssue(job)
+    const hasVerifiedLink = verifiedApplyLink(job)
     return (
       <tr
         key={job.id}
@@ -375,14 +397,29 @@ export function JobsPage() {
           <Link to={`/jobs/${job.id}${detailSearch}`} onClick={(event) => event.stopPropagation()}>
             {job.title || `Job #${job.id}`}
           </Link>
-          {fitLabel && <span className={styles.reviewStage}>{fitLabel}</span>}
         </td>
         <td className={styles.companyCell} title={job.company ?? undefined}>
           {job.company ?? '-'}
         </td>
-        <td className={styles.idCell}>#{job.id}</td>
+        <td className={styles.postedCell}>
+          {job.date_posted ? (
+            <time dateTime={job.date_posted}>{job.date_posted.slice(0, 10)}</time>
+          ) : (
+            'Date unknown'
+          )}
+        </td>
+        <td className={styles.statusCell}>
+          <span className={styles.jobStatus} data-confirmed={jobState === 'Confirmed' || undefined}>
+            {jobState}
+          </span>
+          {hold && <small>{hold}</small>}
+        </td>
+        <td className={styles.enrichmentCell}>
+          <span>{jobEnrichmentLabel(job)}</span>
+          {issue && <small>{issue}</small>}
+        </td>
         <td className={styles.linksCell} onClick={(e) => e.stopPropagation()}>
-          {job.job_url && (
+          {job.job_url && (!isMatches || !hasVerifiedLink) && (
             <a
               href={job.job_url}
               target="_blank"
@@ -393,7 +430,7 @@ export function JobsPage() {
               Listing ↗
             </a>
           )}
-          {job.apply_url && (
+          {job.apply_url && (!isMatches || hasVerifiedLink) && (
             <a
               href={job.apply_url}
               target="_blank"
@@ -405,13 +442,11 @@ export function JobsPage() {
             </a>
           )}
         </td>
-        <td className={styles.statusCell}>
-          <StatusBadge status={job.enrichment_status} size="sm" />
-        </td>
-        <td className={styles.applyType}>{job.apply_type?.replace(/_/g, ' ') ?? '-'}</td>
-        <td className={styles.addedCell} title={job.date_scraped ?? undefined}>
-          {timeAgo(job.date_scraped)}
-        </td>
+        {!isMatches && (
+          <td className={styles.addedCell} title={job.date_scraped ?? undefined}>
+            {timeAgo(job.date_scraped)}
+          </td>
+        )}
       </tr>
     )
   }
@@ -455,20 +490,30 @@ export function JobsPage() {
         </div>
       )}
 
-      <div className={styles.exportRow}>
-        <label htmlFor="jobs-view">Show</label>
-        <select
-          id="jobs-view"
-          className={styles.exportBtn}
-          value={query.view}
-          onChange={(event) =>
-            updateQuery({ view: event.target.value as JobsQuery['view'], page: 1 })
-          }
-        >
-          <option value="matches">My matches</option>
-          <option value="all">All jobs</option>
-          <option value="history">Application history</option>
-        </select>
+      <div className={styles.views} role="group" aria-label="Jobs view">
+        {JOB_VIEWS.map(([view, label]) => (
+          <button
+            key={view}
+            type="button"
+            aria-pressed={query.view === view}
+            onClick={() => {
+              if (view === query.view) return
+              updateQuery({
+                view,
+                match_days: view === 'matches' ? 14 : 0,
+                company_limit: 2,
+                match_status: 'all',
+                details: 'all',
+                status: 'all',
+                sort: view === 'matches' ? 'date_posted' : 'date_scraped',
+                direction: 'desc',
+                page: 1,
+              })
+            }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <Filters
@@ -525,7 +570,7 @@ export function JobsPage() {
         aria-keyshortcuts="J K Enter"
         tabIndex={0}
       >
-        <table className={styles.table}>
+        <table className={`${styles.table} ${isMatches ? styles.matchesTable : ''}`}>
           <thead>
             <tr>
               <th scope="col" className={styles.selectHead}>
@@ -545,7 +590,7 @@ export function JobsPage() {
                   Select page
                 </label>
               </th>
-              <th className={styles.mobileHead} colSpan={7}>
+              <th className={styles.mobileHead} colSpan={columns.length}>
                 <select
                   aria-label="Sort this page"
                   value={localSort ? `${localSort.field}:${localSort.dir}` : ''}
@@ -555,15 +600,20 @@ export function JobsPage() {
                   }}
                 >
                   <option value="">Sort this page</option>
-                  {Object.entries(COL_SORT_KEYS).map(([label, field]) => (
-                    <optgroup key={field} label={label}>
-                      <option value={`${field}:asc`}>{label} ↑</option>
-                      <option value={`${field}:desc`}>{label} ↓</option>
-                    </optgroup>
-                  ))}
+                  {columns
+                    .filter((label) => COL_SORT_KEYS[label])
+                    .map((label) => {
+                      const field = COL_SORT_KEYS[label]
+                      return (
+                        <optgroup key={field} label={label}>
+                          <option value={`${field}:asc`}>{label} ↑</option>
+                          <option value={`${field}:desc`}>{label} ↓</option>
+                        </optgroup>
+                      )
+                    })}
                 </select>
               </th>
-              {Object.keys(COL_TIPS).map((label) => (
+              {columns.map((label) => (
                 <Th
                   key={label}
                   label={label}
@@ -577,13 +627,19 @@ export function JobsPage() {
           <tbody ref={tbodyRef}>
             {isLoading ? (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                <td
+                  colSpan={columns.length + 1}
+                  style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}
+                >
                   Loading…
                 </td>
               </tr>
             ) : displayJobs.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                <td
+                  colSpan={columns.length + 1}
+                  style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}
+                >
                   {isError
                     ? 'Jobs are unavailable. Retry above.'
                     : query.view === 'matches'

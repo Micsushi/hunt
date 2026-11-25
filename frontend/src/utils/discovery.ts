@@ -1,9 +1,51 @@
-import type { Job } from '@/types/job'
+import type { Job, JobDetailsFilter } from '@/types/job'
 
 export const detailQualityLabels: Record<string, string> = {
   enriched: 'Description + link',
   partial: 'Missing details',
   failed: 'No details',
+}
+
+export const enrichmentLabels: Record<JobDetailsFilter, string> = {
+  all: 'Any enrichment',
+  complete: 'Complete',
+  description: 'Description missing',
+  link: 'Application link unverified',
+  both: 'Description and link needed',
+}
+
+export function detailsFilter(value: string | null): JobDetailsFilter {
+  if (value === 'complete' || value === 'description' || value === 'link' || value === 'both')
+    return value
+  return 'all'
+}
+
+export function verifiedApplyLink(job: Job): boolean {
+  return Boolean(
+    job.apply_type === 'external_apply' &&
+    job.auto_apply_eligible &&
+    job.apply_url?.trim() &&
+    ['done', 'done_verified'].includes(job.enrichment_status ?? ''),
+  )
+}
+
+export function jobEnrichmentLabel(job: Job & { description?: string | null }): string {
+  const hasDescription = Boolean(job.description?.trim() || job.has_description)
+  const hasLink = verifiedApplyLink(job)
+  if (hasDescription) return enrichmentLabels[hasLink ? 'complete' : 'link']
+  return enrichmentLabels[hasLink ? 'description' : 'both']
+}
+
+export function enrichmentIssue(job: Job): string | null {
+  if (verifiedApplyLink(job)) return null
+  const error = job.last_enrichment_error?.toLowerCase()
+  if (error === 'job_removed') return 'Posting closed'
+  if (job.enrichment_status === 'processing') return 'Checking the application link'
+  if (error?.includes('429') || error?.includes('rate_limited')) return 'Source rate limit'
+  if (error?.includes('login') || error?.includes('sign_in')) return 'Source needs sign-in'
+  if (error?.includes('403') || error?.includes('checkpoint')) return 'Source blocked access'
+  if (error?.includes('timeout')) return 'Source check timed out'
+  return null
 }
 
 const reasons: Record<string, string> = {
@@ -23,6 +65,7 @@ const reasons: Record<string, string> = {
   removed_requisition: 'Previously removed requisition',
   possible_removed_requisition: 'May match a previously removed posting',
   employer_month_cap: 'Employer monthly limit reached',
+  posting_date_unknown: 'Posting date unknown',
 }
 
 export function discoveryLabel(
@@ -41,8 +84,8 @@ const fitLabels: Record<NonNullable<Job['fit_review']>['stage'], string> = {
   ai_rejected: 'Rejected by AI',
   approved_visible: 'AI approved · In My matches',
   approved_company_limit: 'AI approved · Held by company limit',
-  approved_waiting_for_verification: 'AI approved · Waiting for verification',
-  approved_outside_window: 'AI approved · Outside review window',
+  approved_waiting_for_verification: 'AI approved',
+  approved_outside_window: 'AI approved · Outside posting period',
   approved_filtered: 'AI approved · Filtered by Hunt',
   approved_applied: 'AI approved · Already applied',
   approved_canceled: 'AI approved · Canceled',
@@ -60,4 +103,35 @@ export function fitReviewLabel(fit: Job['fit_review']): string | null {
     return reason ? `${label} · ${reason}` : label
   }
   return label
+}
+
+export function matchHoldReason(fit: Job['fit_review']): string | null {
+  if (fit?.stage === 'approved_company_limit') return 'Held by company limit'
+  if (fit?.stage === 'approved_outside_window') return 'Outside My matches date range'
+  if (fit?.stage === 'approved_filtered' && fit.reason === 'posting_date_unknown')
+    return 'Posting date unknown'
+  return null
+}
+
+export function jobReviewStatus(job: Job): string {
+  const state = job.status?.toLowerCase()
+  if (state === 'applied') return 'Applied'
+  if (state === 'canceled' || state === 'cancelled') return 'Canceled'
+  const error = job.last_enrichment_error
+  if (error === 'job_removed') return 'Posting closed'
+  if (job.apply_type === 'easy_apply') return 'Easy Apply only'
+  const fit = job.fit_review
+  if (fit?.stage === 'ai_rejected' || job.personal_fit === 'no') return 'Doesn’t match'
+  if (fit?.stage === 'needs_information' || job.personal_fit === 'deferred')
+    return 'Fit needs more information'
+  if (fit?.stage === 'awaiting_review') return 'Awaiting agent review'
+  if (
+    fit?.stage === 'filtered_before_ai' ||
+    (fit?.stage === 'approved_filtered' && fit.reason !== 'posting_date_unknown')
+  )
+    return (fit.reason && reasons[fit.reason]) || 'Excluded by job filters'
+  if (job.discovery_suppressed_reason === 'geography_unverified') return 'Location needs checking'
+  return fit?.stage.startsWith('approved_') || job.personal_fit === 'yes'
+    ? 'Confirmed'
+    : 'Awaiting agent review'
 }

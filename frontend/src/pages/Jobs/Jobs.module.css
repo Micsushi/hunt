@@ -1,7 +1,7 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 .hero {
   display: flex;
@@ -16,23 +16,62 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 12px;
+  gap: 6px 12px;
 }
 
-.reviewControls button {
+.reviewButton {
   min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 650;
 }
 
-.reviewControls button[aria-disabled='true'] {
-  cursor: default;
-}
-
-.reviewStage {
-  display: block;
-  margin-top: 2px;
+.reviewButton:disabled {
   color: var(--muted);
-  font-size: 0.76rem;
-  white-space: normal;
+  background: var(--panel);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+.reviewState {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.views button {
+  min-height: 42px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+}
+
+.views button[aria-pressed='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+}
+
+.jobStatus {
+  color: var(--muted);
+}
+
+.jobStatus[data-confirmed='true'] {
+  color: var(--accent);
+  font-weight: 650;
 }
 .heroTitle {
   font-size: 1.5rem;
@@ -90,7 +129,7 @@
 }
 
 .table td {
-  padding: 13px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
   font-size: 0.875rem;
@@ -98,33 +137,51 @@
 }
 
 .table .selectHead {
-  width: 2.5rem;
+  width: 2.25rem;
+  padding-inline: 0;
   text-align: center;
 }
-.mobileHead,
+.table .mobileHead,
 .selectPageLabel {
   display: none;
 }
-.table th:nth-child(3) {
-  width: 25%;
-}
 .table th:nth-child(4) {
-  width: 16%;
+  width: 18%;
 }
 .table th:nth-child(5) {
-  width: 7%;
+  width: 11%;
 }
 .table th:nth-child(6) {
   width: 13%;
 }
 .table th:nth-child(7) {
-  width: 14%;
+  width: 19%;
 }
 .table th:nth-child(8) {
-  width: 12%;
+  width: 9%;
+}
+.table th:nth-child(9) {
+  width: 8%;
+}
+.matchesTable th:nth-child(4) {
+  width: 20%;
+}
+.matchesTable th:nth-child(7) {
+  width: 22%;
 }
 .table input[type='checkbox'] {
   accent-color: var(--accent);
+  margin: 0;
+}
+.table td:first-child {
+  padding-inline: 0;
+  text-align: center;
+}
+.statusCell small,
+.enrichmentCell small {
+  display: block;
+  color: var(--muted);
+  margin-top: 2px;
 }
 
 .table tr:last-child td {
@@ -168,13 +225,6 @@
   outline-offset: -2px;
 }
 
-.idCell {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  white-space: nowrap;
-}
-
 .titleCell,
 .companyCell {
   overflow-wrap: anywhere;
@@ -191,7 +241,8 @@
   display: inline-block;
   margin-right: 8px;
 }
-.addedCell {
+.addedCell,
+.postedCell {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -289,13 +340,21 @@
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       'check title title'
-      '. company id'
-      '. status type'
+      '. company posted'
+      '. status status'
+      '. enrichment enrichment'
       '. links added';
     gap: 5px 10px;
     padding: 14px;
     border-bottom: 1px solid var(--line);
     align-items: center;
+  }
+  .matchesTable .jobRow {
+    grid-template-areas:
+      'check title title'
+      '. company posted'
+      '. status links'
+      '. enrichment enrichment';
   }
   .jobRow:last-child {
     border-bottom: 0;
@@ -317,14 +376,14 @@
   .companyCell {
     grid-area: company;
   }
-  .idCell {
-    grid-area: id;
+  .postedCell {
+    grid-area: posted;
   }
   .statusCell {
     grid-area: status;
   }
-  .applyType {
-    grid-area: type;
+  .enrichmentCell {
+    grid-area: enrichment;
   }
   .linksCell {
     grid-area: links;
@@ -332,8 +391,7 @@
   .addedCell {
     grid-area: added;
   }
-  .idCell,
-  .applyType,
+  .postedCell,
   .addedCell {
     text-align: right;
   }
@@ -341,8 +399,11 @@
   .table .addedCell {
     padding-top: 4px;
   }
+  .matchesTable .linksCell {
+    text-align: right;
+  }
   .table .statusCell,
-  .table .applyType {
+  .table .enrichmentCell {
     padding-top: 3px;
   }
 }

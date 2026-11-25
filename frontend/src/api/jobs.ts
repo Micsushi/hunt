@@ -3,9 +3,13 @@ import { logHumanCommand } from './humanCommandLog'
 import type { FitReviewRun, JobDetail, JobsQuery, JobsResponse, ResumeAttempt } from '@/types/job'
 import type { ResumeReviewPackage } from '@/pages/Fletcher/review/types'
 
-function buildParams(q: JobsQuery): string {
+export function jobsQueryParams(q: JobsQuery): URLSearchParams {
   const p = new URLSearchParams()
   if (q.view) p.set('view', q.view)
+  if (q.match_days !== undefined) p.set('match_days', String(q.match_days))
+  if (q.company_limit !== undefined) p.set('company_limit', String(q.company_limit))
+  if (q.match_status) p.set('match_status', q.match_status)
+  if (q.details && q.details !== 'all') p.set('details', q.details)
   if (q.source) p.set('source', q.source)
   if (q.status) p.set('status', q.status)
   if (q.limit !== undefined) p.set('limit', String(q.limit))
@@ -16,25 +20,17 @@ function buildParams(q: JobsQuery): string {
   if (q.ats_type) p.set('ats_type', q.ats_type)
   if (q.sort) p.set('sort', q.sort)
   if (q.direction) p.set('direction', q.direction)
-  return p.toString()
+  return p
 }
 
 export function fetchJobs(q: JobsQuery = {}): Promise<JobsResponse> {
-  return get<JobsResponse>(`/api/jobs?${buildParams(q)}`)
+  return get<JobsResponse>(`/api/jobs?${jobsQueryParams(q)}`)
 }
 
 export function fetchJobCount(
   q: Omit<JobsQuery, 'limit' | 'page' | 'sort' | 'direction'>,
 ): Promise<{ count: number }> {
-  const p = new URLSearchParams()
-  if (q.view) p.set('view', q.view)
-  if (q.source) p.set('source', q.source)
-  if (q.status) p.set('status', q.status)
-  if (q.q) p.set('q', q.q)
-  if (q.tag) p.set('tag', q.tag)
-  if (q.category) p.set('category', q.category)
-  if (q.ats_type) p.set('ats_type', q.ats_type)
-  return get<{ count: number }>(`/api/jobs/count?${p.toString()}`)
+  return get<{ count: number }>(`/api/jobs/count?${jobsQueryParams(q)}`)
 }
 
 export function fetchJob(id: number): Promise<JobDetail> {
@@ -107,7 +103,7 @@ export function fetchAdjacentJobs(
   id: number,
   q: JobsQuery = {},
 ): Promise<{ prev_id: number | null; next_id: number | null }> {
-  const params = buildParams(q)
+  const params = jobsQueryParams(q)
   return get(`/api/jobs/${id}/adjacent${params ? `?${params}` : ''}`)
 }
 

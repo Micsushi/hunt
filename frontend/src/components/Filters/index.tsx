@@ -1,11 +1,11 @@
 import { useEffect, useRef, useCallback } from 'react'
 import styles from './Filters.module.css'
 import type { JobsQuery, SortField } from '@/types/job'
-import { detailQualityLabels } from '@/utils/discovery'
+import { detailQualityLabels, detailsFilter, enrichmentLabels } from '@/utils/discovery'
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
-  { value: 'ready', label: 'Ready' },
+  { value: 'ready', label: 'Ready for enrichment' },
   { value: 'enriched', label: detailQualityLabels.enriched },
   { value: 'partial', label: detailQualityLabels.partial },
   { value: 'pending', label: 'Pending enrich' },
@@ -20,6 +20,12 @@ const STATUS_OPTIONS = [
   { value: 'blocked_verified', label: 'Blocked verified' },
 ]
 
+const HISTORY_OPTIONS = [
+  { value: 'all', label: 'All statuses' },
+  { value: 'applied', label: 'Applied' },
+  { value: 'canceled', label: 'Canceled' },
+]
+
 const SOURCE_OPTIONS = [
   { value: 'all', label: 'All sources' },
   { value: 'linkedin', label: 'LinkedIn' },
@@ -27,11 +33,11 @@ const SOURCE_OPTIONS = [
 ]
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
-  { value: 'date_scraped', label: 'Date scraped' },
+  { value: 'date_posted', label: 'Posting date' },
+  { value: 'date_scraped', label: 'Date added' },
   { value: 'company', label: 'Company' },
   { value: 'title', label: 'Title' },
   { value: 'enrichment_status', label: 'Enrichment status' },
-  { value: 'apply_type', label: 'Apply type' },
   { value: 'next_enrichment_retry_at', label: 'Next retry' },
   { value: 'enriched_at', label: 'Enriched at' },
   { value: 'id', label: 'ID' },
@@ -46,6 +52,13 @@ interface Props {
 }
 
 export function Filters({ query, onChange, statusCounts, sourceCounts, isFetching }: Props) {
+  const isMatches = query.view === 'matches'
+  const isHistory = query.view === 'history'
+  const statusOptions = isHistory ? HISTORY_OPTIONS : STATUS_OPTIONS
+  const defaultDays = isMatches ? 14 : 0
+  const defaultSort = isMatches ? 'date_posted' : 'date_scraped'
+  const period = query.match_days ?? defaultDays
+  const companyLimit = query.company_limit ?? 2
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sourceOptions = [
     ...SOURCE_OPTIONS,
@@ -91,7 +104,10 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
     query.ats_type ||
     (query.source && query.source !== 'all') ||
     (query.status && query.status !== 'all') ||
-    (query.sort && query.sort !== 'date_scraped') ||
+    (query.details && query.details !== 'all') ||
+    period !== defaultDays ||
+    (isMatches && (companyLimit !== 2 || (query.match_status ?? 'all') !== 'all')) ||
+    (query.sort && query.sort !== defaultSort) ||
     query.direction === 'asc' ||
     (query.limit ?? 50) !== 50 ||
     (query.page ?? 1) !== 1,
@@ -110,7 +126,11 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
       tag: '',
       category: '',
       ats_type: '',
-      sort: 'date_scraped',
+      sort: defaultSort,
+      match_days: defaultDays,
+      company_limit: 2,
+      match_status: 'all',
+      details: 'all',
       direction: 'desc',
       page: 1,
       limit: 50,
@@ -140,27 +160,111 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
         </div>
 
         <div className={styles.filterGroup}>
-          <label className={styles.filterLabel} htmlFor="jobs-status">
-            Status
+          <label className={styles.filterLabel} htmlFor="jobs-period">
+            Posting date
           </label>
           <select
-            id="jobs-status"
+            id="jobs-period"
             className={styles.select}
-            value={query.status ?? 'all'}
-            onChange={(e) => onChange({ status: e.target.value, page: 1 })}
+            value={period}
+            onChange={(e) => onChange({ match_days: Number(e.target.value), page: 1 })}
           >
-            {query.status && !STATUS_OPTIONS.some((option) => option.value === query.status) && (
-              <option value={query.status}>{query.status.replace(/_/g, ' ')}</option>
+            <option value={0}>Any date</option>
+            <option value={1}>Today</option>
+            <option value={3}>Past 3 days</option>
+            <option value={7}>Past week</option>
+            <option value={14}>Past 2 weeks</option>
+            <option value={30}>Past 30 days</option>
+            <option value={90}>Past 90 days</option>
+            {![0, 1, 3, 7, 14, 30, 90].includes(period) && (
+              <option value={period}>Past {period} days</option>
             )}
-            {STATUS_OPTIONS.map((option) => {
-              const count = statusCounts?.[option.value]
-              return (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                  {count !== undefined && option.value !== 'all' ? ` (${count})` : ''}
-                </option>
-              )
-            })}
+          </select>
+        </div>
+
+        {isMatches ? (
+          <>
+            <div className={styles.filterGroup}>
+              <label className={styles.filterLabel} htmlFor="jobs-company-limit">
+                Per company
+              </label>
+              <select
+                id="jobs-company-limit"
+                className={styles.select}
+                value={companyLimit}
+                onChange={(e) => onChange({ company_limit: Number(e.target.value), page: 1 })}
+              >
+                <option value={0}>No limit</option>
+                {[...new Set([1, 2, 3, 5, companyLimit])]
+                  .filter(Boolean)
+                  .sort((a, b) => a - b)
+                  .map((n) => (
+                    <option key={n} value={n}>
+                      {n} {n === 1 ? 'job' : 'jobs'}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className={styles.filterGroup}>
+              <label className={styles.filterLabel} htmlFor="jobs-match-status">
+                Application link
+              </label>
+              <select
+                id="jobs-match-status"
+                className={styles.select}
+                value={query.match_status ?? 'all'}
+                onChange={(e) =>
+                  onChange({ match_status: e.target.value as JobsQuery['match_status'], page: 1 })
+                }
+              >
+                <option value="all">Any link status</option>
+                <option value="ready">Verified link</option>
+                <option value="needs_verification">Unverified link</option>
+              </select>
+            </div>
+          </>
+        ) : (
+          <div className={styles.filterGroup}>
+            <label className={styles.filterLabel} htmlFor="jobs-status">
+              {isHistory ? 'Application status' : 'Processing status'}
+            </label>
+            <select
+              id="jobs-status"
+              className={styles.select}
+              value={query.status ?? 'all'}
+              onChange={(e) => onChange({ status: e.target.value, page: 1 })}
+            >
+              {query.status && !statusOptions.some((option) => option.value === query.status) && (
+                <option value={query.status}>{query.status.replace(/_/g, ' ')}</option>
+              )}
+              {statusOptions.map((option) => {
+                const count = statusCounts?.[option.value]
+                return (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                    {count !== undefined && option.value !== 'all' ? ` (${count})` : ''}
+                  </option>
+                )
+              })}
+            </select>
+          </div>
+        )}
+
+        <div className={styles.filterGroup}>
+          <label className={styles.filterLabel} htmlFor="jobs-enrichment">
+            Enrichment
+          </label>
+          <select
+            id="jobs-enrichment"
+            className={styles.select}
+            value={query.details ?? 'all'}
+            onChange={(e) => onChange({ details: detailsFilter(e.target.value), page: 1 })}
+          >
+            {Object.entries(enrichmentLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -202,7 +306,7 @@ export function Filters({ query, onChange, statusCounts, sourceCounts, isFetchin
             <select
               id="jobs-sort"
               className={styles.select}
-              value={query.sort ?? 'date_scraped'}
+              value={query.sort ?? defaultSort}
               onChange={(e) => onChange({ sort: e.target.value as SortField, page: 1 })}
               aria-label="Sort by"
             >

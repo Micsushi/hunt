@@ -20,7 +20,7 @@ from hunter.db import (
     get_runtime_state,
     set_runtime_state,
 )
-from hunter.discovery_run import stop_requested
+from hunter.discovery_run import ScanBusy, stop_requested
 from hunter.scraper import scrape
 
 _shutdown = False
@@ -64,6 +64,7 @@ def main():
         print(f"{'=' * 60}")
 
         start = time.monotonic()
+        retry_busy = False
         try:
             backfill = _backfill_due()
             summary = scrape(
@@ -81,6 +82,9 @@ def main():
                 f"ready={count_ready_jobs_for_enrichment()} "
                 f"pending={count_pending_jobs_for_enrichment()}"
             )
+        except ScanBusy:
+            retry_busy = True
+            print("[runner] Another discovery scan holds the lease. Checking again in 30s.")
         except Exception as e:
             print(f"[runner] Run #{run_number} failed with error: {e}")
 
@@ -91,7 +95,7 @@ def main():
         if _shutdown:
             break
 
-        remaining = max(0, RUN_INTERVAL_SECONDS - elapsed)
+        remaining = 30 if retry_busy else max(0, RUN_INTERVAL_SECONDS - elapsed)
         next_run = datetime.fromtimestamp(time.time() + remaining)
         print(f"[runner] Next run at {next_run:%Y-%m-%d %H:%M:%S} (in {remaining:.0f}s)")
 

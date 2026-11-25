@@ -13,7 +13,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -3394,6 +3394,20 @@ def auth_me(request: Request):
 # ---------------------------------------------------------------------------
 
 
+def job_match_options(
+    match_days: int | None = Query(None, ge=0, le=365),
+    company_limit: int = Query(2, ge=0, le=20),
+    match_status: Literal["all", "ready", "needs_verification"] = "all",
+    details: Literal["all", "complete", "description", "link", "both"] = "all",
+):
+    return {
+        "match_days": match_days,
+        "company_limit": company_limit,
+        "match_status": match_status,
+        "details": details,
+    }
+
+
 @app.get("/api/jobs/count")
 def api_jobs_count(
     source: str = "all",
@@ -3403,6 +3417,7 @@ def api_jobs_count(
     category: str = "",
     ats_type: str = "",
     view: Literal["all", "matches", "history"] = "all",
+    match_options: Annotated[dict | None, Depends(job_match_options)] = None,
     _auth: str = Depends(require_auth),
 ):
     """Return total row count for current filter - used for pagination."""
@@ -3421,6 +3436,7 @@ def api_jobs_count(
         category=category_clean,
         ats_type=ats_type_clean,
         view=view,
+        match_options=match_options,
     )
     return JSONResponse({"count": total})
 
@@ -5065,6 +5081,7 @@ def api_jobs(
     sort: str = "date_scraped",
     direction: str = "desc",
     view: Literal["all", "matches", "history"] = "all",
+    match_options: Annotated[dict | None, Depends(job_match_options)] = None,
     _auth: str = Depends(require_auth),
 ):
     validate_job_source_filter(source)
@@ -5089,6 +5106,7 @@ def api_jobs(
         category=category_clean,
         ats_type=ats_type_clean,
         view=view,
+        match_options=match_options,
     )
     total = count_jobs_for_review(
         status=status,
@@ -5098,12 +5116,9 @@ def api_jobs(
         category=category_clean,
         ats_type=ats_type_clean,
         view=view,
+        match_options=match_options,
     )
-    stages = (
-        {row["id"]: {"stage": "approved_visible", "reason": None} for row in rows}
-        if view == "matches"
-        else review_stages([row["id"] for row in rows])
-    )
+    stages = review_stages([row["id"] for row in rows], current_matches=view == "matches")
     return JSONResponse(
         {
             "items": [{**_job_json(row), "fit_review": stages.get(row["id"])} for row in rows],
@@ -5126,6 +5141,7 @@ def api_jobs_export(
     sort: str = "date_scraped",
     direction: str = "desc",
     view: Literal["all", "matches", "history"] = "all",
+    match_options: Annotated[dict | None, Depends(job_match_options)] = None,
     _auth: str = Depends(require_auth),
 ):
     if export_format not in ("csv", "json"):
@@ -5151,6 +5167,7 @@ def api_jobs_export(
         category=category_clean,
         ats_type=ats_type_clean,
         view=view,
+        match_options=match_options,
     )
     rows = [_job_json(row) for row in rows]
     if export_format == "json":
@@ -5196,6 +5213,7 @@ def api_job_adjacent(
     sort: str = "date_scraped",
     direction: str = "desc",
     view: Literal["all", "matches", "history"] = "all",
+    match_options: Annotated[dict | None, Depends(job_match_options)] = None,
     _auth: str = Depends(require_auth),
 ):
     """Return prev/next job IDs using the same filter and sort as the review list."""
@@ -5216,6 +5234,7 @@ def api_job_adjacent(
         category=(category or "").strip() or None,
         ats_type=(ats_type or "").strip() or None,
         view=view,
+        match_options=match_options,
     )
     if not ids:
         return JSONResponse({"prev_id": None, "next_id": None})

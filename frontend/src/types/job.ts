@@ -27,6 +27,7 @@ export type FitReviewStage =
 
 export interface FitReviewRun {
   id?: string
+  trigger?: 'manual' | 'scheduled' | 'backfill'
   status: 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'unconfirmed'
   reviewed?: number
   new_visible_count?: number
@@ -48,6 +49,7 @@ export interface Job {
   location: string | null
   source: JobSource
   job_url: string | null
+  has_description?: boolean | 0 | 1
   apply_url: string | null
   apply_type: ApplyType | null
   apply_host: string | null
@@ -117,6 +119,7 @@ export interface ResumeAttempt {
 export type SortField =
   | 'id'
   | 'date_scraped'
+  | 'date_posted'
   | 'company'
   | 'title'
   | 'enrichment_status'
@@ -128,9 +131,14 @@ export type SortField =
   | 'source'
 
 export type SortDirection = 'asc' | 'desc'
+export type JobDetailsFilter = 'all' | 'complete' | 'description' | 'link' | 'both'
 
 export interface JobsQuery {
   view?: 'all' | 'matches' | 'history'
+  match_days?: number
+  company_limit?: number
+  match_status?: 'all' | 'ready' | 'needs_verification'
+  details?: JobDetailsFilter
   source?: string
   status?: string
   limit?: number

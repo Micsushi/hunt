@@ -656,17 +656,24 @@ Normal checkouts without `HUNT_STATE_ROOT` retain their existing build behavior.
 ## Personal job matches
 
 C1 retains discovered jobs and application history. **Jobs → My matches** shows
-reviewed fits with verified external applications. **All jobs** includes the
-rest of the catalog. Select **Application history** to see applied and canceled
-jobs. Change the application status on a job's detail page.
+confirmed fits, including jobs still waiting for an application link to be
+verified. **Status** tracks fit and application history. Use
+**Application link → Verified link** to show only verified external applications.
+**All jobs** shows the full catalog. Select **Application history** to see
+applied and canceled jobs. **Enrichment** shows whether the job has a
+description and a verified application link. Those details can be filtered
+independently. Open **Listing** to view a match that still needs verification.
+Change the application status on a job's detail page.
 
-The saved fit decision is independent of application status. Every employer
-gets two slots across the inclusive 14-day window. Recent applications consume
-slots and canceled jobs release them. For older imported applications without an
-application date, C1 uses the saved posting date when available. An application
-with neither date counts conservatively. **My matches** fills the remaining slots
-with the newest eligible postings. The application verification and C3 gates
-remain separate from fit review.
+**Posting date** defaults to **Past 2 weeks** in My matches. It uses the date
+the employer published the job. Select **Any date** to include jobs with an
+unknown posting date. **Per company** defaults to two and can be adjusted or
+removed. Applications in the last 14 days consume slots and canceled jobs
+release them. For older imported applications without an application date, C1
+uses the saved posting date when available. An application with neither date
+counts conservatively. **My matches** fills the remaining slots with the
+newest eligible postings. The application verification and C3 gates remain
+separate from fit review.
 
 ### Import the existing tracker
 
@@ -704,6 +711,7 @@ review.
 ```text
 python3 -m scripts.review_job_matches --dry-run
 python3 -m scripts.review_job_matches
+python3 -m scripts.review_job_matches --backfill --parallel 4
 python3 -m scripts.review_job_matches --watch --notify --hunt-url https://HUNT_HOST
 ```
 
@@ -715,15 +723,19 @@ deployed release and put `HUNT_PUBLIC_ORIGIN=https://HUNT_HOST` in
 Discord link. The worker serves
 button requests and schedules reviews at 00:00, 06:00, 12:00 and 18:00
 America/Guatemala. A worker restart picks up the current slot if it has yet
-to be queued. Use `--codex-bin` for a separately installed CLI and
-`--ollama-url` when the trusted Ollama endpoint uses a different local port.
+to be queued. Use `--codex-bin` for a separately installed CLI.
 
-In Jobs, **Run review** queues a batch and shows whether it is queued, in
-progress, completed, failed, or unconfirmed. An authenticated integration can
+In Jobs, **Run agent review** queues a batch and shows whether it is queued, in
+progress, completed, failed, or unconfirmed. The button is disabled while a
+review is queued or running. An authenticated integration can
 call `POST /api/jobs/fit-review` and poll `GET /api/jobs/fit-review`. A second
-request during an active run returns the existing run. Manual reviews can
-check jobs that still need information. Scheduled reviews revisit those jobs
-when a description becomes available.
+request during an active run returns the existing run. Manual and scheduled
+reviews handle the last 14 days, newest first. A standalone `--backfill`
+reviews the remaining eligible catalog without a posting-date cutoff. It
+uses GPT-6 Luna on low effort with a fresh context for each batch of up to
+100 jobs. Use `--parallel` to run up to four disjoint batches together under
+the same review. Each batch saves its decisions as soon as it finishes. Fit
+review can use the title and any available job details.
 
 **All jobs** and job details show the review stage. Jobs held at the company
 limit retain their AI approval in C1. **My matches** reflects the current

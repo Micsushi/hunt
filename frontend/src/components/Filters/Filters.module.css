@@ -1,24 +1,24 @@
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 9px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: 16px;
+  padding: 10px 12px;
 }
 
 .filterRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 8px 12px;
   align-items: flex-end;
 }
 
 .filterGroup {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   max-width: 100%;
 }
 

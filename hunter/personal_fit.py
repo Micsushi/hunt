@@ -30,12 +30,13 @@ ADVANCEABLE = """coalesce(apply_type, '') != 'easy_apply'
     AND coalesce(last_enrichment_error, '') != 'job_removed'
     AND coalesce(discovery_suppressed_reason, '')
         IN ('', 'employer_month_cap', 'geography_unverified')"""
+VERIFIED_APPLY = """coalesce(apply_type, '') = 'external_apply'
+    AND auto_apply_eligible IS TRUE
+    AND coalesce(enrichment_status, '') IN ('done', 'done_verified')
+    AND trim(coalesce(apply_url, '')) != ''"""
 VISIBLE = f"""{ADVANCEABLE}
     AND coalesce(discovery_suppressed_reason, '') != 'geography_unverified'
-    AND apply_type = 'external_apply'
-    AND auto_apply_eligible IS TRUE
-    AND enrichment_status IN ('done', 'done_verified')
-    AND trim(coalesce(apply_url, '')) != ''"""
+    AND {VERIFIED_APPLY}"""
 FIT = """
 coalesce(CASE WHEN personal_fit IN ('yes', 'no') THEN personal_fit END, (
     SELECT previous.personal_fit FROM jobs AS previous
@@ -55,12 +56,29 @@ def date_window(day: date):
     return (day - timedelta(days=13)).isoformat(), day.isoformat()
 
 
-def view_filter(view, day=None):
-    if view == "history":
-        return f" AND {HISTORY}", []
+def view_filter(
+    view, day=None, *, match_days=None, company_limit=2, match_status="all", details="all"
+):
+    day = day or owner_day()
+    cutoff, today = date_window(day)
+    match_days = (14 if view == "matches" else 0) if match_days is None else match_days
+    date_sql, date_params = "", []
+    if match_days:
+        posted_from = (day - timedelta(days=match_days - 1)).isoformat()
+        date_sql = " AND substr(nullif(trim(date_posted), ''), 1, 10) BETWEEN ? AND ?"
+        date_params = [posted_from, today]
+    if details != "all":
+        has_description = "trim(coalesce(description, '')) != ''"
+        description_ok = details in {"complete", "link"}
+        link_ok = details in {"complete", "description"}
+        date_sql += f" AND ({has_description}) = ? AND ({VERIFIED_APPLY}) = ?"
+        date_params.extend([description_ok, link_ok])
     if view != "matches":
-        return "", []
-    cutoff, today = date_window(day or owner_day())
+        return (f" AND {HISTORY}" if view == "history" else "") + date_sql, date_params
+    readiness = {
+        "ready": f"AND ({VERIFIED_APPLY})",
+        "needs_verification": f"AND NOT ({VERIFIED_APPLY})",
+    }.get(match_status, "")
     return (
         f"""
         AND id IN (
@@ -82,14 +100,14 @@ def view_filter(view, day=None):
                            PARTITION BY {EMPLOYER_KEY} ORDER BY {POSTED_DATE} DESC, id DESC
                        ) AS job_rank
                 FROM jobs
-                WHERE {VISIBLE} AND NOT ({HISTORY})
-                  AND {POSTED_DATE} BETWEEN ? AND ? AND ({FIT}) = 'yes'
+                WHERE {ADVANCEABLE} AND NOT ({HISTORY}) {readiness}
+                  {date_sql} AND ({FIT}) = 'yes'
             )
             SELECT ranked.id FROM ranked LEFT JOIN history ON ranked.employer = history.employer
-            WHERE ranked.job_rank + coalesce(history.slots, 0) <= 2
+            WHERE ? = 0 OR ranked.job_rank + coalesce(history.slots, 0) <= ?
         )
     """,
-        [cutoff, today, cutoff, today],
+        [cutoff, today, *date_params, company_limit, company_limit],
     )
 
 
@@ -109,6 +127,8 @@ def review_candidates(limit, day=None, *, include_deferred=False, run_id=None):
         else ""
     )
     with closing(get_connection()) as conn:
+        publication_window = f"AND {POSTED_DATE} BETWEEN ? AND ?"
+        window_params = (cutoff, today)
         snapshot, snapshot_params = "", ()
         if run_id:
             run = _run_state(conn)
@@ -118,15 +138,17 @@ def review_candidates(limit, day=None, *, include_deferred=False, run_id=None):
             snapshot = """AND id <= ?
                 AND (personal_fit_reviewed_at IS NULL OR personal_fit_reviewed_at < ?)"""
             snapshot_params = (run["through_job_id"], started.isoformat())
+            if run["trigger"] == "backfill":
+                publication_window, window_params = "", ()
         rows = conn.execute(
             f"""
             SELECT id, title, company, location, description,
                    normalized_company
             FROM jobs
-            WHERE {ADVANCEABLE} AND NOT ({HISTORY}) AND {POSTED_DATE} BETWEEN ? AND ?
+            WHERE {ADVANCEABLE} AND NOT ({HISTORY}) {publication_window}
               {snapshot}
               AND (personal_fit IS NULL OR (
-                  personal_fit = 'deferred' AND (? OR personal_fit_input !=
+                  personal_fit = 'deferred' AND (? OR coalesce(personal_fit_input, '') !=
                       CASE WHEN length(trim(coalesce(description, ''))) > 0 THEN 'description'
                            ELSE 'title' END)
               ))
@@ -137,10 +159,10 @@ def review_candidates(limit, day=None, *, include_deferred=False, run_id=None):
                     AND reviewed.personal_fit IN ('yes', 'no')
               )
             ORDER BY CASE WHEN personal_fit IS NULL THEN 0 ELSE 1 END,
-                     {priority_order} {POSTED_DATE}, id
+                     {POSTED_DATE} DESC, {priority_order} id DESC
             LIMIT ?
             """,
-            (cutoff, today, *snapshot_params, include_deferred, *names, limit),
+            (*window_params, *snapshot_params, include_deferred, *names, limit),
         )
         results = []
         for row in rows:
@@ -202,9 +224,9 @@ def review_status():
         return _run_state(conn)
 
 
-def request_review(trigger):
-    if trigger not in ("manual", "scheduled"):
-        raise ValueError("Review trigger must be manual or scheduled.")
+def request_review(trigger, *, through_job_id=None):
+    if trigger not in ("manual", "scheduled", "backfill"):
+        raise ValueError("Invalid review trigger.")
     now = datetime.now(OWNER_TIMEZONE)
     slot = now.replace(hour=now.hour // 6 * 6, minute=0, second=0, microsecond=0)
     slot_key = slot.isoformat()
@@ -214,7 +236,7 @@ def request_review(trigger):
         if current["status"] in ("queued", "running") or (
             trigger == "scheduled" and last_slot == slot_key
         ):
-            return current
+            return None if trigger == "backfill" else current
         run = {
             "id": uuid4().hex,
             "status": "queued",
@@ -222,6 +244,10 @@ def request_review(trigger):
             "queued_at": datetime.now(UTC).isoformat(),
             "last_scheduled_request": slot_key if trigger == "scheduled" else last_slot,
         }
+        if trigger == "backfill":
+            _start_review(conn, run)
+            if through_job_id is not None:
+                run["through_job_id"] = min(run["through_job_id"], through_job_id)
         _save_state(conn, RUN_KEY, run)
         conn.commit()
         return run
@@ -234,18 +260,22 @@ def claim_review():
         run = _locked_run(conn)
         if run["status"] != "queued":
             return None
-        started = datetime.now(UTC)
-        newest = conn.execute("SELECT coalesce(max(id), 0) AS id FROM jobs").fetchone()["id"]
-        run.update(
-            status="running",
-            started_at=started.isoformat(),
-            lease_until=(started + timedelta(minutes=25)).isoformat(),
-            through_job_id=newest,
-            reviewed=0,
-        )
+        _start_review(conn, run)
         _save_state(conn, RUN_KEY, run)
         conn.commit()
         return run
+
+
+def _start_review(conn, run):
+    started = datetime.now(UTC)
+    newest = conn.execute("SELECT coalesce(max(id), 0) AS id FROM jobs").fetchone()["id"]
+    run.update(
+        status="running",
+        started_at=started.isoformat(),
+        lease_until=(started + timedelta(minutes=25)).isoformat(),
+        through_job_id=newest,
+        reviewed=0,
+    )
 
 
 def fail_review(run_id, reason):
@@ -258,7 +288,7 @@ def fail_review(run_id, reason):
         return run
 
 
-def review_stages(job_ids, day=None):
+def review_stages(job_ids, day=None, *, current_matches=False):
     if not job_ids:
         return {}
     cutoff, today = date_window(day or owner_day())
@@ -268,14 +298,17 @@ def review_stages(job_ids, day=None):
             SELECT id, ({FIT}) AS decision, ({ADVANCEABLE}) AS can_review,
                    ({VISIBLE}) AS can_show, ({HISTORY}) AS history,
                    CASE WHEN {POSTED_DATE} BETWEEN ? AND ? THEN 1 ELSE 0 END AS recent,
-                   discovery_suppressed_reason, last_enrichment_error, apply_type, status
+                   discovery_suppressed_reason, last_enrichment_error, apply_type, status, date_posted
             FROM jobs WHERE id IN ({",".join("?" for _ in job_ids)})
             """,
             (cutoff, today, *job_ids),
         ).fetchall()
         visible = (
             visible_job_ids(conn, day)
-            if any(row["decision"] == "yes" and row["can_show"] and row["recent"] for row in rows)
+            if not current_matches
+            and any(
+                row["decision"] == "yes" and row["can_review"] and row["recent"] for row in rows
+            )
             else set()
         )
     result = {}
@@ -298,13 +331,16 @@ def review_stages(job_ids, day=None):
         elif decision == "deferred":
             stage = "needs_information"
         elif decision != "yes":
-            stage = "awaiting_review" if row["recent"] else "outside_review_window"
-        elif not row["recent"]:
+            stage = "awaiting_review"
+        elif not current_matches and not (row["date_posted"] or "").strip():
+            stage, reason = "approved_filtered", "posting_date_unknown"
+        elif not current_matches and not row["recent"]:
             stage = "approved_outside_window"
+        elif not current_matches and row["id"] not in visible:
+            stage = "approved_company_limit"
         elif not row["can_show"]:
             stage = "approved_waiting_for_verification"
-        elif row["id"] not in visible:
-            stage = "approved_company_limit"
+            reason = reason or row["last_enrichment_error"]
         else:
             stage = "approved_visible"
         result[row["id"]] = {"stage": stage, "reason": reason}
@@ -342,6 +378,7 @@ def record_decisions(entries, *, day=None, run_id=None, partial=False):
         )
         previous = _state(conn, RECEIPT_KEY)
         before = set(previous.get("visible_ids", []))
+        saved = 0
         for entry in entries:
             row = conn.execute(
                 f"""SELECT id, title, company, location, description
@@ -350,6 +387,8 @@ def record_decisions(entries, *, day=None, run_id=None, partial=False):
                 (entry["id"],),
             ).fetchone()
             if row is None or _revision(_review_posting(row)) != entry["revision"]:
+                if run.get("trigger") == "backfill":
+                    continue
                 raise ValueError(
                     f"Job {entry['id']} changed during review. No decisions were saved."
                 )
@@ -365,10 +404,13 @@ def record_decisions(entries, *, day=None, run_id=None, partial=False):
                 ),
             )
             if result.rowcount != 1:
+                if run.get("trigger") == "backfill":
+                    continue
                 raise ValueError(
                     f"Job {entry['id']} was already reviewed. No decisions were saved."
                 )
-        reviewed = run.get("reviewed", 0) + len(entries)
+            saved += 1
+        reviewed = run.get("reviewed", 0) + saved
         if partial:
             run.update(
                 reviewed=reviewed,
@@ -454,7 +496,8 @@ def main():
     record.add_argument("run_id")
     record.add_argument("--partial", action="store_true")
     request = sub.add_parser("request")
-    request.add_argument("trigger", choices=("scheduled", "manual"))
+    request.add_argument("trigger", choices=("scheduled", "manual", "backfill"))
+    request.add_argument("--through-job-id", type=int)
     fail = sub.add_parser("fail")
     fail.add_argument("run_id")
     fail.add_argument("reason")
@@ -464,8 +507,8 @@ def main():
     notify.add_argument("hunt_url")
     args = parser.parse_args()
     if args.command == "queue":
-        if not 1 <= args.limit <= 100:
-            parser.error("--limit must be between 1 and 100")
+        if not 1 <= args.limit <= 400 or (args.limit > 100 and args.run_id is None):
+            parser.error("--limit must be 1 to 100, or up to 400 for an active review")
         result = review_candidates(
             args.limit, include_deferred=args.include_deferred, run_id=args.run_id
         )
@@ -474,7 +517,7 @@ def main():
     elif args.command == "status":
         result = review_status()
     elif args.command == "request":
-        result = request_review(args.trigger)
+        result = request_review(args.trigger, through_job_id=args.through_job_id)
     elif args.command == "claim":
         result = claim_review()
     elif args.command == "fail":

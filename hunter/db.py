@@ -1124,7 +1124,12 @@ def claim_public_employer_job():
         cursor = conn.cursor()
         conditions, args = _public_employer_ready_conditions()
         row = cursor.execute(
-            f"SELECT * FROM jobs WHERE {conditions} ORDER BY CASE WHEN discovery_suppressed_reason IS NULL THEN 0 ELSE 1 END, CASE WHEN enrichment_status IN ('done', 'done_verified') THEN 1 ELSE 0 END, coalesce(next_enrichment_retry_at, date_scraped), id LIMIT 1",
+            f"""SELECT * FROM jobs WHERE {conditions}
+                ORDER BY CASE WHEN enrichment_status IN ('done', 'done_verified') THEN 1 ELSE 0 END,
+                         CASE WHEN personal_fit = 'yes' THEN 0 ELSE 1 END,
+                         CASE WHEN personal_fit = 'yes' THEN date_posted END DESC NULLS LAST,
+                         CASE WHEN discovery_suppressed_reason IS NULL THEN 0 ELSE 1 END,
+                         coalesce(next_enrichment_retry_at, date_scraped), id LIMIT 1""",
             args,
         ).fetchone()
         if row is None:

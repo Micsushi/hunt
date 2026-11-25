@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -119,8 +120,13 @@ def hunt(container, args, data=None):
 
 def classify(candidates, model, effort, *, codex=None, usage=None, timeout=900):
     revisions = {row["id"]: row["revision"] for row in candidates}
+    batch_ids = {index: row["id"] for index, row in enumerate(candidates, start=1)}
     postings = [
-        {key: value for key, value in row.items() if key != "revision"} for row in candidates
+        {
+            **{key: value for key, value in row.items() if key != "revision"},
+            "id": index,
+        }
+        for index, row in enumerate(candidates, start=1)
     ]
     with TemporaryDirectory(prefix="hunt-codex-review-") as stage:
         stage = Path(stage)
@@ -162,7 +168,11 @@ def classify(candidates, model, effort, *, codex=None, usage=None, timeout=900):
                 str(output),
                 "-",
             ],
-            input=PROMPT + "\n" + json.dumps(postings, ensure_ascii=True),
+            input=(
+                PROMPT
+                + f"\nJob IDs are consecutive from 1 through {len(postings)}.\n"
+                + json.dumps(postings, ensure_ascii=False, separators=(",", ":"))
+            ),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -184,65 +194,100 @@ def classify(candidates, model, effort, *, codex=None, usage=None, timeout=900):
                         if type(value) is int:
                             usage[key] = usage.get(key, 0) + value
         rows = json.loads(output.read_text(encoding="utf-8"))["decisions"]
-    return validated_decisions(rows, revisions)
+    batch_revisions = {index: revisions[job_id] for index, job_id in batch_ids.items()}
+    decisions = validated_decisions(rows, batch_revisions)
+    for decision in decisions:
+        decision["id"] = batch_ids[decision["id"]]
+    return decisions
 
 
-def review(candidates, args):
+def review(candidates, args, usage=None):
     try:
-        return classify(candidates, args.model, args.effort, codex=args.codex_bin, timeout=600)
-    except REVIEW_ERRORS as exc:
-        print(f"Hosted review failed ({type(exc).__name__}); trying Qwen3 locally.", flush=True)
-
-    # Keep the fallback input within Qwen's context even for long posting excerpts.
-    deadline = time.monotonic() + 720
-    decisions = []
-    batch = []
-    size = 0
-    for row in candidates:
-        posting = {key: value for key, value in row.items() if key != "revision"}
-        length = len(json.dumps(posting))
-        if batch and (len(batch) >= 8 or size + length > 12000):
-            decisions.extend(
-                classify_local(
-                    batch,
-                    "qwen3:8b",
-                    args.ollama_url,
-                    think=True,
-                    timeout=min(300, max(1, deadline - time.monotonic())),
-                )
-            )
-            batch, size = [], 0
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Local fallback review timed out.")
-        batch.append(posting)
-        size += length
-    decisions.extend(
-        classify_local(
-            batch,
-            "qwen3:8b",
-            args.ollama_url,
-            think=True,
-            timeout=min(300, max(1, deadline - time.monotonic())),
+        return classify(
+            candidates, args.model, args.effort, codex=args.codex_bin, usage=usage, timeout=600
         )
-    )
-    return validated_decisions(decisions, {row["id"]: row["revision"] for row in candidates})
+    except (ValueError, KeyError, TypeError):
+        # If the model omitted or duplicated an ID, retry smaller fresh batches.
+        if len(candidates) <= 1:
+            raise
+        midpoint = len(candidates) // 2
+        return review(candidates[:midpoint], args, usage) + review(
+            candidates[midpoint:], args, usage
+        )
+
+
+def review_wave(args, candidates, record, usage):
+    batches = [
+        candidates[start : start + args.limit] for start in range(0, len(candidates), args.limit)
+    ]
+    if len(batches) == 1:
+        record(review(batches[0], args, usage))
+        return
+
+    failure = None
+    with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+        pending = {}
+        for batch in batches:
+            batch_usage = {}
+            pending[pool.submit(review, batch, args, batch_usage)] = batch_usage
+        for result in as_completed(pending):
+            for key, value in pending[result].items():
+                usage[key] = usage.get(key, 0) + value
+            try:
+                decisions = result.result()
+            except REVIEW_ERRORS as exc:
+                failure = failure or exc
+            else:
+                record(decisions)
+    if failure is not None:
+        raise failure
 
 
 def run_queued(args, run):
     run_id = run["id"]
-    options = ["queue", "--limit", str(args.limit), "--run-id", run_id]
+    backfill = run["trigger"] == "backfill"
+    queue_size = args.limit * args.parallel if backfill else args.limit
+    options = ["queue", "--limit", str(queue_size), "--run-id", run_id]
+    usage = {}
+    had_candidates = False
     if run["trigger"] == "manual":
         options.append("--include-deferred")
+
+    def record(decisions):
+        hunt(args.container, ["record", run_id, "--partial"], decisions)
+
     try:
         while candidates := hunt(args.container, options):
-            decisions = review(candidates, args)
-            hunt(args.container, ["record", run_id, "--partial"], decisions)
+            had_candidates = True
+            review_wave(args, candidates, record, usage)
+            if backfill:
+                break
         receipt = hunt(args.container, ["record", run_id], [])
     except REVIEW_ERRORS as exc:
         reason = f"Review failed ({type(exc).__name__}). Remaining jobs will stay in the queue."
         hunt(args.container, ["fail", run_id, reason[:250]])
         raise
-    print(json.dumps(receipt), flush=True)
+    summary = {key: value for key, value in receipt.items() if key != "visible_ids"}
+    print(json.dumps({**summary, "usage": usage}), flush=True)
+    return had_candidates
+
+
+def run_backfill(args):
+    print("Waiting for a free Hunt review slot.", flush=True)
+    request = ["request", "backfill"]
+    if args.through_job_id is not None:
+        request.extend(["--through-job-id", str(args.through_job_id)])
+    while True:
+        run = hunt(args.container, request)
+        if run is None:
+            time.sleep(15)
+            continue
+        request = ["request", "backfill", "--through-job-id", str(run["through_job_id"])]
+        if not run_queued(args, run):
+            print("Hunt backfill finished.", flush=True)
+            return
+        # Leave a full polling interval for scheduled and button requests.
+        time.sleep(10)
 
 
 def main():
@@ -255,17 +300,31 @@ def main():
     parser.add_argument(
         "--effort", choices=("low", "medium", "high", "xhigh", "max"), default="low"
     )
-    parser.add_argument("--limit", type=int, default=30, help="Maximum jobs per model batch.")
-    parser.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    parser.add_argument(
+        "--limit", type=int, default=100, help="Maximum jobs per fresh model session."
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--watch", action="store_true", help="Serve button requests and six-hourly reviews."
     )
     parser.add_argument("--notify", action="store_true")
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Review the historical backlog between regular review runs.",
+    )
+    parser.add_argument(
+        "--parallel", type=int, choices=range(1, 5), default=1, help="Concurrent backfill sessions."
+    )
+    parser.add_argument("--through-job-id", type=int, help="Resume the same backfill snapshot.")
     parser.add_argument("--hunt-url", help="Hunt's HTTPS origin for the Discord link.")
     args = parser.parse_args()
     if not 1 <= args.limit <= 100:
         parser.error("--limit must be between 1 and 100")
+    if args.parallel > 1 and not args.backfill:
+        parser.error("--parallel requires --backfill")
+    if args.through_job_id is not None and (not args.backfill or args.through_job_id < 1):
+        parser.error("--through-job-id requires --backfill and a positive job ID")
     if args.notify:
         url = urlsplit(args.hunt_url or "")
         if (
@@ -277,6 +336,12 @@ def main():
             or url.fragment
         ):
             parser.error("--notify requires the public HTTPS origin in --hunt-url")
+
+    if args.backfill:
+        if args.watch or args.notify or args.dry_run:
+            parser.error("--backfill is a standalone review without notifications")
+        run_backfill(args)
+        return
 
     if args.dry_run:
         candidates = hunt(args.container, ["queue", "--limit", str(args.limit)])

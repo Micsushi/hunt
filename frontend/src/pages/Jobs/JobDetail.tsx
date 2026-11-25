@@ -21,7 +21,13 @@ import {
 } from '@/api/control'
 import { logHumanCommand } from '@/api/humanCommandLog'
 import { StatusBadge } from '@/components/StatusBadge'
-import { discoveryLabel, fitReviewLabel } from '@/utils/discovery'
+import {
+  detailsFilter,
+  discoveryLabel,
+  enrichmentIssue,
+  fitReviewLabel,
+  jobEnrichmentLabel,
+} from '@/utils/discovery'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import styles from './JobDetail.module.css'
 import type { JobDetail, JobsQuery, SortDirection, SortField } from '@/types/job'
@@ -74,6 +80,15 @@ function adjacentQueryFromParams(p: URLSearchParams): JobsQuery {
   const page = parseInt(p.get('page') || '', 10)
   return {
     view: p.get('view') === 'matches' ? 'matches' : p.get('view') === 'history' ? 'history' : 'all',
+    ...(p.has('match_days') ? { match_days: Number(p.get('match_days')) } : {}),
+    ...(p.has('company_limit') ? { company_limit: Number(p.get('company_limit')) } : {}),
+    details: detailsFilter(p.get('details')),
+    match_status:
+      p.get('match_status') === 'ready'
+        ? 'ready'
+        : p.get('match_status') === 'needs_verification'
+          ? 'needs_verification'
+          : undefined,
     source: p.get('source') || 'all',
     status: p.get('status') || 'all',
     q: p.get('q') || '',
@@ -1121,7 +1136,7 @@ function JobDetail({ jobId }: { jobId: number }) {
               {job.source && <ReadonlyField label="Source" value={job.source} />}
               <ReadonlyField label="Discovery fit" value={discoveryLabel(job)} />
               {job.fit_review && (
-                <ReadonlyField label="Review status" value={fitReviewLabel(job.fit_review)} />
+                <ReadonlyField label="Fit review" value={fitReviewLabel(job.fit_review)} />
               )}
               {job.apply_type && job.apply_type !== 'unknown' && (
                 <ReadonlyField label="Apply type" value={job.apply_type.replace(/_/g, ' ')} />
@@ -1189,6 +1204,10 @@ function JobDetail({ jobId }: { jobId: number }) {
               <ServiceChip label="Hunter" componentKey="c1" />
             </div>
             <div className={styles.fieldList}>
+              <ReadonlyField label="Details" value={jobEnrichmentLabel(job)} />
+              {enrichmentIssue(job) && (
+                <ReadonlyField label="Verification issue" value={enrichmentIssue(job)} />
+              )}
               <ReadonlyField
                 label="Status"
                 value={<StatusBadge status={job.enrichment_status} />}
