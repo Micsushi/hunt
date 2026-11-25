@@ -156,6 +156,7 @@ MIGRATION_COLUMNS = {
     "personal_fit_reviewed_at": "TEXT",
     "personal_fit_role": "TEXT",
     "personal_fit_seniority": "TEXT",
+    "description_source": "TEXT",
     "application_date": "TEXT",
     "apply_type": "TEXT",
     "auto_apply_eligible": "BOOLEAN",
@@ -1202,7 +1203,7 @@ def mark_job_enrichment_succeeded(
         cursor.execute(
             f"""
             UPDATE jobs
-            SET description = ?,
+            SET description = CASE WHEN description_source = 'manual' THEN description ELSE ? END,
                 apply_url = ?,
                 apply_type = ?,
                 auto_apply_eligible = ?,
@@ -1279,7 +1280,12 @@ def mark_job_enrichment_failed(
         for column_name, value in optional_updates:
             if value is _UNSET:
                 continue
-            updates.append(f"{column_name} = ?")
+            if column_name == "description":
+                updates.append(
+                    "description = CASE WHEN description_source = 'manual' THEN description ELSE ? END"
+                )
+            else:
+                updates.append(f"{column_name} = ?")
             params.append(value)
 
         if enrichment_status != "processing":
@@ -1922,6 +1928,8 @@ def add_job(job_data, *, connection=None):
             "category",
             "employment_type",
         ):
+            if field_name == "description" and existing.get("description_source") == "manual":
+                continue
             if _should_upgrade_text(existing.get(field_name), job_data.get(field_name)):
                 updates[field_name] = job_data.get(field_name)
 
