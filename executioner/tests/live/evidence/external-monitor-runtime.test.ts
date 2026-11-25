@@ -607,9 +607,10 @@ test("production-bound monitor rejects owner-style unsigned and mismatched-title
   }
 });
 
-test("production-bound monitor fails promptly when its observer exits", async () => {
+test("production-bound monitor fails before polling when its observer exits", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "hunt-s2-monitor-observer-exit-"));
   const authority = createBoundTestAuthority(root);
+  const pollIntervalMs = 17;
   try {
     const runtime = createStage2ExternalMonitorRuntime({
       ...binding,
@@ -618,16 +619,16 @@ test("production-bound monitor fails promptly when its observer exits", async ()
       observer: authority.binding,
       now: ordinalClock(),
       acknowledgementTimeoutMs: 5_000,
-      acknowledgementPollMs: 10,
+      acknowledgementPollMs: pollIntervalMs,
     });
     authority.close();
-    const startedAt = Date.now();
+    const timeout = t.mock.method(globalThis, "setTimeout");
     await assert.rejects(() => runtime.auth(
       fixturePage(), "application_ready", "state_observed", taxonomy(),
       { operationId: "operation_observer_exit_0001", attempt: 1 },
       new AbortController().signal,
     ), /external monitor observer unavailable/u);
-    assert.ok(Date.now() - startedAt < 1_000);
+    assert.equal(timeout.mock.calls.some(({ arguments: args }) => args[1] === pollIntervalMs), false);
     runtime.close();
   } finally {
     authority.close();
