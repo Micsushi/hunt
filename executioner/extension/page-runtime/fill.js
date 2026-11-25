@@ -27,7 +27,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   if (interrupted) return interrupted;
   const separateAccountForm = observed.signals.includes('separate_account_form');
   if (separateAccountForm) scope = 'application';
-  const norm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
+  const stripRequiredSuffix = label => label.replace(/[✱*]\s*required\s*$/i, '').trimEnd();
+  const norm = value => stripRequiredSuffix(String(value ?? '').normalize('NFKC')).toLowerCase().replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
   const state = globalThis.__huntC3PartialFill ??= { undo: [], redo: [], busy: false };
   if (state.busy) throw new Error('A field fill is already running.');
   if (queueHistory && action !== 'status' && action !== 'fill') throw new Error('Queue fill does not support popup history actions.');
@@ -71,13 +72,23 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
   });
   const provinceMenu = createProvinceMenu({regionFor, norm, visible, editable, checkDeadline, deepQuery});
   const screeningFields = adapters.createSmartRecruitersScreening(checkedForm,deepQuery,composedClosest,visible);
-  const { semanticChoiceButton, rawLabelFor, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, wrappedUploadTitle:adapters.wrappedUploadTitle, composedClosest, deepQuery, fabricWidget, norm });
+  const { semanticChoiceButton, rawLabelFor:baseRawLabel, labelFor:baseLabelFor, resumeLabel, otherAttachment } = createFieldRecognition({ addressGroupLabel:adapters.addressGroupLabel, wrappedUploadTitle:adapters.wrappedUploadTitle, composedClosest, deepQuery, fabricWidget, norm });
   const cityChoices = adapters.smartRecruitersCityChoices(createSearchChoiceReader(regionFor), checkedForm, deepQuery, composedClosest, visible);
   const locationChoices = adapters.ripplingLocationChoices(cityChoices, state, regionFor, visible);
   const choices = currentPage ? adapters.greenhouseChoices(locationChoices, state, regionFor, visible) : locationChoices;
   const {sharedChoice, boundChoice, candidates:searchChoiceCandidates} = choices;
   const samePhoneCountry = (actual,country,dial) => !!country && norm(actual?.country)===norm(country) && (!dial || actual?.dial===dial);
-  const labelFor = element => choices.fieldLabel?.(element) || screeningFields.label(element) || baseLabelFor(element);
+  const recruitCrmLabel = element => {
+    if (!currentPage || location.hostname !== 'recruitcrm.io' || !/^\/apply\/[^/]+\/?$/.test(location.pathname) ||
+        element.type !== 'text' || !element.form || element.labels?.length) return '';
+    const expected = {firstname:'first name',lastname:'last name',emailid:'email',contactnumber:'phone'}[element.name];
+    const group = element.parentElement?.parentElement;
+    const labels = group?.querySelectorAll('label');
+    const label = labels?.length === 1 && labels[0].innerText;
+    return expected && group.querySelectorAll('input').length === 1 && norm(label) === expected ? label : '';
+  };
+  const rawLabelFor = element => recruitCrmLabel(element) || baseRawLabel(element);
+  const labelFor = element => choices.fieldLabel?.(element) || screeningFields.label(element) || recruitCrmLabel(element) || baseLabelFor(element);
   const choiceState = widget => widget?.valid?JSON.stringify({labels:widget.labels,query:widget.query}):null;
   const pendingChoice = widget => {
     if(!widget?.widget)return null;
@@ -622,7 +633,8 @@ export async function runPageFill({ facts = [], action = 'fill', scope = 'applic
       sharedChoice, semanticChoiceButton, boundChoice, choiceState, composedClosest, editable, labelFor, isRequired, pendingFabricChange, pendingControlChange, orphanedControlChange, pendingChoice, phoneWidget, phoneState, pairedPhone:choices.pairedPhone, provinceContext:provinceMenu.context, provinceValue:provinceMenu.value
     });
     const observe = (element,label) => {
-      const row = screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
+      const observed = screeningFields.observe(element,baseObserve,state) ?? baseObserve(element,label);
+      const row = {...observed, question:stripRequiredSuffix(observed.question)};
       if (!profileOnly(regionFor(element))) return row;
       const loginEmail = registrationEmail(element,label);
       return {...row,profileOnly:true,...(loginEmail && {registrationEmail:true}),

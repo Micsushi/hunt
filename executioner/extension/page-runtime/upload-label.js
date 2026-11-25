@@ -1,7 +1,9 @@
 // A file picker action describes how to select a file, not which document belongs there.
 export function uploadLabelKind(value) {
   const label = String(value ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-    .replace(/[✱*]/g, '').replace(/\s+/g, ' ').replace(/\s*[:：]\s*$/, '').trim();
+    .replace(/[✱*]\s*required\s*$/, '').replace(/[✱*]/g, '').replace(/\s+/g, ' ')
+    .replace(/^drop your file or upload,\s*(?=upload (?:resume|cv)$)/, '')
+    .replace(/\s*[:：]\s*$/, '').trim();
   const formatHint = text => {
     const formats = /\b(?:pdf|docx?|rtf|odt|txt|word)\b/g;
     const sizes = /\b\d+(?:[.,]\d+)?\s*(?:kb|mb|ko|mo)\b/g;

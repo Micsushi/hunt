@@ -88,8 +88,18 @@ function runWorkdayAccountAction(request, readPage = globalThis.__huntC3ObserveW
     if (!ready(button)) return fail('fields_not_ready');
     if (create && consent && !consent.checked) return fail('consent');
     if (email.value !== request.email || password.value !== request.password || create && confirm.value !== request.password) return fail('values_changed');
-    button.click();
-    return { state: 'clicked' };
+    let submitEvent = false;
+    let invalidEvent = false;
+    const onSubmit = () => { submitEvent = true; };
+    const onInvalid = () => { invalidEvent = true; };
+    root.addEventListener('submit', onSubmit, true);
+    root.addEventListener('invalid', onInvalid, true);
+    try { button.click(); }
+    finally {
+      root.removeEventListener('submit', onSubmit, true);
+      root.removeEventListener('invalid', onInvalid, true);
+    }
+    return { state: 'clicked', submitEvent, invalidEvent };
   }
   if (request.operation === 'inspect') {
     if (kind === 'account_exists') return result({state:'account_exists'});
