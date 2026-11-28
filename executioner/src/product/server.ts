@@ -226,6 +226,10 @@ export async function startProductServer(options: { root?: string; port?: number
           (body.resumeSha256 !== undefined && (typeof body.resumeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.resumeSha256)))) throw new Error('Choose an HTTPS tab and a supported page action.');
         const url = new URL(body.expectedUrl);
         const useProfileCountry = body.operation === 'use_profile_country';
+        // LinkedIn is a discovery route. Only the external employer page is eligible for a fill.
+        if (['inspect','fill','redo'].includes(body.operation) && /(?:^|\.)linkedin\.com\.?$/i.test(url.hostname)) {
+          throw new Error('LinkedIn Easy Apply is excluded. For an external Apply link, open the employer application and run Hunt there.');
+        }
         const bambooPosting = isBambooPosting(url);
         if (useProfileCountry && !bambooPosting) throw new Error('Inspect the BambooHR application before using your profile country.');
         if (!supportsCurrentPage(url.href,origin) || body.operation !== 'inspect' && (typeof body.documentId !== 'string' || !body.documentId)) throw new Error('Inspect a secure web page or local form before changing fields.');
